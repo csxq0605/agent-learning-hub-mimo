@@ -223,6 +223,10 @@ class AgentHarness:
 
     def _read_file(self, path: str) -> str:
         try:
+            resolved = Path(path).resolve()
+            allowed_dir = Path.cwd().resolve()
+            if not str(resolved).startswith(str(allowed_dir)):
+                return json.dumps({"error": "Path outside allowed directory"})
             with open(path, "r", encoding="utf-8") as f:
                 return json.dumps({"content": f.read()[:5000]})
         except Exception as e:

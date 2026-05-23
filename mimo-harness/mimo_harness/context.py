@@ -3,7 +3,6 @@
 import os
 import json
 import time
-import platform
 from dataclasses import dataclass, field
 
 

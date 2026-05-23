@@ -11,7 +11,7 @@ Features:
 - CLI deployment
 """
 
-import os, sys, json, time, logging
+import os, sys, json, time, logging, hashlib
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent.parent))
 from config import MIMO_BASE_URL, MIMO_API_KEY, MIMO_MODEL
@@ -139,7 +139,8 @@ def create_tools(logger: TraceLogger, perms: PermissionGate) -> tuple:
 
     def read_log_file(params: dict) -> str:
         path = params.get("path", "")
-        perms.check(Permission.READ, f"Read log file: {path}")
+        if not perms.check(Permission.READ, f"Read log file: {path}"):
+            return json.dumps({"error": "Permission denied"})
         try:
             with open(path, "r", encoding="utf-8", errors="replace") as f:
                 lines = f.readlines()[-100:]

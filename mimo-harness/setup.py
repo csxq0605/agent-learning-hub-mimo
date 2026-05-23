@@ -1,10 +1,11 @@
+from pathlib import Path
 from setuptools import setup, find_packages
 
 setup(
     name="mimo-harness",
     version="0.1.0",
     description="A production-grade AI agent harness powered by Xiaomi MiMo model",
-    long_description=open("README.md", encoding="utf-8").read(),
+    long_description=(Path(__file__).parent / "README.md").read_text(encoding="utf-8"),
     long_description_content_type="text/markdown",
     author="Agent Learning Hub",
     url="https://github.com/csxq0605/Agent-Learning-Hub-MiMo",

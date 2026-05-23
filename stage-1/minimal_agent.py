@@ -182,7 +182,10 @@ def agent_loop(
             return message.content or "[No response]"
 
         # If tool calls, execute them and continue
-        messages.append(message.model_dump())
+        msg_dump = message.model_dump()
+        if msg_dump.get("content") is None:
+            msg_dump["content"] = ""
+        messages.append(msg_dump)
         for tc in message.tool_calls:
             func_name = tc.function.name
             func_args = json.loads(tc.function.arguments)

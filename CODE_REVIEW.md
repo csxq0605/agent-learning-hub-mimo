@@ -1,237 +1,217 @@
-# Agent Learning Hub - 全仓库代码审查报告
+# Code Review — Agent-Learning-Hub-MiMo 全仓库
 
-> 对仓库全部代码（config.py + Stage 1-8 + mimo-harness）的逐文件审查，按严重级别分类。
-
----
-
-## P0 - Critical (安全漏洞 / 必然出错)
-
-### 1. config.py:9-11 — KeyError 无提示
-
-```python
-MIMO_BASE_URL = os.environ["MIMO_BASE_URL"]
-MIMO_API_KEY = os.environ["MIMO_API_KEY"]
-MIMO_MODEL = os.environ["MIMO_MODEL"]
-```
-
-**问题:** `.env` 缺失时抛出原始 `KeyError`，用户无法理解原因。所有 Stage 入口依赖此文件。
-**修复:** 使用 `os.environ.get()` + 有意义的错误提示。
+> 审查范围：config.py, stage-1~8, mimo-harness（共 20 个 Python 文件）
+> 审查日期：2026-05-23
+> 分级标准：P0 = 必须修复, P1 = 强烈建议, P2 = 改善项
 
 ---
 
-### 2. stage-1:130 / stage-2:142 — read_file 无路径沙箱
+## P0 — 必须修复（4 项）
 
-```python
-# stage-1
-with open(params["path"], "r", encoding="utf-8") as f:
-    return json.dumps({"content": f.read()[:2000]})
+### 1. stage-1: model_dump() content=None 导致 MiMo API 报错
 
-# stage-2
-with open(params["path"], "r", encoding="utf-8") as f:
-    content = f.read()
-```
-
-**问题:** LLM 可指示读取 `/etc/passwd`、`~/.ssh/id_rsa` 等敏感文件。Stage 3 的 `_write_file` 有路径校验，但 `read_file` 没有；Stage 1/2 完全没有。
-**修复:** 读操作也应限制在 cwd 及其子目录。
-
----
-
-### 3. stage-1/2/3/4 — API Key 打印到 stdout
-
-```python
-print(f"API Key: {MIMO_API_KEY[:12]}...")  # 4 处
-```
-
-**问题:** 日志/屏幕录制/CI 输出中泄露部分 key。
-**修复:** 打印 `***` 或完全不打印。
-
----
-
-### 4. stage-7:120,144 — 裸 except 吞掉所有异常
-
-```python
-except:
-    pass  # line 120 (JSON array parse)
-
-except:
-    return False  # line 144 (LLM judge)
-```
-
-**问题:** 吞掉 `KeyboardInterrupt`、`SystemExit`、`MemoryError` 等不应被捕获的异常。
-**修复:** 改为 `except Exception:`。
-
----
-
-### 5. stage-3:289 — message.model_dump() 嵌套错误
-
-```python
-session.add_message("assistant", message.model_dump())
-```
-
-**问题:** `add_message` 创建 `{"role": "assistant", "content": {"role": "assistant", "content": "...", "tool_calls": [...]}}`，整个 message dict 被嵌套在 content 里。MiMo API 要求 content 是 string。
-**修复:** 直接 `session.messages.append(msg_dict)` 或修改 `add_message` 接受 dict。
-
----
-
-### 6. stage-8:227 — 同样的 model_dump() 问题
+**文件**: `stage-1/minimal_agent.py:155`
 
 ```python
 messages.append(message.model_dump())
 ```
 
-**问题:** tool_calls 时 `content` 为 `None`，MiMo API 不接受 `content: null`。
-**修复:** `msg_dict["content"] = msg_dict.get("content") or ""`
+当 LLM 返回 tool_calls 时，`content` 为 None，MiMo API 要求 content 必须是字符串。Stage-2/3/8 已修复此问题，但 Stage-1 遗漏。
 
----
-
-## P1 - Warning (可靠性问题)
-
-### 7. stage-3:160 — compact_context 假设首条是 system
-
+**修复**:
 ```python
-result = [messages[0]]  # "keep system prompt"
+msg_dump = message.model_dump()
+if msg_dump.get("content") is None:
+    msg_dump["content"] = ""
+messages.append(msg_dump)
 ```
 
-**问题:** 传入的 messages 首条是 user 消息（system 消息在 agent.py 中单独 prepend）。
-**修复:** 不假设首条消息类型。
-
 ---
 
-### 8. stage-4:7 — os, time 未使用
+### 2. stage-3: read_file 无路径校验（任意文件读取）
+
+**文件**: `stage-3/harness_demo.py:224-229`
 
 ```python
-import os, sys, json, time, re
+def _read_file(self, path: str) -> str:
+    with open(path, "r", encoding="utf-8") as f:
+        return json.dumps({"content": f.read()[:5000]})
 ```
 
-`os` 和 `time` 在文件中从未使用。
-**修复:** 移除。
+`write_file` 有路径沙箱校验，但 `read_file` 没有。Stage-1 和 Stage-2 的 read_file 都已加了路径校验，Stage-3 遗漏。
+
+**修复**: 添加与 `_write_file` 相同的 `Path.resolve()` + `cwd` 校验。
 
 ---
 
-### 9. stage-8:14 — hashlib 未使用
+### 3. stage-8: hashlib 未导入导致启动崩溃
+
+**文件**: `stage-8/devops-agent/src/agent.py:39`
 
 ```python
-import os, sys, json, time, logging, hashlib
+self.session_id = hashlib.md5(str(time.time()).encode()).hexdigest()[:8]
 ```
 
-`hashlib` 在文件中从未使用（session_id 由 TraceLogger 生成）。
-**修复:** 移除。
+`hashlib` 未在 import 列表中，`TraceLogger.__init__()` 会抛出 `NameError: name 'hashlib' is not defined`。
+
+**修复**: 在文件顶部 `import hashlib`。
 
 ---
 
-### 10. stage-7:95 — re 在函数内导入
+### 4. stage-8: read_log_file 权限检查结果被忽略
+
+**文件**: `stage-8/devops-agent/src/agent.py:142-146`
 
 ```python
-def judge_response(...):
-    import re
+def read_log_file(params: dict) -> str:
+    path = params.get("path", "")
+    perms.check(Permission.READ, f"Read log file: {path}")  # 结果被丢弃
+    # ... 继续执行读取
 ```
 
-**问题:** 每次调用都重新 import re，违反 PEP8。
-**修复:** 移到文件顶部。
-
----
-
-### 11. stage-2:243 — message.model_dump() 潜在 None content
+`perms.check()` 返回 `bool`，但返回值没有被检查。如果用户拒绝，读取仍会继续。应改为：
 
 ```python
-messages.append(message.model_dump())
+if not perms.check(Permission.READ, f"Read log file: {path}"):
+    return json.dumps({"error": "Permission denied"})
 ```
-
-**问题:** tool_calls 时 content 可能为 None。
-**修复:** 添加 `content = ""` fallback。
 
 ---
 
-### 12. stage-3:244 — import os 在方法内部重复
+## P1 — 强烈建议修复（4 项）
+
+### 5. mimo-harness/shell.py: echo 被列为只读命令
+
+**文件**: `mimo-harness/mimo_harness/tools/shell.py:14`
 
 ```python
-def _list_files(self, path: str) -> str:
-    import os
+READONLY_PREFIXES = [
+    "ls", "dir", "cat", "type", "head", "tail", "wc", "echo", "pwd",
+    ...
+]
 ```
 
-**问题:** `os` 已在文件顶部导入，内部重复导入无意义。
-**修复:** 移除。
+`echo` 可通过重定向写文件：`echo hacked > /etc/passwd`。虽然 `_CHAINING_PATTERN` 会检测 `>`，但 `>` 不在 pattern 中（只检测 `;|&`$()`）。`>` 是 shell 重定向，应被检测或从只读列表中移除。
+
+**修复**: 从 `READONLY_PREFIXES` 中移除 `"echo"`，或将 `>` 加入 `_CHAINING_PATTERN`。
 
 ---
 
-## P2 - Info (代码质量 / 重复)
+### 6. mimo-harness/doc_tools.py: 输出路径无沙箱校验
 
-### 13. safe_eval 重复 3 次
+**文件**: `mimo-harness/mimo_harness/tools/doc_tools.py`
 
-`safe_eval` + `_safe_eval_node` + `_SAFE_OPERATORS` + `_SAFE_FUNCTIONS` 在 stage-1、stage-3、mimo-harness 中完全重复。
-**建议:** 提取到共享模块。
+`create_doc` 和 `create_spreadsheet` 接受 `output_dir` 参数，但没有校验是否在允许目录内。用户（或 LLM）可以指定 `output_dir="/etc"` 写入任意位置。
 
----
-
-### 14. extract_json 重复 2 次
-
-`extract_json()` 在 stage-4 和 stage-5 中完全重复。
-**建议:** 提取到共享模块。
+**修复**: 添加与 `file_ops._validate_write_path` 相同的路径校验。
 
 ---
 
-### 15. agent loop 模式重复 8 次
+### 7. mimo-harness/context.py: build_system_prompt 函数未被使用
 
-每个 Stage 都重新实现 OpenAI client → messages → tool dispatch → 循环。
-**建议:** Stage 3 的 `AgentHarness` 已是通用框架，其他 Stage 应基于它构建。
+**文件**: `mimo-harness/mimo_harness/context.py:72-100`
+
+定义了 `build_system_prompt()` 函数，但 `agent.py` 中使用的是 `MiMoHarness._build_system_prompt()` 方法（内联了相同的逻辑）。两个实现不一致，维护时容易不同步。
+
+**修复**: 删除 `context.py` 中的 `build_system_prompt()`，或让 `agent.py` 调用它。
 
 ---
 
-### 16. stage-2:37 — Memory.search_long_term 命名不准确
+### 8. README.md 快速开始有重复内容
+
+**文件**: `README.md:90-97`
+
+```bash
+# 4. 运行任意 Stage
+python stage-1/minimal_agent.py
+python stage-2/research_assistant.py
+...
+# 5. 或者直接使用完整 Harness（推荐）
+cd mimo-harness
+pip install -e .
+mimo-harness --task "What is 247 * 893?"
+python stage-1/minimal_agent.py    # ← 重复
+python stage-2/research_assistant.py  # ← 重复
+```
+
+Step 5 末尾重复了 Step 4 的 Stage 运行命令。
+
+---
+
+## P2 — 改善项（4 项）
+
+### 9. stage-8: lambda 闭包变量捕获问题
+
+**文件**: `stage-8/devops-agent/src/agent.py:203-212`
 
 ```python
-def search_long_term(self, query, top_k=3):
-    overlap = sum(1 for w in query_lower.split() if w in entry["text"].lower())
+response = retry_with_backoff(
+    lambda: client.chat.completions.create(
+        model=MIMO_MODEL,
+        messages=messages,  # messages 在循环中被修改
+        ...
+    )
+)
 ```
 
-**问题:** 方法名暗示"vector"搜索，实际是关键词重叠计数。
-**建议:** 重命名为 `search_by_keywords`。
+`lambda` 捕获的是 `messages` 的引用，不是值。在 `retry_with_backoff` 重试时，`messages` 可能已经被后续代码修改。实际上在当前代码中，lambda 在下一次迭代前就执行完毕了，所以不会出问题，但这是潜在隐患。
 
 ---
 
-### 17. stage-8:27 — os.makedirs 在模块加载时执行
+### 10. stage-4/5: extract_json 重复定义
+
+`stage-4/multi_agent_writer.py` 和 `stage-5/code-review-skill/review.py` 各自定义了相同的 `extract_json()` 函数。如果未来需要修改，需要改两处。
+
+**建议**: 提取到 `config.py` 或共享工具模块中。
+
+---
+
+### 11. mimo-harness/logging_utils.py: 未使用的 import
+
+**文件**: `mimo-harness/mimo_harness/logging_utils.py:5`
 
 ```python
-class TraceLogger:
-    def __init__(self, log_file="logs/agent.log"):
-        os.makedirs(os.path.dirname(log_file), exist_ok=True)
+import hashlib
 ```
 
-**问题:** 模块导入时就创建 `logs/` 目录。
-**建议:** 延迟到实际写入时创建。
+`hashlib` 被导入但在 `TraceLogger.__init__` 中使用的是 `hashlib.md5()`。实际上是在用的，只是写在了文件顶部。不过 `logging_utils.py` 中没有其他地方使用 `hashlib`。这是正常的。
+
+（注：此条经复核无问题，撤回。）
 
 ---
 
-### 18. stage-6:146 — Google 搜索不可用
+### 12. setup.py: open("README.md") 使用相对路径
+
+**文件**: `mimo-harness/setup.py:7`
 
 ```python
-search_url = f"https://www.google.com/search?q={topic.replace(' ', '+')}"
+long_description=open("README.md", encoding="utf-8").read(),
 ```
 
-**问题:** Google 会 CAPTCHA 拦截，实际不可用。
-**建议:** 使用 DuckDuckGo 或标记为 placeholder。
+如果 `pip install` 从其他目录执行，相对路径会找不到文件。且文件句柄未关闭。
+
+**修复**:
+```python
+from pathlib import Path
+long_description=(Path(__file__).parent / "README.md").read_text(encoding="utf-8"),
+```
 
 ---
 
-## 修复清单
+## 总结
 
-| # | 级别 | 文件 | 问题 |
-|---|------|------|------|
-| 1 | P0 | config.py | KeyError 无提示 |
-| 2 | P0 | stage-1/2 | read_file 无路径沙箱 |
-| 3 | P0 | stage-1/2/3/4 | API Key 打印 |
-| 4 | P0 | stage-7 | 裸 except |
-| 5 | P0 | stage-3 | model_dump() 嵌套 |
-| 6 | P0 | stage-8 | model_dump() None content |
-| 7 | P1 | stage-3 | compact_context 假设 |
-| 8 | P1 | stage-4 | os/time 未使用 |
-| 9 | P1 | stage-8 | hashlib 未使用 |
-| 10 | P1 | stage-7 | re 函数内导入 |
-| 11 | P1 | stage-2 | model_dump() None |
-| 12 | P1 | stage-3 | import os 重复 |
-| 13 | P2 | 全局 | safe_eval 重复 3 次 |
-| 14 | P2 | 全局 | extract_json 重复 2 次 |
-| 15 | P2 | 全局 | agent loop 重复 8 次 |
-| 16 | P2 | stage-2 | 命名不准确 |
-| 17 | P2 | stage-8 | 模块加载时 mkdir |
-| 18 | P2 | stage-6 | Google 搜索不可用 |
+| 级别 | 数量 | 关键问题 |
+|------|------|----------|
+| P0 | 4 | API 兼容性、路径遍历、启动崩溃、权限绕过 |
+| P1 | 4 | 命令注入、路径沙箱、死代码、文档错误 |
+| P2 | 3 | 闭包隐患、代码重复、路径处理 |
+
+**需修复文件**:
+- `stage-1/minimal_agent.py` — model_dump content
+- `stage-3/harness_demo.py` — read_file 路径校验
+- `stage-8/devops-agent/src/agent.py` — hashlib import + 权限检查
+- `mimo-harness/mimo_harness/tools/shell.py` — echo 移除
+- `mimo-harness/mimo_harness/tools/doc_tools.py` — 路径沙箱
+- `mimo-harness/mimo_harness/context.py` — 删除死代码
+- `README.md` — 删除重复内容
+- `mimo-harness/setup.py` — Path 修复

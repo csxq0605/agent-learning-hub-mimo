@@ -9,7 +9,7 @@ from ..permissions import Permission
 
 # Commands that are safe to auto-approve (read-only)
 READONLY_PREFIXES = [
-    "ls", "dir", "cat", "type", "head", "tail", "wc", "echo", "pwd",
+    "ls", "dir", "cat", "type", "head", "tail", "wc", "pwd",
     "git status", "git log", "git diff", "git show", "git branch", "git remote",
     "which", "where", "whereis", "tree", "file", "du", "df",
     "python --version", "pip list", "pip show", "node --version", "npm list",

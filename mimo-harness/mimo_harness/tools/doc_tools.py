@@ -3,9 +3,19 @@
 import os
 import json
 import csv
+from pathlib import Path
 from datetime import datetime
 from .registry import ToolDef
 from ..permissions import Permission
+
+_ALLOWED_WRITE_DIR = Path.cwd().resolve()
+
+
+def _validate_output_dir(output_dir: str) -> str | None:
+    resolved = Path(output_dir).resolve()
+    if not str(resolved).startswith(str(_ALLOWED_WRITE_DIR)):
+        return f"Output directory '{output_dir}' is outside allowed directory"
+    return None
 
 
 def create_doc(params: dict) -> str:
@@ -15,6 +25,9 @@ def create_doc(params: dict) -> str:
     output_dir = params.get("output_dir", ".")
 
     try:
+        err = _validate_output_dir(output_dir)
+        if err:
+            return json.dumps({"error": err})
         os.makedirs(output_dir, exist_ok=True)
         safe_title = "".join(c if c.isalnum() or c in "-_ " else "" for c in title).strip().replace(" ", "_") or "untitled"
         if fmt == "markdown":
@@ -41,6 +54,9 @@ def create_spreadsheet(params: dict) -> str:
     output_dir = params.get("output_dir", ".")
 
     try:
+        err = _validate_output_dir(output_dir)
+        if err:
+            return json.dumps({"error": err})
         os.makedirs(output_dir, exist_ok=True)
         safe_title = "".join(c if c.isalnum() or c in "-_ " else "" for c in title).strip().replace(" ", "_") or "untitled"
         path = os.path.join(output_dir, f"{safe_title}.csv")
