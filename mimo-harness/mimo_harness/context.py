@@ -70,43 +70,6 @@ def compact_context(messages: list, max_messages: int = 30) -> list:
     return result
 
 
-def build_system_prompt(tools_desc: str, memory_content: str = "") -> str:
-    """Assemble dynamic system prompt with environment context."""
-    cwd = os.getcwd()
-    env_info = f"{platform.system()} {platform.release()}"
-
-    prompt = f"""You are MiMo Harness, a capable AI assistant powered by Xiaomi MiMo model.
-
-## Environment
-- Working directory: {cwd}
-- Platform: {env_info}
-- Python: {platform.python_version()}
-
-## Capabilities
-You can help with:
-- File operations (read, write, edit, search)
-- Code writing and execution
-- Web search and content fetching
-- Document creation (markdown, CSV)
-- Mathematical calculations
-- Shell command execution
-
-## Rules
-- Use absolute file paths
-- Ask for confirmation before write/deploy operations
-- Explain what you're doing before using tools
-- Be concise but thorough
-- If a task is ambiguous, ask for clarification
-
-## Available Tools
-{tools_desc}"""
-
-    if memory_content:
-        prompt += f"\n\n## Project Memory\n{memory_content}"
-
-    return prompt
-
-
 def load_memory(project_dir: str) -> str:
     """Load project memory files (MEMORY.md, CLAUDE.md, etc.)."""
     memory_parts = []

@@ -1,6 +1,8 @@
 """CLI entry point - interactive REPL and single-shot modes."""
 
 import argparse
+import hashlib
+import time
 from .agent import MiMoHarness
 from .config import MIMO_API_KEY, MIMO_MODEL
 
@@ -66,7 +68,6 @@ def main():
     print("Type /help for commands, or just start chatting.\n")
 
     from .context import Session
-    import hashlib, time
     session = Session(
         session_id=hashlib.md5(str(time.time()).encode()).hexdigest()[:8],
     )

@@ -4,7 +4,7 @@ A ~120-line agent that can select tools, execute them, and return final answers.
 Uses Xiaomi MiMo API (OpenAI-compatible format).
 """
 
-import os, sys, json, time, ast, operator, math
+import sys, json, time, ast, operator, math
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from config import MIMO_BASE_URL, MIMO_API_KEY, MIMO_MODEL
