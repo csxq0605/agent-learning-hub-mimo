@@ -327,6 +327,15 @@ You help users with coding, file operations, web research, document creation, an
                 model=self.model,
                 estimated_tokens=conv_tokens,
             )
+            # If compression happened, update session messages so next
+            # iteration uses the compressed context
+            if len(compacted) < len(session.get_messages()):
+                session.messages = compacted
+                session.compaction_count += 1
+                self.logger.info(
+                    f"[COMPACT] {len(session.get_messages())} msgs → "
+                    f"{len(compacted)} msgs, ~{estimate_tokens(compacted)} tokens"
+                )
             messages = [system_msg] + compacted
 
             # Token budget check (Ch7)
