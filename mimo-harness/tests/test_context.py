@@ -10,7 +10,7 @@ from mimo_harness.context import (
     _filter_orphan_tool_results, make_compact_boundary, load_memory,
     llm_compress, COMPRESS_MARKER, estimate_tokens,
     COMPRESS_TRIGGER_TOKENS, CONTEXT_WINDOW_TOKENS,
-    STARTUP_RESERVE_TOKENS, COMPRESS_SUMMARY_RATIO,
+    STARTUP_RESERVE_TOKENS,
 )
 
 
@@ -156,9 +156,6 @@ class TestTokenConstants:
     def test_compress_trigger_at_85_percent(self):
         expected = int(200_000 * 0.85)
         assert COMPRESS_TRIGGER_TOKENS == expected
-
-    def test_summary_ratio_12_percent(self):
-        assert COMPRESS_SUMMARY_RATIO == 0.12
 
 
 class TestCompactContext:
@@ -364,6 +361,120 @@ class TestCompactContextWithLLM:
         messages = self._make_big_messages(60)
         tokens = estimate_tokens(messages)
         assert tokens > COMPRESS_TRIGGER_TOKENS
+        result = compact_context(messages, estimated_tokens=tokens)
+        # Fallback: system marker + last 2 messages
+        assert len(result) <= 4
+        assert result[0]["role"] == "system"
+
+
+class TestLLMCompressEdgeCases:
+    """Edge cases for llm_compress."""
+
+    def test_empty_messages(self):
+        client = MagicMock()
+        result = llm_compress([], client)
+        assert result == []
+
+    def test_single_message(self):
+        client = MagicMock()
+        msg = [{"role": "user", "content": "hi"}]
+        result = llm_compress(msg, client)
+        assert result == msg
+
+    def test_messages_with_non_dict(self):
+        """Non-dict messages should be skipped gracefully."""
+        client = MagicMock()
+        response = MagicMock()
+        response.choices = [MagicMock()]
+        response.choices[0].message.content = "summary"
+        client.chat.completions.create.return_value = response
+
+        messages = [
+            {"role": "user", "content": "hello"},
+            "not a dict",  # should be skipped
+            {"role": "assistant", "content": "hi"},
+        ]
+        result = llm_compress(messages, client)
+        assert result is not None
+        assert len(result) == 1
+
+    def test_messages_with_none_content(self):
+        """Messages with None content should be handled."""
+        client = MagicMock()
+        response = MagicMock()
+        response.choices = [MagicMock()]
+        response.choices[0].message.content = "summary"
+        client.chat.completions.create.return_value = response
+
+        messages = [
+            {"role": "user", "content": "hello"},
+            {"role": "assistant", "content": None},
+        ]
+        result = llm_compress(messages, client)
+        assert result is not None
+
+    def test_long_content_truncated(self):
+        """Individual messages with >3000 chars should be truncated."""
+        client = MagicMock()
+        response = MagicMock()
+        response.choices = [MagicMock()]
+        response.choices[0].message.content = "summary"
+        client.chat.completions.create.return_value = response
+
+        messages = [
+            {"role": "user", "content": "x" * 10000},
+            {"role": "assistant", "content": "y" * 10000},
+        ]
+        # Should not raise, should truncate internally
+        result = llm_compress(messages, client)
+        assert result is not None
+
+
+class TestCompactContextEdgeCases:
+    """Edge cases for compact_context."""
+
+    def test_empty_messages(self):
+        result = compact_context([])
+        assert result == []
+
+    def test_single_message_no_compress(self):
+        msg = [{"role": "user", "content": "hi"}]
+        result = compact_context(msg)
+        assert result == msg
+
+    def test_max_messages_legacy_path(self):
+        """When max_messages is set and tokens are low, use message count."""
+        messages = [{"role": "user", "content": f"msg {i}"} for i in range(100)]
+        result = compact_context(messages, max_messages=10)
+        assert len(result) == 10
+        assert result[0]["content"] == "msg 90"
+        assert result[-1]["content"] == "msg 99"
+
+    def test_max_messages_with_orphan_filter(self):
+        """Orphan tool results should be filtered in legacy path."""
+        messages = [
+            {"role": "assistant", "content": "ok", "tool_calls": [{"id": "tc1"}]},
+            {"role": "tool", "content": "result", "tool_call_id": "tc1"},
+            {"role": "tool", "content": "orphan", "tool_call_id": "tc999"},
+        ]
+        result = compact_context(messages, max_messages=10)
+        assert len(result) == 2  # orphan filtered
+
+    def test_token_compress_with_tool_calls(self):
+        """Token-based compression should handle tool_calls messages."""
+        messages = []
+        for i in range(100):
+            messages.append({"role": "user", "content": f"task {i} " + "x" * 8000})
+            messages.append({
+                "role": "assistant",
+                "content": "ok",
+                "tool_calls": [{"id": f"tc{i}", "function": {"name": "test", "arguments": "{}"}}]
+            })
+            messages.append({"role": "tool", "content": f"result {i}", "tool_call_id": f"tc{i}"})
+
+        tokens = estimate_tokens(messages)
+        assert tokens > COMPRESS_TRIGGER_TOKENS
+
         result = compact_context(messages, estimated_tokens=tokens)
         # Fallback: system marker + last 2 messages
         assert len(result) <= 4

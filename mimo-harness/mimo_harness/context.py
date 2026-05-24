@@ -22,8 +22,6 @@ from typing import Optional
 CONTEXT_WINDOW_TOKENS = 200_000          # Total context window (200K)
 STARTUP_RESERVE_TOKENS = 10_000          # System prompt + memory + AGENTS.md (~7.5K)
 COMPRESS_TRIGGER_RATIO = 0.85            # Trigger compression at 85% of window
-COMPRESS_SUMMARY_RATIO = 0.12            # Summary = 12% of original conversation tokens
-COMPRESS_TARGET_TOKENS = 15_000          # Max summary size (~15K, Claude Code style)
 
 SNIP_MAX_AGE_MESSAGES = 20  # Messages older than this get snipped
 MICROCOMPACT_KEEP_RECENT = 5  # Keep last N tool results in microcompact

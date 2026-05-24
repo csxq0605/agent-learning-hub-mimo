@@ -203,13 +203,13 @@ pip install -e ".[dev]"
 python -m pytest tests/ -v
 ```
 
-261 tests across 9 test files:
+273 tests across 9 test files:
 
 | Test File | Tests | Coverage |
 |-----------|-------|----------|
-| test_agent.py | 19 | DI, circuit breaker, token budget, retry |
+| test_agent.py | 21 | DI, circuit breaker, token budget, retry, compression integration |
 | test_permissions.py | 17 | 4-stage pipeline, rule matching, plan mode |
-| test_context.py | 33 | Token-based compression, LLM compression, session management |
+| test_context.py | 42 | Token-based compression, LLM compression, edge cases, session management |
 | test_registry.py | 13 | Validation, dispatch, truncation |
 | test_hooks.py | 12 | Lifecycle events, command/function hooks |
 | test_memory.py | 14 | Typed storage, frontmatter, validation |

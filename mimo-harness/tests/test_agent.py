@@ -7,6 +7,7 @@ from mimo_harness.agent import (
     MiMoHarness, AgentDeps, CircuitBreaker, TokenBudget,
     TerminationReason, retry_with_backoff,
 )
+from mimo_harness.context import Session
 
 
 class TestCircuitBreaker:
@@ -167,3 +168,71 @@ class TestTerminationReason:
         assert TerminationReason.CIRCUIT_BREAKER.value == "circuit_breaker"
         assert TerminationReason.TOKEN_LIMIT.value == "token_limit"
         assert TerminationReason.USER_ABORT.value == "user_abort"
+
+
+class TestCompressionIntegration:
+    """Test that agent.run() correctly updates session after compression."""
+
+    def test_session_updated_after_compression(self, monkeypatch):
+        """After compression, session.messages should contain the summary."""
+        monkeypatch.setenv("MIMO_API_KEY", "test-key")
+        monkeypatch.setenv("MIMO_BASE_URL", "http://test.com")
+        monkeypatch.setenv("MIMO_MODEL", "test-model")
+
+        from mimo_harness.context import Session, COMPRESS_TRIGGER_TOKENS
+
+        harness = MiMoHarness(max_steps=1)
+
+        # Create a session with enough messages to trigger compression
+        session = Session(session_id="test")
+        big = "x" * 8000
+        for i in range(100):
+            session.add_message("user", f"q{i} {big}")
+            session.add_message("assistant", f"a{i} {big}")
+
+        # Mock compact_context to return a summary
+        summary = [{"role": "assistant", "content": "[Conversation Summary]\nTest summary"}]
+
+        with patch("mimo_harness.agent.compact_context", return_value=summary):
+            # Mock the LLM response
+            mock_response = MagicMock()
+            mock_response.choices = [MagicMock()]
+            mock_response.choices[0].message.content = "Done"
+            mock_response.choices[0].message.tool_calls = None
+
+            mock_client = MagicMock()
+            mock_client.chat.completions.create.return_value = mock_response
+
+            with patch.object(harness.deps, 'llm_client_factory', return_value=mock_client):
+                harness.run("test task", session)
+
+        # Session should now contain the summary
+        assert len(session.messages) == 2  # summary + user task
+        assert session.messages[0]["content"] == "[Conversation Summary]\nTest summary"
+        assert session.compaction_count == 1
+
+    def test_no_compression_when_below_threshold(self, monkeypatch):
+        """Session should not be updated when no compression happens."""
+        monkeypatch.setenv("MIMO_API_KEY", "test-key")
+        monkeypatch.setenv("MIMO_BASE_URL", "http://test.com")
+        monkeypatch.setenv("MIMO_MODEL", "test-model")
+
+        harness = MiMoHarness(max_steps=1)
+
+        # Small session, won't trigger compression
+        session = Session(session_id="test")
+        session.add_message("user", "hello")
+
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = "Hi there"
+        mock_response.choices[0].message.tool_calls = None
+
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = mock_response
+
+        with patch.object(harness.deps, 'llm_client_factory', return_value=mock_client):
+            harness.run("hello", session)
+
+        # No compression, messages should be: user("hello") + user(task) + assistant("Hi there")
+        assert session.compaction_count == 0
