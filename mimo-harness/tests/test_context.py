@@ -9,8 +9,8 @@ from mimo_harness.context import (
     Session, compact_context, snip_compress, microcompact,
     _filter_orphan_tool_results, make_compact_boundary, load_memory,
     llm_compress, COMPRESS_MARKER, estimate_tokens,
-    COMPRESS_TRIGGER_TOKENS, USABLE_CONTEXT_TOKENS,
-    CONTEXT_WINDOW_TOKENS, STARTUP_RESERVE_TOKENS, COMPRESSION_RESERVE_TOKENS,
+    COMPRESS_TRIGGER_TOKENS, CONTEXT_WINDOW_TOKENS,
+    STARTUP_RESERVE_TOKENS, COMPRESS_SUMMARY_RATIO,
 )
 
 
@@ -140,14 +140,12 @@ class TestEstimateTokens:
     def test_estimates_basic_messages(self):
         messages = [{"role": "user", "content": "hello world"}]
         tokens = estimate_tokens(messages)
-        # ~30 chars / 4 = ~7 tokens
         assert tokens > 0
         assert tokens < 20
 
     def test_estimates_multiple_messages(self):
         messages = [{"role": "user", "content": "x" * 400}] * 10
         tokens = estimate_tokens(messages)
-        # 10 * ~100 chars = ~1000 tokens
         assert tokens >= 900
 
 
@@ -155,13 +153,12 @@ class TestTokenConstants:
     def test_context_window_200k(self):
         assert CONTEXT_WINDOW_TOKENS == 200_000
 
-    def test_usable_window_calculated(self):
-        expected = 200_000 - 10_000 - 20_000
-        assert USABLE_CONTEXT_TOKENS == expected
-
     def test_compress_trigger_at_85_percent(self):
-        expected = int(USABLE_CONTEXT_TOKENS * 0.85)
+        expected = int(200_000 * 0.85)
         assert COMPRESS_TRIGGER_TOKENS == expected
+
+    def test_summary_ratio_12_percent(self):
+        assert COMPRESS_SUMMARY_RATIO == 0.12
 
 
 class TestCompactContext:
@@ -173,21 +170,41 @@ class TestCompactContext:
     def test_no_compression_when_below_trigger(self):
         messages = [{"role": "user", "content": "x" * 100}] * 100
         tokens = estimate_tokens(messages)
-        # Should be well under trigger
         assert tokens < COMPRESS_TRIGGER_TOKENS
         result = compact_context(messages, estimated_tokens=tokens)
         assert len(result) == 100
 
-    def test_applies_truncation_fallback(self):
-        # Create messages that exceed token limit without client
-        big_content = "x" * 4000  # ~1000 tokens each
+    def test_truncation_fallback_produces_few_messages(self):
+        """Fallback should produce ~3 messages (marker + last 2), not 132K tokens."""
+        big_content = "x" * 4000
         messages = [{"role": "user", "content": big_content}] * 200
         tokens = estimate_tokens(messages)
         assert tokens > COMPRESS_TRIGGER_TOKENS
 
         result = compact_context(messages, estimated_tokens=tokens)
-        # Should be compressed via truncation fallback
-        assert len(result) < 200
+        # Should be: system marker + last user + last assistant = 3 messages
+        assert len(result) <= 4
+        assert result[0]["role"] == "system"
+        assert "compacted" in result[0]["content"].lower()
+
+    def test_truncation_preserves_last_messages(self):
+        """Last user + assistant messages should be preserved."""
+        messages = [
+            {"role": "user", "content": "old message"},
+            {"role": "assistant", "content": "old reply"},
+            {"role": "user", "content": "recent question"},
+            {"role": "assistant", "content": "recent answer"},
+        ]
+        # Pad to exceed trigger
+        big = [{"role": "user", "content": "x" * 8000}] * 100
+        all_msgs = big + messages
+        tokens = estimate_tokens(all_msgs)
+
+        result = compact_context(all_msgs, estimated_tokens=tokens)
+        # Should have system marker + last 2 messages
+        contents = [m.get("content", "") for m in result]
+        assert any("recent question" in c for c in contents)
+        assert any("recent answer" in c for c in contents)
 
 
 class TestCompactBoundary:
@@ -245,25 +262,17 @@ class TestLLMCompress:
         client.chat.completions.create.return_value = response
         return client
 
-    def test_returns_summary_and_recent(self):
-        messages = self._make_messages(20)  # 40 messages
+    def test_returns_single_summary_message(self):
+        """After LLM compress, result is ONE summary message."""
+        messages = self._make_messages(20)
         client = self._mock_client("Test summary")
 
-        result = llm_compress(messages, client, model="test-model", keep_recent=6)
+        result = llm_compress(messages, client, model="test-model")
         assert result is not None
+        assert len(result) == 1  # Only summary, no recent messages
         assert result[0]["role"] == "assistant"
         assert "Conversation Summary" in result[0]["content"]
         assert "Test summary" in result[0]["content"]
-        # Recent messages preserved
-        assert len(result) == 1 + 6  # summary + 6 recent
-
-    def test_preserves_recent_messages(self):
-        messages = self._make_messages(15)
-        client = self._mock_client("summary")
-
-        result = llm_compress(messages, client, keep_recent=4)
-        # Last 4 messages should be preserved verbatim
-        assert result[-4:] == messages[-4:]
 
     def test_returns_none_on_api_error(self):
         messages = self._make_messages(15)
@@ -284,17 +293,28 @@ class TestLLMCompress:
         result = llm_compress(messages, client)
         assert result is None
 
-    def test_short_messages_returned_as_is(self):
-        messages = self._make_messages(3)  # 6 messages, less than keep_recent
+    def test_single_message_returned_as_is(self):
+        messages = [{"role": "user", "content": "hi"}]
         client = self._mock_client()
 
-        result = llm_compress(messages, client, keep_recent=10)
+        result = llm_compress(messages, client)
         assert result == messages
+
+    def test_summary_size_is_small(self):
+        """Summary should be much smaller than original conversation."""
+        messages = self._make_messages(50)  # 100 messages
+        original_tokens = estimate_tokens(messages)
+        client = self._mock_client("Short summary of the conversation.")
+
+        result = llm_compress(messages, client)
+        summary_tokens = estimate_tokens(result)
+        # Summary should be < 10% of original
+        assert summary_tokens < original_tokens * 0.10
 
 
 class TestCompactContextWithLLM:
     def _make_big_messages(self, n, content_size=12000):
-        """Create messages large enough to exceed token threshold (~144.5K)."""
+        """Create messages large enough to exceed token threshold (~170K)."""
         msgs = []
         for i in range(n):
             msgs.append({"role": "user", "content": f"q{i}" + "x" * content_size})
@@ -302,7 +322,7 @@ class TestCompactContextWithLLM:
         return msgs
 
     def test_uses_llm_when_tokens_exceed_threshold(self):
-        messages = self._make_big_messages(60)  # ~180K tokens
+        messages = self._make_big_messages(60)
         tokens = estimate_tokens(messages)
         assert tokens > COMPRESS_TRIGGER_TOKENS
 
@@ -314,20 +334,21 @@ class TestCompactContextWithLLM:
 
         with patch("mimo_harness.context.llm_compress", return_value=[
             {"role": "assistant", "content": "[Conversation Summary]\nLLM summary"}
-        ] + messages[-10:]) as mock_compress:
+        ]) as mock_compress:
             result = compact_context(messages, client=client, model="test", estimated_tokens=tokens)
             mock_compress.assert_called_once()
 
     def test_falls_back_to_truncation_on_llm_failure(self):
-        messages = self._make_big_messages(60)  # bigger to exceed threshold
+        messages = self._make_big_messages(60)
         tokens = estimate_tokens(messages)
         assert tokens > COMPRESS_TRIGGER_TOKENS
         client = MagicMock()
         client.chat.completions.create.side_effect = Exception("fail")
 
         result = compact_context(messages, client=client, model="test", estimated_tokens=tokens)
-        assert len(result) > 0
-        assert len(result) < len(messages)
+        # Fallback: system marker + last 2 messages
+        assert len(result) <= 4
+        assert result[0]["role"] == "system"
 
     def test_skips_llm_when_below_token_threshold(self):
         messages = [{"role": "user", "content": "hi"}] * 10
@@ -339,9 +360,11 @@ class TestCompactContextWithLLM:
             mock_compress.assert_not_called()
 
     def test_backward_compatible_no_client(self):
-        messages = self._make_big_messages(60)  # bigger to exceed threshold
+        """Without client, uses truncation fallback (aggressive)."""
+        messages = self._make_big_messages(60)
         tokens = estimate_tokens(messages)
         assert tokens > COMPRESS_TRIGGER_TOKENS
         result = compact_context(messages, estimated_tokens=tokens)
-        assert len(result) > 0
-        assert len(result) < len(messages)
+        # Fallback: system marker + last 2 messages
+        assert len(result) <= 4
+        assert result[0]["role"] == "system"

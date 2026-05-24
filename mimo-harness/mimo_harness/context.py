@@ -17,22 +17,20 @@ from typing import Optional
 
 
 # ---------------------------------------------------------------------------
-# Constants (Ch7: compression thresholds)
+# Constants (Ch7: compression thresholds — Claude Code style)
 # ---------------------------------------------------------------------------
 CONTEXT_WINDOW_TOKENS = 200_000          # Total context window (200K)
-STARTUP_RESERVE_TOKENS = 10_000          # System prompt + memory + AGENTS.md
-COMPRESSION_RESERVE_TOKENS = 20_000      # Space for LLM compression call + summary
-COMPRESS_TRIGGER_RATIO = 0.85            # Trigger compression at 85% of usable window
+STARTUP_RESERVE_TOKENS = 10_000          # System prompt + memory + AGENTS.md (~7.5K)
+COMPRESS_TRIGGER_RATIO = 0.85            # Trigger compression at 85% of window
+COMPRESS_SUMMARY_RATIO = 0.12            # Summary = 12% of original conversation tokens
+COMPRESS_TARGET_TOKENS = 15_000          # Max summary size (~15K, Claude Code style)
 
 SNIP_MAX_AGE_MESSAGES = 20  # Messages older than this get snipped
 MICROCOMPACT_KEEP_RECENT = 5  # Keep last N tool results in microcompact
 COMPRESS_MARKER = "[Old tool result content cleared]"
-LLM_COMPRESS_KEEP_RECENT = 10 # Keep last N messages uncompressed
 
-# Usable window = 200K - startup reserve - compression reserve
-USABLE_CONTEXT_TOKENS = CONTEXT_WINDOW_TOKENS - STARTUP_RESERVE_TOKENS - COMPRESSION_RESERVE_TOKENS
 # Compression triggers when conversation reaches this many tokens
-COMPRESS_TRIGGER_TOKENS = int(USABLE_CONTEXT_TOKENS * COMPRESS_TRIGGER_RATIO)
+COMPRESS_TRIGGER_TOKENS = int(CONTEXT_WINDOW_TOKENS * COMPRESS_TRIGGER_RATIO)
 
 
 # ---------------------------------------------------------------------------
@@ -138,15 +136,21 @@ def microcompact(
 # ---------------------------------------------------------------------------
 # Level 3: LLM-based semantic compression (Ch7: model-driven summarization)
 # ---------------------------------------------------------------------------
-SUMMARIZATION_PROMPT = """You are a conversation summarizer. Summarize the following conversation history into a concise but information-dense summary.
+SUMMARIZATION_PROMPT = """You are a conversation summarizer. Produce a structured summary of this conversation.
+
+The summary MUST include:
+1. User's stated goals and current progress
+2. Key technical decisions made
+3. Files examined or modified (with important code snippets)
+4. Errors encountered and how they were fixed
+5. Pending tasks and next steps
 
 Rules:
-- Preserve all key decisions, file paths, error messages, and action outcomes
-- Preserve any code snippets that were discussed or modified
-- Preserve the user's stated goals and current progress
+- Preserve file paths, function names, error messages exactly
+- Preserve code snippets that were discussed or modified
 - Use bullet points for clarity
 - Do NOT include tool call IDs or internal metadata
-- Do NOT fabricate information that was not in the conversation
+- Do NOT fabricate information not in the conversation
 - Maximum length: 500 words
 
 Conversation to summarize:
@@ -159,28 +163,23 @@ def llm_compress(
     messages: list,
     client,
     model: str = "mimo-v2.5-pro",
-    keep_recent: int = LLM_COMPRESS_KEEP_RECENT,
-    max_summary_tokens: int = 1024,
+    max_summary_tokens: int = 2048,
 ) -> list | None:
-    """Level 3: LLM-based semantic compression.
+    """Level 3: LLM-based semantic compression (Claude Code style).
 
-    Sends old messages to the LLM with a summarization prompt,
-    replacing them with a single assistant summary message.
-    Recent messages are kept uncompressed for continuity.
+    Replaces the ENTIRE conversation with a single structured summary.
+    No messages are kept — the summary is the conversation.
 
-    Returns: compressed message list, or None on failure (caller falls back).
+    Returns: [summary_message] or None on failure (caller falls back).
     """
-    if len(messages) <= keep_recent:
+    if len(messages) <= 1:
         return messages
 
-    old_messages = messages[:-keep_recent]
-    recent = messages[-keep_recent:]
-
-    # Format old messages for summarization
+    # Format all messages for summarization
     parts = []
     total_chars = 0
-    max_chars = 30000
-    for msg in old_messages:
+    max_chars = 60000  # ~15K tokens of input
+    for msg in messages:
         if not isinstance(msg, dict):
             continue
         role = msg.get("role", "unknown")
@@ -188,8 +187,8 @@ def llm_compress(
         if not isinstance(content, str):
             content = str(content) if content else ""
         # Truncate individual long messages (e.g. large tool results)
-        if len(content) > 2000:
-            content = content[:2000] + "... [truncated]"
+        if len(content) > 3000:
+            content = content[:3000] + "... [truncated]"
         line = f"[{role}]: {content}"
         if total_chars + len(line) > max_chars:
             parts.append(f"[{role}]: ... [remaining messages omitted]")
@@ -212,7 +211,7 @@ def llm_compress(
             return None
         return [
             {"role": "assistant", "content": "[Conversation Summary]\n" + summary.strip()}
-        ] + recent
+        ]
     except Exception:
         return None
 
@@ -264,18 +263,15 @@ def compact_context(
     model: str = "",
     estimated_tokens: int = 0,
 ) -> list:
-    """Progressive context compression (Ch7: lightweight → heavyweight).
+    """Context compression (Claude Code style).
 
-    Token-based compression (Claude Code style):
-    - Context window: 200K tokens
-    - Reserve 10K for startup (system prompt, memory, AGENTS.md)
-    - Reserve 20K for compression summary output
-    - Trigger LLM compression at 85% of usable window (~144.5K tokens)
-    - Fallback to truncation if LLM fails
+    After compression, conversation is replaced with a single summary
+    (~12% of original tokens, capped at ~15K). This frees up ~170K+
+    tokens for continued work.
 
     Args:
         messages: conversation messages
-        max_messages: legacy message-count limit (0 = auto from token budget)
+        max_messages: legacy message-count limit (0 = auto)
         client: OpenAI-compatible client for LLM compression
         model: model name for LLM compression
         estimated_tokens: pre-computed token count (avoids re-estimation)
@@ -283,40 +279,40 @@ def compact_context(
     # Estimate tokens if not provided
     tokens = estimated_tokens if estimated_tokens > 0 else estimate_tokens(messages)
 
-    # Check if compression is needed (token-based or message-count fallback)
-    if tokens < COMPRESS_TRIGGER_TOKENS and (max_messages <= 0 or len(messages) <= max_messages):
+    # Check if compression is needed
+    needs_token_compress = tokens >= COMPRESS_TRIGGER_TOKENS
+    needs_message_compress = max_messages > 0 and len(messages) > max_messages
+
+    if not needs_token_compress and not needs_message_compress:
         return _filter_orphan_tool_results(messages)
 
-    # Level 3: LLM-based semantic compression (preferred)
-    if client is not None:
-        llm_result = llm_compress(messages, client, model or "mimo-v2.5-pro")
-        if llm_result is not None:
-            return llm_result
-        # LLM failed, fall through to truncation
+    # Case 1: Token-based compression (Claude Code style — aggressive)
+    if needs_token_compress:
+        # Level 3: LLM-based semantic compression (preferred)
+        if client is not None:
+            llm_result = llm_compress(messages, client, model or "mimo-v2.5-pro")
+            if llm_result is not None:
+                return llm_result
+            # LLM failed, fall through to truncation
 
-    # Fallback: progressive truncation
-    # Level 1: Snip old tool results
-    snipped = snip_compress(messages)
+        # Fallback: aggressive truncation — system marker + last 2 messages
+        result = []
+        result.append({
+            "role": "system",
+            "content": f"[Context compacted: {len(messages)} messages, ~{tokens} tokens reduced to this summary]"
+        })
+        recent = messages[-2:] if len(messages) >= 2 else messages
+        for msg in recent:
+            if isinstance(msg, dict):
+                content = msg.get("content", "")
+                if isinstance(content, str) and len(content) > 2000:
+                    msg = dict(msg)
+                    msg["content"] = content[:2000] + "... [truncated]"
+                result.append(msg)
+        return _filter_orphan_tool_results(result)
 
-    # Level 2: Microcompact (keep recent 5 tool results)
-    compacted = microcompact(snipped, keep_recent=MICROCOMPACT_KEEP_RECENT)
-
-    # Trim: keep messages that fit within usable window
-    # Estimate tokens after snip/microcompact and trim accordingly
-    # Target: stay below COMPRESS_TRIGGER_TOKENS to avoid re-triggering
-    target_tokens = COMPRESS_TRIGGER_TOKENS
-    if max_messages > 0:
-        trimmed = compacted[-max_messages:]
-    else:
-        # Trim until tokens fit within trigger threshold
-        trimmed = compacted
-        while estimate_tokens(trimmed) > target_tokens and len(trimmed) > 2:
-            # Remove oldest 10% of messages at a time
-            remove_count = max(1, len(trimmed) // 10)
-            trimmed = trimmed[remove_count:]
-
-    # Filter orphans after compaction
-    return _filter_orphan_tool_results(trimmed)
+    # Case 2: Message-count limit (legacy, simple trim)
+    return _filter_orphan_tool_results(messages[-max_messages:])
 
 
 # ---------------------------------------------------------------------------

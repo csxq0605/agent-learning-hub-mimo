@@ -117,19 +117,17 @@ Stage 3: Context evaluation (plan mode, tool-specific)
 Stage 4: Interactive prompt (user confirmation)
 ```
 
-### Context Compression (Ch7: Token-Based)
+### Context Compression (Ch7: Token-Based, Claude Code Style)
 ```
 Context Window: 200K tokens (Claude Code standard)
 ├── Startup reserve:  10K (system prompt + memory + AGENTS.md)
-├── Compression reserve: 20K (LLM call + summary output)
-└── Usable window:   170K tokens
+└── Compression trigger: 170K tokens (85% of window)
 
-Compression triggers at 85% of usable window (~144.5K tokens):
-  1. LLM Summarize  — Model-driven semantic summary (preferred)
-  2. Snip           — Replace old tool results with markers
-  3. Microcompact   — Keep recent N tool results, clear rest
-  4. Window trim    — Remove oldest messages until tokens fit
-  5. Orphan filter  — Remove unmatched tool results
+Compression produces a single summary (~1-10K tokens):
+  1. LLM Summarize  — Structured summary of entire conversation (preferred)
+  2. Truncation      — System marker + last 2 messages (fallback)
+
+After compression: ~190K tokens available for continued work.
 ```
 
 ### Memory System (Ch6: Four Types)
