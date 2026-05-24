@@ -25,6 +25,13 @@ def print_banner():
 """)
 
 
+def _format_tokens(tokens: int) -> str:
+    """Format token count for display (e.g. 45231 → '45K')."""
+    if tokens >= 1000:
+        return f"{tokens / 1000:.1f}K"
+    return str(tokens)
+
+
 def print_help():
     print("""
 Commands:
@@ -41,6 +48,8 @@ Commands:
   /remember      Save current context as memory
   /hooks         List registered hooks
   /stats         Show session statistics
+  /tokens        Show current token usage
+  /compact       Manually compress conversation context
   /init          Scan project and generate AGENTS.md
 
 Or just type a task to interact with the agent.
@@ -120,7 +129,7 @@ def main():
     print(f"Mode: {mode_str}")
     print("Type /help for commands, or just start chatting.\n")
 
-    from .context import Session
+    from .context import Session, estimate_tokens, compact_context, CONTEXT_WINDOW_TOKENS
     from .memory import MemoryStore
     import secrets
 
@@ -130,8 +139,12 @@ def main():
     memory_store = MemoryStore(".")
 
     while True:
+        # Show token count in prompt
+        tokens = estimate_tokens(session.messages)
+        token_str = _format_tokens(tokens)
+        max_str = _format_tokens(CONTEXT_WINDOW_TOKENS)
         try:
-            user_input = input("You: ").strip()
+            user_input = input(f"You [{token_str}/{max_str}]: ").strip()
         except (EOFError, KeyboardInterrupt):
             print("\nBye!")
             break
@@ -221,12 +234,59 @@ def main():
                     print("No hooks registered.")
                 print()
             elif cmd[0] == "/stats":
+                tokens = estimate_tokens(session.messages)
                 print(f"\nSession Statistics:")
                 print(f"  Messages: {len(session.messages)}")
+                print(f"  Tokens: {_format_tokens(tokens)} / {_format_tokens(CONTEXT_WINDOW_TOKENS)}")
                 print(f"  Compactions: {session.compaction_count}")
                 print(f"  Approval log: {len(harness.perms.approval_log)} entries")
                 if harness.circuit_breaker.consecutive_failures > 0:
                     print(f"  Circuit breaker failures: {harness.circuit_breaker.consecutive_failures}")
+                print()
+            elif cmd[0] == "/tokens":
+                tokens = estimate_tokens(session.messages)
+                pct = tokens / CONTEXT_WINDOW_TOKENS * 100
+                print(f"\nToken Usage:")
+                print(f"  Conversation: {_format_tokens(tokens)} / {_format_tokens(CONTEXT_WINDOW_TOKENS)} ({pct:.1f}%)")
+                print(f"  Messages: {len(session.messages)}")
+                print(f"  Compactions: {session.compaction_count}")
+                # Progress bar
+                bar_len = 40
+                filled = int(bar_len * tokens / CONTEXT_WINDOW_TOKENS)
+                bar = '#' * min(filled, bar_len) + '-' * max(0, bar_len - filled)
+                print(f"  [{bar}] {pct:.1f}%")
+                print()
+            elif cmd[0] == "/compact":
+                tokens_before = estimate_tokens(session.messages)
+                if tokens_before < 1000:
+                    print("Not enough messages to compress.")
+                else:
+                    print(f"Compressing... ({_format_tokens(tokens_before)} tokens)")
+                    from .config import MIMO_BASE_URL, require_api_key
+                    try:
+                        api_key = require_api_key()
+                        from openai import OpenAI
+                        client = OpenAI(api_key=api_key, base_url=MIMO_BASE_URL)
+                        compacted = compact_context(
+                            session.messages,
+                            client=client,
+                            model=harness.model,
+                            estimated_tokens=tokens_before,
+                        )
+                        session.messages = compacted
+                        session.compaction_count += 1
+                        tokens_after = estimate_tokens(session.messages)
+                        print(f"Done: {_format_tokens(tokens_before)} -> {_format_tokens(tokens_after)} tokens")
+                    except Exception as e:
+                        # Fallback: no LLM, just truncation
+                        compacted = compact_context(
+                            session.messages,
+                            estimated_tokens=tokens_before,
+                        )
+                        session.messages = compacted
+                        session.compaction_count += 1
+                        tokens_after = estimate_tokens(session.messages)
+                        print(f"Done (truncation): {_format_tokens(tokens_before)} -> {_format_tokens(tokens_after)} tokens")
                 print()
             elif cmd[0] == "/init":
                 from .project_scanner import scan_project, generate_agents_md

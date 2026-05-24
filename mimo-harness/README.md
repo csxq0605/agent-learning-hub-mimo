@@ -43,6 +43,9 @@ mimo-harness --task "Read the README.md and summarize it"
 ### Interactive Mode
 ```bash
 mimo-harness
+# Prompt shows real-time token usage:
+# You [5.4K/200.0K]: ████---------------------------------------- 2.7%
+
 # or with options:
 mimo-harness --auto-approve   # Skip confirmation prompts
 mimo-harness --dry-run        # Show actions without executing
@@ -67,6 +70,8 @@ mimo-harness -c config.json   # Load configuration file
 | `/remember` | Save context as memory |
 | `/hooks` | List registered hooks |
 | `/stats` | Show session statistics |
+| `/tokens` | Show current token usage with progress bar |
+| `/compact` | Manually compress conversation context |
 | `/init` | Scan project and generate AGENTS.md |
 
 ## Architecture
