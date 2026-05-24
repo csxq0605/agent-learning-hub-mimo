@@ -19,12 +19,20 @@ from typing import Optional
 # ---------------------------------------------------------------------------
 # Constants (Ch7: compression thresholds)
 # ---------------------------------------------------------------------------
-MAX_MESSAGES_DEFAULT = 30
+CONTEXT_WINDOW_TOKENS = 200_000          # Total context window (200K)
+STARTUP_RESERVE_TOKENS = 10_000          # System prompt + memory + AGENTS.md
+COMPRESSION_RESERVE_TOKENS = 20_000      # Space for LLM compression call + summary
+COMPRESS_TRIGGER_RATIO = 0.85            # Trigger compression at 85% of usable window
+
 SNIP_MAX_AGE_MESSAGES = 20  # Messages older than this get snipped
 MICROCOMPACT_KEEP_RECENT = 5  # Keep last N tool results in microcompact
 COMPRESS_MARKER = "[Old tool result content cleared]"
-LLM_COMPRESS_THRESHOLD = 30   # Use LLM compression when messages exceed this
 LLM_COMPRESS_KEEP_RECENT = 10 # Keep last N messages uncompressed
+
+# Usable window = 200K - startup reserve - compression reserve
+USABLE_CONTEXT_TOKENS = CONTEXT_WINDOW_TOKENS - STARTUP_RESERVE_TOKENS - COMPRESSION_RESERVE_TOKENS
+# Compression triggers when conversation reaches this many tokens
+COMPRESS_TRIGGER_TOKENS = int(USABLE_CONTEXT_TOKENS * COMPRESS_TRIGGER_RATIO)
 
 
 # ---------------------------------------------------------------------------
@@ -238,37 +246,72 @@ def _filter_orphan_tool_results(messages: list) -> list:
 # ---------------------------------------------------------------------------
 # Main compaction entry point (Ch7: progressive compression)
 # ---------------------------------------------------------------------------
+def estimate_tokens(messages: list) -> int:
+    """Estimate token count for a message list (~4 chars per token)."""
+    import json as _json
+    total_chars = sum(
+        len(_json.dumps(m, ensure_ascii=False)) if isinstance(m, dict)
+        else len(str(m))
+        for m in messages
+    )
+    return total_chars // 4
+
+
 def compact_context(
     messages: list,
-    max_messages: int = MAX_MESSAGES_DEFAULT,
+    max_messages: int = 0,
     client=None,
     model: str = "",
+    estimated_tokens: int = 0,
 ) -> list:
     """Progressive context compression (Ch7: lightweight → heavyweight).
 
-    Strategy:
-    1. If within limits, return as-is
-    2. If LLM client available and threshold met, try LLM summarization
-    3. Fallback: snip → microcompact → trim → orphan filter
+    Token-based compression (Claude Code style):
+    - Context window: 200K tokens
+    - Reserve 10K for startup (system prompt, memory, AGENTS.md)
+    - Reserve 20K for compression summary output
+    - Trigger LLM compression at 85% of usable window (~144.5K tokens)
+    - Fallback to truncation if LLM fails
+
+    Args:
+        messages: conversation messages
+        max_messages: legacy message-count limit (0 = auto from token budget)
+        client: OpenAI-compatible client for LLM compression
+        model: model name for LLM compression
+        estimated_tokens: pre-computed token count (avoids re-estimation)
     """
-    if len(messages) <= max_messages:
+    # Estimate tokens if not provided
+    tokens = estimated_tokens if estimated_tokens > 0 else estimate_tokens(messages)
+
+    # Check if compression is needed (token-based or message-count fallback)
+    if tokens < COMPRESS_TRIGGER_TOKENS and (max_messages <= 0 or len(messages) <= max_messages):
         return _filter_orphan_tool_results(messages)
 
     # Level 3: LLM-based semantic compression (preferred)
-    if client is not None and len(messages) >= LLM_COMPRESS_THRESHOLD:
+    if client is not None:
         llm_result = llm_compress(messages, client, model or "mimo-v2.5-pro")
         if llm_result is not None:
             return llm_result
         # LLM failed, fall through to truncation
 
+    # Fallback: progressive truncation
     # Level 1: Snip old tool results
     snipped = snip_compress(messages)
 
     # Level 2: Microcompact (keep recent 5 tool results)
     compacted = microcompact(snipped, keep_recent=MICROCOMPACT_KEEP_RECENT)
 
-    # Trim to window
-    trimmed = compacted[-max_messages:]
+    # Trim: keep messages that fit within usable window
+    # Estimate tokens after snip/microcompact and trim accordingly
+    if max_messages > 0:
+        trimmed = compacted[-max_messages:]
+    else:
+        # Trim until tokens fit within usable window
+        trimmed = compacted
+        while estimate_tokens(trimmed) > USABLE_CONTEXT_TOKENS and len(trimmed) > 2:
+            # Remove oldest 10% of messages at a time
+            remove_count = max(1, len(trimmed) // 10)
+            trimmed = trimmed[remove_count:]
 
     # Filter orphans after compaction
     return _filter_orphan_tool_results(trimmed)

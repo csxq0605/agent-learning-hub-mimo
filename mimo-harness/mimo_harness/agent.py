@@ -22,7 +22,7 @@ from openai import OpenAI
 from .config import MIMO_BASE_URL, MIMO_API_KEY, MIMO_MODEL, require_api_key
 from .logging_utils import TraceLogger
 from .permissions import Permission, PermissionGate
-from .context import Session, compact_context, load_memory
+from .context import Session, compact_context, load_memory, estimate_tokens
 from .tools.registry import ToolRegistry, ToolDef
 from .tools import file_ops, shell, code_exec, web_tools, doc_tools, math_tools
 
@@ -33,7 +33,7 @@ from .tools import file_ops, shell, code_exec, web_tools, doc_tools, math_tools
 MAX_CONSECUTIVE_FAILURES = 3
 TOKEN_WARNING_THRESHOLD = 0.85  # 85% of context window
 TOKEN_BLOCK_THRESHOLD = 0.95    # 95% → block new requests
-DEFAULT_MAX_CONTEXT_TOKENS = 128000  # MiMo context window estimate
+DEFAULT_MAX_CONTEXT_TOKENS = 200_000  # 200K context window (Claude Code standard)
 RESERVED_OUTPUT_TOKENS = 4096
 
 
@@ -319,9 +319,13 @@ You help users with coding, file operations, web research, document creation, an
                 )
                 return "[ERROR] Circuit breaker open — too many consecutive failures"
 
-            # Build messages with context compaction
+            # Build messages with context compaction (token-based)
+            conv_tokens = estimate_tokens(session.get_messages())
             compacted = compact_context(
-                session.get_messages(), client=client, model=self.model
+                session.get_messages(),
+                client=client,
+                model=self.model,
+                estimated_tokens=conv_tokens,
             )
             messages = [system_msg] + compacted
 

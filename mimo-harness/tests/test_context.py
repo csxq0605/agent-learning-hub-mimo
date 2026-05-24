@@ -8,7 +8,9 @@ from unittest.mock import MagicMock, patch
 from mimo_harness.context import (
     Session, compact_context, snip_compress, microcompact,
     _filter_orphan_tool_results, make_compact_boundary, load_memory,
-    llm_compress, COMPRESS_MARKER,
+    llm_compress, COMPRESS_MARKER, estimate_tokens,
+    COMPRESS_TRIGGER_TOKENS, USABLE_CONTEXT_TOKENS,
+    CONTEXT_WINDOW_TOKENS, STARTUP_RESERVE_TOKENS, COMPRESSION_RESERVE_TOKENS,
 )
 
 
@@ -134,20 +136,58 @@ class TestOrphanFilter:
         assert len(result) == 2
 
 
+class TestEstimateTokens:
+    def test_estimates_basic_messages(self):
+        messages = [{"role": "user", "content": "hello world"}]
+        tokens = estimate_tokens(messages)
+        # ~30 chars / 4 = ~7 tokens
+        assert tokens > 0
+        assert tokens < 20
+
+    def test_estimates_multiple_messages(self):
+        messages = [{"role": "user", "content": "x" * 400}] * 10
+        tokens = estimate_tokens(messages)
+        # 10 * ~100 chars = ~1000 tokens
+        assert tokens >= 900
+
+
+class TestTokenConstants:
+    def test_context_window_200k(self):
+        assert CONTEXT_WINDOW_TOKENS == 200_000
+
+    def test_usable_window_calculated(self):
+        expected = 200_000 - 10_000 - 20_000
+        assert USABLE_CONTEXT_TOKENS == expected
+
+    def test_compress_trigger_at_85_percent(self):
+        expected = int(USABLE_CONTEXT_TOKENS * 0.85)
+        assert COMPRESS_TRIGGER_TOKENS == expected
+
+
 class TestCompactContext:
-    def test_within_limits(self):
+    def test_within_token_limits(self):
         messages = [{"role": "user", "content": "hi"}] * 5
-        result = compact_context(messages, max_messages=30)
+        result = compact_context(messages)
         assert len(result) == 5
 
-    def test_applies_compression(self):
-        messages = []
-        for i in range(50):
-            messages.append({"role": "user", "content": f"msg {i}"})
-            messages.append({"role": "assistant", "content": f"reply {i}"})
+    def test_no_compression_when_below_trigger(self):
+        messages = [{"role": "user", "content": "x" * 100}] * 100
+        tokens = estimate_tokens(messages)
+        # Should be well under trigger
+        assert tokens < COMPRESS_TRIGGER_TOKENS
+        result = compact_context(messages, estimated_tokens=tokens)
+        assert len(result) == 100
 
-        result = compact_context(messages, max_messages=30)
-        assert len(result) <= 30
+    def test_applies_truncation_fallback(self):
+        # Create messages that exceed token limit without client
+        big_content = "x" * 4000  # ~1000 tokens each
+        messages = [{"role": "user", "content": big_content}] * 200
+        tokens = estimate_tokens(messages)
+        assert tokens > COMPRESS_TRIGGER_TOKENS
+
+        result = compact_context(messages, estimated_tokens=tokens)
+        # Should be compressed via truncation fallback
+        assert len(result) < 200
 
 
 class TestCompactBoundary:
@@ -253,15 +293,19 @@ class TestLLMCompress:
 
 
 class TestCompactContextWithLLM:
-    def _make_messages(self, n):
+    def _make_big_messages(self, n, content_size=12000):
+        """Create messages large enough to exceed token threshold (~144.5K)."""
         msgs = []
         for i in range(n):
-            msgs.append({"role": "user", "content": f"q{i}"})
-            msgs.append({"role": "assistant", "content": f"a{i}"})
+            msgs.append({"role": "user", "content": f"q{i}" + "x" * content_size})
+            msgs.append({"role": "assistant", "content": f"a{i}" + "x" * content_size})
         return msgs
 
-    def test_uses_llm_when_threshold_exceeded(self):
-        messages = self._make_messages(25)  # 50 messages > threshold
+    def test_uses_llm_when_tokens_exceed_threshold(self):
+        messages = self._make_big_messages(60)  # ~180K tokens
+        tokens = estimate_tokens(messages)
+        assert tokens > COMPRESS_TRIGGER_TOKENS
+
         client = MagicMock()
         response = MagicMock()
         response.choices = [MagicMock()]
@@ -271,28 +315,33 @@ class TestCompactContextWithLLM:
         with patch("mimo_harness.context.llm_compress", return_value=[
             {"role": "assistant", "content": "[Conversation Summary]\nLLM summary"}
         ] + messages[-10:]) as mock_compress:
-            result = compact_context(messages, client=client, model="test")
+            result = compact_context(messages, client=client, model="test", estimated_tokens=tokens)
             mock_compress.assert_called_once()
 
     def test_falls_back_to_truncation_on_llm_failure(self):
-        messages = self._make_messages(25)  # 50 messages
+        messages = self._make_big_messages(60)  # bigger to exceed threshold
+        tokens = estimate_tokens(messages)
+        assert tokens > COMPRESS_TRIGGER_TOKENS
         client = MagicMock()
         client.chat.completions.create.side_effect = Exception("fail")
 
-        result = compact_context(messages, client=client, model="test")
-        # Should still produce a result via truncation
-        assert len(result) <= 30
+        result = compact_context(messages, client=client, model="test", estimated_tokens=tokens)
         assert len(result) > 0
+        assert len(result) < len(messages)
 
-    def test_skips_llm_when_below_threshold(self):
-        messages = self._make_messages(10)  # 20 messages < threshold (30)
+    def test_skips_llm_when_below_token_threshold(self):
+        messages = [{"role": "user", "content": "hi"}] * 10
+        tokens = estimate_tokens(messages)
+        assert tokens < COMPRESS_TRIGGER_TOKENS
 
         with patch("mimo_harness.context.llm_compress") as mock_compress:
-            result = compact_context(messages, client=MagicMock())
+            result = compact_context(messages, client=MagicMock(), estimated_tokens=tokens)
             mock_compress.assert_not_called()
 
     def test_backward_compatible_no_client(self):
-        messages = self._make_messages(25)  # 50 messages
-        result = compact_context(messages)  # no client
-        assert len(result) <= 30
+        messages = self._make_big_messages(60)  # bigger to exceed threshold
+        tokens = estimate_tokens(messages)
+        assert tokens > COMPRESS_TRIGGER_TOKENS
+        result = compact_context(messages, estimated_tokens=tokens)
         assert len(result) > 0
+        assert len(result) < len(messages)

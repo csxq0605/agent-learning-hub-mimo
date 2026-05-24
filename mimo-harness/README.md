@@ -112,12 +112,19 @@ Stage 3: Context evaluation (plan mode, tool-specific)
 Stage 4: Interactive prompt (user confirmation)
 ```
 
-### Context Compression (Ch7: Progressive)
+### Context Compression (Ch7: Token-Based)
 ```
-Level 1: Snip       — Replace old tool results with markers (zero cost)
-Level 2: Microcompact — Keep recent N tool results, clear rest (zero cost)
-Level 3: Orphan filter — Remove unmatched tool results
-Level 4: Window trim  — Keep last N messages
+Context Window: 200K tokens (Claude Code standard)
+├── Startup reserve:  10K (system prompt + memory + AGENTS.md)
+├── Compression reserve: 20K (LLM call + summary output)
+└── Usable window:   170K tokens
+
+Compression triggers at 85% of usable window (~144.5K tokens):
+  1. LLM Summarize  — Model-driven semantic summary (preferred)
+  2. Snip           — Replace old tool results with markers
+  3. Microcompact   — Keep recent N tool results, clear rest
+  4. Window trim    — Remove oldest messages until tokens fit
+  5. Orphan filter  — Remove unmatched tool results
 ```
 
 ### Memory System (Ch6: Four Types)
@@ -193,19 +200,19 @@ pip install -e ".[dev]"
 python -m pytest tests/ -v
 ```
 
-255 tests across 9 test files:
+261 tests across 9 test files:
 
 | Test File | Tests | Coverage |
 |-----------|-------|----------|
 | test_agent.py | 19 | DI, circuit breaker, token budget, retry |
 | test_permissions.py | 17 | 4-stage pipeline, rule matching, plan mode |
-| test_context.py | 28 | Progressive compression, LLM compression, session management |
+| test_context.py | 33 | Token-based compression, LLM compression, session management |
 | test_registry.py | 13 | Validation, dispatch, truncation |
 | test_hooks.py | 12 | Lifecycle events, command/function hooks |
 | test_memory.py | 14 | Typed storage, frontmatter, validation |
 | test_tools.py | 17 | File ops, shell, code exec, math, web |
 | test_stress_boundary.py | 111 | Path traversal, SSRF, shell injection, large input, Unicode, permissions, concurrency, math DoS, context compression, memory boundaries, registry edge cases |
-| test_project_scanner.py | 20 | Language/framework detection, AGENTS.md generation |
+| test_project_scanner.py | 18 | Language/framework detection, AGENTS.md generation |
 
 ## Performance
 
