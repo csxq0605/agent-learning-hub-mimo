@@ -1,15 +1,34 @@
-"""Web tools - search and fetch web content."""
+"""Web tools - search and fetch web content.
+
+Ch3 markers:
+- web_search: read-only, concurrency-safe
+- web_fetch: read-only, concurrency-safe
+- Both have SSRF protection
+"""
 
 import json
 import re
+import socket
 from urllib.parse import urlparse
 import ipaddress
 from .registry import ToolDef
 from ..permissions import Permission
 
+# Max response size for web_fetch (10MB)
+MAX_RESPONSE_BYTES = 10 * 1024 * 1024
+
+# Blocked internal hostnames
+_BLOCKED_HOSTNAMES = frozenset({
+    "localhost", "metadata.google.internal", "metadata.azure.com",
+    "instance-data", "169.254.169.254",
+})
+
 
 def _validate_url(url: str) -> str | None:
-    """Return error message if URL is unsafe, else None."""
+    """Return error message if URL is unsafe, else None.
+
+    Checks: scheme, hostname (string + resolved IPs), blocked hostnames.
+    """
     try:
         parsed = urlparse(url)
     except Exception:
@@ -17,15 +36,32 @@ def _validate_url(url: str) -> str | None:
     if parsed.scheme not in ("http", "https"):
         return f"URL scheme '{parsed.scheme}' not allowed (must be http or https)"
     hostname = parsed.hostname or ""
-    # Block private/internal IPs
+    if not hostname:
+        return "URL has no hostname"
+
+    # Block known internal hostnames
+    if hostname in _BLOCKED_HOSTNAMES:
+        return f"Access to '{hostname}' is not allowed"
+
+    # Check if hostname is a raw IP
     try:
         ip = ipaddress.ip_address(hostname)
         if ip.is_private or ip.is_loopback or ip.is_link_local:
             return f"Access to private IP '{hostname}' is not allowed"
+        return None
     except ValueError:
-        # hostname is a domain name - block obvious internal names
-        if hostname in ("localhost", "metadata.google.internal"):
-            return f"Access to '{hostname}' is not allowed"
+        pass
+
+    # DNS resolution check — block domains that resolve to private IPs
+    try:
+        resolved_ips = socket.getaddrinfo(hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
+        for _, _, _, _, sockaddr in resolved_ips:
+            ip = ipaddress.ip_address(sockaddr[0])
+            if ip.is_private or ip.is_loopback or ip.is_link_local:
+                return f"Domain '{hostname}' resolves to private IP '{ip}' — blocked"
+    except (socket.gaierror, OSError):
+        pass  # DNS failure — let the request fail naturally
+
     return None
 
 
@@ -33,7 +69,6 @@ def web_search(params: dict) -> str:
     query = params.get("query", "")
     try:
         import requests
-        # Use DuckDuckGo HTML (no API key needed)
         resp = requests.get(
             "https://html.duckduckgo.com/html/",
             params={"q": query},
@@ -41,9 +76,7 @@ def web_search(params: dict) -> str:
             timeout=10,
         )
         resp.raise_for_status()
-        # Extract result snippets from HTML
         results = []
-        # Simple regex extraction
         for match in re.finditer(
             r'<a[^>]+class="result__a"[^>]*href="([^"]*)"[^>]*>(.*?)</a>.*?'
             r'<a[^>]+class="result__snippet"[^>]*>(.*?)</a>',
@@ -57,7 +90,6 @@ def web_search(params: dict) -> str:
             if len(results) >= 5:
                 break
         if not results:
-            # Fallback: extract any links
             for match in re.finditer(r'<a[^>]+href="(https?://[^"]+)"[^>]*>(.*?)</a>', resp.text, re.DOTALL):
                 title = re.sub(r'<[^>]+>', '', match.group(2)).strip()
                 if title and len(title) > 5:
@@ -79,10 +111,17 @@ def web_fetch(params: dict) -> str:
         return json.dumps({"error": err})
     try:
         import requests
-        resp = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
+        resp = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=15, stream=True)
         resp.raise_for_status()
-        content = resp.text
-        # Strip HTML tags for readability
+        # Read with size limit to prevent memory exhaustion
+        content_bytes = b""
+        for chunk in resp.iter_content(chunk_size=8192):
+            content_bytes += chunk
+            if len(content_bytes) > MAX_RESPONSE_BYTES:
+                content_bytes += b"\n... [truncated: response too large]"
+                break
+        resp.close()
+        content = content_bytes.decode("utf-8", errors="replace")
         text = re.sub(r'<script[^>]*>.*?</script>', '', content, flags=re.DOTALL)
         text = re.sub(r'<style[^>]*>.*?</style>', '', text, flags=re.DOTALL)
         text = re.sub(r'<[^>]+>', ' ', text)
@@ -110,6 +149,8 @@ def get_tools() -> list[ToolDef]:
             },
             handler=web_search,
             permission=Permission.READ,
+            is_read_only=True,
+            is_concurrency_safe=True,
         ),
         ToolDef(
             name="web_fetch",
@@ -124,5 +165,7 @@ def get_tools() -> list[ToolDef]:
             },
             handler=web_fetch,
             permission=Permission.READ,
+            is_read_only=True,
+            is_concurrency_safe=True,
         ),
     ]

@@ -1,4 +1,8 @@
-"""Code execution tool - run Python code in isolated subprocess."""
+"""Code execution tool - run Python code in isolated subprocess.
+
+Ch3 markers:
+- execute_python: write (side effects), NOT concurrency-safe
+"""
 
 import os
 import sys
@@ -54,5 +58,7 @@ def get_tools() -> list[ToolDef]:
             },
             handler=execute_python,
             permission=Permission.WRITE,
+            is_read_only=False,
+            is_concurrency_safe=False,
         ),
     ]

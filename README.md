@@ -1,6 +1,6 @@
 # Agent Learning Hub - MiMo 全阶段实践
 
-> 基于 [datawhalechina/Agent-Learning-Hub](https://github.com/datawhalechina/Agent-Learning-Hub) 学习路线，使用小米 **MiMo 模型**（`mimo-v2.5-pro`）完成 Stage 0-8 全部实践，包含完整运行结果、代码审查与安全修复。
+> 基于 [datawhalechina/Agent-Learning-Hub](https://github.com/datawhalechina/Agent-Learning-Hub) 学习路线，使用小米 **MiMo 模型**（`mimo-v2.5-pro`）完成 Stage 0-8 全部实践，包含完整运行结果与代码审查。
 
 ## 项目来源
 
@@ -20,24 +20,24 @@
 
 ## 阶段概览
 
-| Stage | 主题 | 核心能力 | 关键修复 |
-|-------|------|----------|----------|
-| 0 | 理论基础 | Agent 概念、ReAct 模式 | - |
-| 1 | 最小 Agent | 单轮 tool calling、安全数学求值 | `eval()` → AST 沙箱 |
-| 2 | RAG 研究助手 | 文本分块、嵌入检索、代码执行 | `exec()` → subprocess 隔离 |
-| 3 | Agent Harness | 工具注册、权限门控、上下文压缩 | 路径校验、权限确认、orphan 过滤 |
-| 4 | 多 Agent 协作 | 研究→写作→审阅→修改 pipeline | 健壮 JSON 提取 |
-| 5 | Skill 框架 | 可复用 Skill 定义与执行 | JSON 提取、温度调优 |
-| 6 | 浏览器自动化 | Playwright 异步操作、安全守卫 | 返回类型一致性 |
-| 7 | 评估框架 | 15 项测试用例、多层评判 | 千分位分隔符归一化 |
-| 8 | 生产级 DevOps Agent | 结构化日志、重试、成本追踪 | 选择性重试、跨平台兼容 |
+| Stage | 主题 | 核心能力 |
+|-------|------|----------|
+| 0 | 理论基础 | Agent 概念、ReAct 模式 |
+| 1 | 最小 Agent | 单轮 tool calling、安全数学求值 |
+| 2 | RAG 研究助手 | 文本分块、嵌入检索、代码执行 |
+| 3 | Agent Harness | 工具注册、权限门控、上下文压缩 |
+| 4 | 多 Agent 协作 | 研究→写作→审阅→修改 pipeline |
+| 5 | Skill 框架 | 可复用 Skill 定义与执行 |
+| 6 | 浏览器自动化 | Playwright 异步操作、安全守卫 |
+| 7 | 评估框架 | 15 项测试用例、多层评判 |
+| 8 | 生产级 DevOps Agent | 结构化日志、重试、成本追踪 |
 
 ## 核心文件
 
 ```
 ├── config.py                    # 统一配置加载（从 .env 读取）
 ├── STAGE_RESULTS.md             # 全阶段运行结果与深度解析
-├── CODE_REVIEW.md               # 代码审查报告（P0-P3 分级）
+├── CODE_REVIEW.md               # 代码审查报告
 ├── stage-0/note-why-agent.md    # 理论笔记
 ├── stage-1/minimal_agent.py     # 最小 Agent（安全数学求值）
 ├── stage-2/research_assistant.py # RAG 研究助手
@@ -46,32 +46,15 @@
 ├── stage-5/code-review-skill/   # Skill 框架示例
 ├── stage-6/browser_agent.py     # 浏览器自动化 Agent
 ├── stage-7/eval_runner.py       # Agent 评估框架
-└── stage-8/devops-agent/        # 生产级 DevOps Agent
+├── stage-8/devops-agent/        # 生产级 DevOps Agent
+└── mimo-harness/                # 完整 Agent Harness（可安装使用）
 ```
 
-## 代码审查与修复
+## 代码审查
 
-共发现并修复 **14 项问题**，按严重级别分类：
+对 Stage 0-8 及 MiMo Harness 进行了系统性代码审查，涵盖安全漏洞、可靠性问题和代码质量。详细审查报告见 [CODE_REVIEW.md](CODE_REVIEW.md)。
 
-### Critical (P0) - 安全漏洞
-1. **`eval()` 沙箱逃逸**（Stage 1, 3）→ AST 遍历安全求值器
-2. **`exec()` 任意代码执行**（Stage 2）→ subprocess + tempfile + 超时隔离
-3. **权限门控绕过**（Stage 3）→ 交互式确认 + EOFError 处理
-4. **路径遍历写入**（Stage 3）→ Path.resolve() + cwd 校验
-
-### Warning (P1) - 可靠性问题
-5. **死循环**（Stage 2 chunk_text）→ chunk_size > overlap 校验
-6. **orphan tool 引用**（Stage 3 compact_context）→ valid_tool_call_ids 过滤
-7. **脆弱 JSON 提取**（Stage 4, 5）→ 多层正则 + 降级解析
-8. **评判系统千分位**（Stage 7）→ 逗号归一化正则
-9. **重试认证错误**（Stage 8）→ 仅重试 429/5xx
-
-### Info (P2-P3) - 优化项
-10-14. 温度调优、返回类型一致性、跨平台兼容等
-
-详见 [CODE_REVIEW.md](CODE_REVIEW.md)。
-
-## 运行结果摘要
+## 运行结果
 
 - **Stage 7 评估**：修复前 14/15（93.3%），修复后 **15/15（100%）**
 - **安全测试**：所有沙箱逃逸尝试均被阻断
@@ -112,7 +95,11 @@ mimo-harness  # 进入交互模式
 
 ## MiMo Harness
 
-基于 Stage 0-8 的经验，构建了一个完整的、可下载体验的 Agent Harness，类似 Claude Code 的架构。
+基于 Stage 0-8 的经验，构建了一个完整的、可下载体验的 Agent Harness，参考 Claude Code 架构设计。
+
+**核心能力**：Agent Loop（DI + 熔断 + Token 预算）、11 个工具（并发安全标记）、4 阶段权限管线、渐进式上下文压缩、4 类型记忆系统、Hook 生命周期、交互式 REPL。
+
+**测试覆盖**：225 个测试（含 111 个压力/边界测试），覆盖路径遍历、SSRF、Shell 注入、大输入、Unicode、权限压力、并发安全、数学 DoS 等场景。
 
 详见 [mimo-harness/README.md](mimo-harness/README.md)。
 

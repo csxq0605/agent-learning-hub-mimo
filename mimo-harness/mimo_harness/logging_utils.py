@@ -2,14 +2,13 @@
 
 import os
 import json
-import time
-import hashlib
 import logging
+import secrets
 
 
 class TraceLogger:
     def __init__(self, log_file: str = None, verbose: bool = False):
-        self.session_id = hashlib.md5(str(time.time()).encode()).hexdigest()[:8]
+        self.session_id = secrets.token_hex(4)
         self.step = 0
         self.logger = logging.getLogger("mimo-harness")
         self.logger.setLevel(logging.DEBUG)

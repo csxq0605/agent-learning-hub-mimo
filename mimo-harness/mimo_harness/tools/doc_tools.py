@@ -1,9 +1,14 @@
-"""Document creation tools - markdown, CSV, and simple text documents."""
+"""Document creation tools - markdown, CSV, and simple text documents.
+
+Ch3 markers:
+- create_doc, create_spreadsheet: write, NOT concurrency-safe
+"""
 
 import os
 import json
 import csv
 from pathlib import Path
+from datetime import datetime
 from .registry import ToolDef
 from ..permissions import Permission
 
@@ -11,10 +16,14 @@ _ALLOWED_WRITE_DIR = Path.cwd().resolve()
 
 
 def _validate_output_dir(output_dir: str) -> str | None:
-    resolved = Path(output_dir).resolve()
-    if not str(resolved).startswith(str(_ALLOWED_WRITE_DIR)):
-        return f"Output directory '{output_dir}' is outside allowed directory"
-    return None
+    """Return error message if output directory is outside allowed path."""
+    try:
+        resolved = Path(output_dir).resolve()
+        if not resolved.is_relative_to(_ALLOWED_WRITE_DIR):
+            return f"Output directory '{output_dir}' is outside allowed directory"
+        return None
+    except Exception as e:
+        return f"Path validation error: {e}"
 
 
 def create_doc(params: dict) -> str:
@@ -23,10 +32,10 @@ def create_doc(params: dict) -> str:
     fmt = params.get("format", "markdown")
     output_dir = params.get("output_dir", ".")
 
+    err = _validate_output_dir(output_dir)
+    if err:
+        return json.dumps({"error": err})
     try:
-        err = _validate_output_dir(output_dir)
-        if err:
-            return json.dumps({"error": err})
         os.makedirs(output_dir, exist_ok=True)
         safe_title = "".join(c if c.isalnum() or c in "-_ " else "" for c in title).strip().replace(" ", "_") or "untitled"
         if fmt == "markdown":
@@ -52,10 +61,10 @@ def create_spreadsheet(params: dict) -> str:
     data = params.get("data", [])
     output_dir = params.get("output_dir", ".")
 
+    err = _validate_output_dir(output_dir)
+    if err:
+        return json.dumps({"error": err})
     try:
-        err = _validate_output_dir(output_dir)
-        if err:
-            return json.dumps({"error": err})
         os.makedirs(output_dir, exist_ok=True)
         safe_title = "".join(c if c.isalnum() or c in "-_ " else "" for c in title).strip().replace(" ", "_") or "untitled"
         path = os.path.join(output_dir, f"{safe_title}.csv")
@@ -93,6 +102,8 @@ def get_tools() -> list[ToolDef]:
             },
             handler=create_doc,
             permission=Permission.WRITE,
+            is_read_only=False,
+            is_concurrency_safe=False,
         ),
         ToolDef(
             name="create_spreadsheet",
@@ -112,5 +123,7 @@ def get_tools() -> list[ToolDef]:
             },
             handler=create_spreadsheet,
             permission=Permission.WRITE,
+            is_read_only=False,
+            is_concurrency_safe=False,
         ),
     ]

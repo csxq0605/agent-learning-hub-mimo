@@ -74,5 +74,7 @@ def get_tools() -> list[ToolDef]:
             },
             handler=calculator,
             permission=Permission.READ,
+            is_read_only=True,
+            is_concurrency_safe=True,
         )
     ]
