@@ -9,6 +9,7 @@ Ch3 markers:
 import json
 import re
 import socket
+import time
 from urllib.parse import urlparse
 import ipaddress
 from .registry import ToolDef
@@ -16,6 +17,10 @@ from ..permissions import Permission
 
 # Max response size for web_fetch (10MB)
 MAX_RESPONSE_BYTES = 10 * 1024 * 1024
+
+# S14: Response cache for web_fetch
+_fetch_cache: dict[str, tuple[float, str]] = {}
+CACHE_TTL = 900  # 15 minutes
 
 # Blocked internal hostnames
 _BLOCKED_HOSTNAMES = frozenset({
@@ -109,6 +114,12 @@ def web_fetch(params: dict) -> str:
     err = _validate_url(url)
     if err:
         return json.dumps({"error": err})
+    # S14: check cache first
+    cache_key = f"{url}|{max_chars}"
+    if cache_key in _fetch_cache:
+        cached_time, cached_result = _fetch_cache[cache_key]
+        if time.time() - cached_time < CACHE_TTL:
+            return cached_result
     try:
         import requests
         resp = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=15, stream=True)
@@ -128,7 +139,10 @@ def web_fetch(params: dict) -> str:
         text = re.sub(r'\s+', ' ', text).strip()
         if len(text) > max_chars:
             text = text[:max_chars] + "\n... [truncated]"
-        return json.dumps({"url": url, "status": resp.status_code, "content": text})
+        result = json.dumps({"url": url, "status": resp.status_code, "content": text})
+        # S14: store in cache
+        _fetch_cache[cache_key] = (time.time(), result)
+        return result
     except ImportError:
         return json.dumps({"error": "requests library not installed. Run: pip install requests"})
     except Exception as e:

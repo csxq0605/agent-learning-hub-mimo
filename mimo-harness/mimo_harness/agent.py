@@ -25,7 +25,7 @@ from .logging_utils import TraceLogger
 from .permissions import Permission, PermissionGate
 from .context import Session, compact_context, load_memory, estimate_tokens
 from .tools.registry import ToolRegistry, ToolDef
-from .tools import file_ops, shell, code_exec, web_tools, doc_tools, math_tools, interactive, monitor
+from .tools import file_ops, shell, code_exec, web_tools, doc_tools, math_tools, interactive, monitor, notebook_tools, task_tools
 
 
 # ---------------------------------------------------------------------------
@@ -191,6 +191,13 @@ You help users with coding, file operations, web research, document creation, an
 
 {memory}"""
 
+    # Effort level → LLM parameter mapping
+    EFFORT_PARAMS = {
+        "low": {"temperature": 0.3, "max_completion_tokens": 512},
+        "medium": {"temperature": 0.7, "max_completion_tokens": 2048},
+        "high": {"temperature": 0.9, "max_completion_tokens": 4096},
+    }
+
     def __init__(
         self,
         model: str = None,
@@ -203,8 +210,12 @@ You help users with coding, file operations, web research, document creation, an
         deps: AgentDeps = None,
         plan_mode: bool = False,
         stream: bool = False,
+        fallback_model: str = None,
+        bare: bool = False,
+        effort: str = "medium",
     ):
         self.model = model or MIMO_MODEL
+        self.fallback_model = fallback_model
         self.max_steps = max_steps
         self.max_duration = max_duration
         self.deps = deps or AgentDeps()
@@ -218,7 +229,13 @@ You help users with coding, file operations, web research, document creation, an
         self.circuit_breaker = CircuitBreaker()
         self.token_budget = TokenBudget()
         self.stream = stream
+        self.bare = bare
+        self.effort = effort
         self._system_prompt_cache: Optional[str] = None
+        # A8: Thrashing protection counters
+        self._compaction_attempts = 0
+        self._compaction_failures = 0
+        self._thrashing_detected = False
         self._register_tools()
 
     def _register_tools(self):
@@ -231,6 +248,8 @@ You help users with coding, file operations, web research, document creation, an
             + math_tools.get_tools()
             + interactive.get_tools()
             + monitor.get_tools()
+            + notebook_tools.get_tools()
+            + task_tools.get_tools()
         )
         self.registry.register_many(all_tools)
 
@@ -242,14 +261,30 @@ You help users with coding, file operations, web research, document creation, an
         tools_desc = "\n".join(
             f"- **{t.name}**: {t.description}" for t in self.registry.list_all()
         )
-        memory = load_memory(".")
-        self._system_prompt_cache = self.SYSTEM_PROMPT_TEMPLATE.format(
-            cwd=os.getcwd(),
-            platform=f"{platform.system()} {platform.release()}",
-            python_version=platform.python_version(),
-            tools_desc=tools_desc,
-            memory=f"\n## Project Memory\n{memory}" if memory else "",
-        )
+
+        if self.bare:
+            # Bare mode: minimal prompt, skip memory loading
+            self._system_prompt_cache = self.SYSTEM_PROMPT_TEMPLATE.format(
+                cwd=os.getcwd(),
+                platform=f"{platform.system()} {platform.release()}",
+                python_version=platform.python_version(),
+                tools_desc=tools_desc,
+                memory="",
+            )
+        else:
+            memory = load_memory(".")
+            self._system_prompt_cache = self.SYSTEM_PROMPT_TEMPLATE.format(
+                cwd=os.getcwd(),
+                platform=f"{platform.system()} {platform.release()}",
+                python_version=platform.python_version(),
+                tools_desc=tools_desc,
+                memory=f"\n## Project Memory\n{memory}" if memory else "",
+            )
+
+        # S15: Append extra system prompt text if configured
+        append_prompt = getattr(self, "_append_system_prompt", "")
+        if append_prompt:
+            self._system_prompt_cache += f"\n\n{append_prompt}"
         return self._system_prompt_cache
 
     def _check_shell_permission(self, command: str) -> Permission:
@@ -266,6 +301,16 @@ You help users with coding, file operations, web research, document creation, an
         Returns the tool result string.
         """
         self.logger.trace("tool_call", {"name": func_name, "args": func_args})
+
+        # S12: Snapshot files before edit/write operations
+        checkpoint_mgr = getattr(self, "_checkpoint_manager", None)
+        if checkpoint_mgr and func_name in ("edit_file", "write_file"):
+            file_path = func_args.get("path") or func_args.get("file_path", "")
+            if file_path and os.path.exists(file_path):
+                try:
+                    checkpoint_mgr.snapshot(file_path)
+                except Exception as e:
+                    self.logger.trace("checkpoint_snapshot_failed", {"error": str(e)})
 
         # Dynamic permission for shell commands (Ch4: context-aware checks)
         if func_name == "run_command":
@@ -294,14 +339,16 @@ You help users with coding, file operations, web research, document creation, an
         """
         import sys
 
+        effort_params = self.EFFORT_PARAMS.get(self.effort, self.EFFORT_PARAMS["medium"])
+
         def _do_stream():
             return client.chat.completions.create(
                 model=self.model,
                 messages=messages,
                 tools=tools_schema,
                 tool_choice="auto",
-                max_completion_tokens=2048,
-                temperature=0.7,
+                max_completion_tokens=effort_params["max_completion_tokens"],
+                temperature=effort_params["temperature"],
                 top_p=0.9,
                 stream=True,
             )
@@ -426,9 +473,12 @@ You help users with coding, file operations, web research, document creation, an
         start_time = time.time()
         tools_schema = self.registry.list_tools()
         system_msg = {"role": "system", "content": self._build_system_prompt()}
+        effort_params = self.EFFORT_PARAMS.get(self.effort, self.EFFORT_PARAMS["medium"])
 
         # Reset circuit breaker for new task
         self.circuit_breaker.reset()
+        # Reset thrashing warning flag for new task
+        self._thrash_warned = False
 
         for step in range(self.max_steps):
             # Termination check: time limit
@@ -444,31 +494,42 @@ You help users with coding, file operations, web research, document creation, an
                 )
                 return "[ERROR] Circuit breaker open — too many consecutive failures"
 
-            # Build messages with context compaction (token-based)
-            conv_tokens = estimate_tokens(session.get_messages())
-            compacted = compact_context(
-                session.get_messages(),
-                client=client,
-                model=self.model,
-                estimated_tokens=conv_tokens,
-            )
-            # If compression happened, update session messages so next
-            # iteration uses the compressed context
-            if len(compacted) < len(session.get_messages()):
-                pre_count = len(session.get_messages())
-                session.messages = compacted
-                # Re-add the current user task — it was compressed away
-                session.add_message("user", task)
-                session.compaction_count += 1
-                # Re-load project instructions that were compressed away
-                memory_content = load_memory(os.getcwd())
-                if memory_content:
-                    session.messages.insert(0, {"role": "system", "content": f"## Project Memory\n{memory_content}"})
-                self.logger.info(
-                    f"[COMPACT] {pre_count} msgs → "
-                    f"{len(session.get_messages())} msgs, "
-                    f"~{estimate_tokens(session.get_messages())} tokens"
+            # A8: Skip auto-compaction if thrashing detected
+            if self._thrashing_detected:
+                if not hasattr(self, '_thrash_warned'):
+                    self.logger.info("[THRASHING] Compaction thrashing detected — auto-compaction disabled")
+                    self._thrash_warned = True
+            else:
+                # Build messages with context compaction (token-based)
+                conv_tokens = estimate_tokens(session.get_messages())
+                compacted, self._compaction_attempts, self._compaction_failures, thrashing = compact_context(
+                    session.get_messages(),
+                    client=client,
+                    model=self.model,
+                    estimated_tokens=conv_tokens,
+                    compaction_attempts=self._compaction_attempts,
+                    compaction_failures=self._compaction_failures,
                 )
+                if thrashing:
+                    self._thrashing_detected = True
+                    self.logger.info("[THRASHING] Compaction not reducing size — thrashing detected")
+                # If compression happened, update session messages so next
+                # iteration uses the compressed context
+                if len(compacted) < len(session.get_messages()):
+                    pre_count = len(session.get_messages())
+                    session.messages = compacted
+                    # Re-add the current user task — it was compressed away
+                    session.add_message("user", task)
+                    session.compaction_count += 1
+                    # Re-load project instructions that were compressed away
+                    memory_content = load_memory(os.getcwd())
+                    if memory_content:
+                        session.messages.insert(0, {"role": "system", "content": f"## Project Memory\n{memory_content}"})
+                    self.logger.info(
+                        f"[COMPACT] {pre_count} msgs → "
+                        f"{len(session.get_messages())} msgs, "
+                        f"~{estimate_tokens(session.get_messages())} tokens"
+                    )
             messages = [system_msg] + session.get_messages()
 
             # Token budget check (Ch7)
@@ -501,8 +562,8 @@ You help users with coding, file operations, web research, document creation, an
                             messages=messages,
                             tools=tools_schema,
                             tool_choice="auto",
-                            max_completion_tokens=2048,
-                            temperature=0.7,
+                            max_completion_tokens=effort_params["max_completion_tokens"],
+                            temperature=effort_params["temperature"],
                             top_p=0.9,
                         ),
                         max_retries=self.deps.max_retries,
@@ -510,11 +571,39 @@ You help users with coding, file operations, web research, document creation, an
                     )
                 self.circuit_breaker.record_success()
             except Exception as e:
-                self.circuit_breaker.record_failure()
-                self.logger.error(f"LLM call failed: {e}")
-                if self.circuit_breaker.check():
-                    return f"[ERROR] Circuit breaker open after repeated failures: {e}"
-                continue  # Retry in next loop iteration
+                # S16: Fallback model on 429/503 errors
+                status = getattr(e, "status_code", None)
+                if self.fallback_model and status in (429, 503):
+                    self.logger.info(
+                        f"Primary model failed ({status}), trying fallback: {self.fallback_model}"
+                    )
+                    try:
+                        response = retry_with_backoff(
+                            lambda: client.chat.completions.create(
+                                model=self.fallback_model,
+                                messages=messages,
+                                tools=tools_schema,
+                                tool_choice="auto",
+                                max_completion_tokens=effort_params["max_completion_tokens"],
+                                temperature=effort_params["temperature"],
+                                top_p=0.9,
+                            ),
+                            max_retries=self.deps.max_retries,
+                            base_delay=self.deps.base_retry_delay,
+                        )
+                        self.circuit_breaker.record_success()
+                    except Exception as fallback_err:
+                        self.circuit_breaker.record_failure()
+                        self.logger.error(f"Fallback model also failed: {fallback_err}")
+                        if self.circuit_breaker.check():
+                            return f"[ERROR] Circuit breaker open after repeated failures: {fallback_err}"
+                        continue
+                else:
+                    self.circuit_breaker.record_failure()
+                    self.logger.error(f"LLM call failed: {e}")
+                    if self.circuit_breaker.check():
+                        return f"[ERROR] Circuit breaker open after repeated failures: {e}"
+                    continue  # Retry in next loop iteration
 
             choice = response.choices[0]
             message = choice.message
@@ -571,12 +660,29 @@ You help users with coding, file operations, web research, document creation, an
                             result = json.dumps({"error": str(e)})
                         session.add_message("tool", result, tool_call_id=tc.id)
 
-            # Execute non-concurrency-safe tools sequentially
-            for tc, func_name, func_args in sequential_calls:
+            # X2: Batch related edit/write operations together
+            edit_calls = [(tc, fn, fa) for tc, fn, fa in sequential_calls if fn in ("edit_file", "write_file")]
+            other_calls = [(tc, fn, fa) for tc, fn, fa in sequential_calls if fn not in ("edit_file", "write_file")]
+
+            # Execute other sequential tools first
+            for tc, func_name, func_args in other_calls:
                 result = self._handle_tool_call(
                     func_name, func_args, tc.id, session
                 )
                 session.add_message("tool", result, tool_call_id=tc.id)
+
+            # Execute edit/write tools as a batch if checkpoint manager available
+            if edit_calls:
+                checkpoint_mgr = getattr(self, "_checkpoint_manager", None)
+                if checkpoint_mgr and len(edit_calls) > 1:
+                    checkpoint_mgr.begin_batch()
+                for tc, func_name, func_args in edit_calls:
+                    result = self._handle_tool_call(
+                        func_name, func_args, tc.id, session
+                    )
+                    session.add_message("tool", result, tool_call_id=tc.id)
+                if checkpoint_mgr and len(edit_calls) > 1:
+                    checkpoint_mgr.end_batch()
 
         # Termination: max steps reached
         self.logger.session_summary({

@@ -32,11 +32,13 @@ code-review-skill/
 ## How to Run
 
 ```bash
+pip install openai python-dotenv
+
 # Smoke test (verifies the skill works)
 python review.py --smoke-test
 
 # Review a file
-export ANTHROPIC_API_KEY=your-key
+# 在 .env 中配置 MIMO_BASE_URL, MIMO_API_KEY, MIMO_MODEL
 python review.py src/auth.py
 
 # Review with specific focus

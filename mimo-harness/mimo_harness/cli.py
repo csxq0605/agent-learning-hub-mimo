@@ -5,15 +5,24 @@ Enhanced with:
 - Hook loading from config
 - Memory management commands
 - Permission rules loading
+- Pipe input (stdin)
+- Output formats (text, json, stream-json)
+- Bare mode (no memory)
+- !command prefix for shell execution
+- /context command for token breakdown
+- Effort levels (low, medium, high)
 """
 
 import argparse
 import os
+import sys
 import json
+import subprocess
+import time
 from .agent import MiMoHarness
 from .config import MIMO_API_KEY, MIMO_MODEL
 from .permissions import PermissionRule
-from .context import Session, estimate_tokens, compact_context, CONTEXT_WINDOW_TOKENS
+from .context import Session, CheckpointManager, estimate_tokens, compact_context, CONTEXT_WINDOW_TOKENS
 from .memory import MemoryStore
 
 
@@ -52,10 +61,50 @@ Commands:
   /stats         Show session statistics
   /tokens        Show current token usage
   /compact       Manually compress conversation context
+  /context       Show per-message token breakdown
   /init          Scan project and generate AGENTS.md
+  /rewind        Restore files from the last checkpoint
 
 Or just type a task to interact with the agent.
+Prefix with ! to run a shell command directly (e.g. !ls -la).
 """)
+
+
+def _estimate_message_tokens(msg: dict) -> int:
+    """Estimate token count for a single message (~4 chars per token)."""
+    content = msg.get("content", "")
+    if not isinstance(content, str):
+        content = str(content) if content else ""
+    # Include tool_calls if present
+    tool_calls = msg.get("tool_calls")
+    if tool_calls:
+        content += json.dumps(tool_calls, ensure_ascii=False)
+    return max(1, len(content) // 4)
+
+
+def _output(text: str, output_format: str = "text", session=None, steps: int = 0, duration: float = 0.0):
+    """Print output in the requested format."""
+    if output_format == "json":
+        result_obj = {
+            "type": "result",
+            "content": text,
+            "session_id": session.session_id if session else "",
+            "steps": steps,
+            "duration": round(duration, 2),
+        }
+        print(json.dumps(result_obj, ensure_ascii=False))
+    elif output_format == "stream-json":
+        # For stream-json, the final result is also a JSONL line
+        result_obj = {
+            "type": "result",
+            "content": text,
+            "session_id": session.session_id if session else "",
+            "steps": steps,
+            "duration": round(duration, 2),
+        }
+        print(json.dumps(result_obj, ensure_ascii=False))
+    else:
+        print(text)
 
 
 def _load_config(config_path: str) -> dict:
@@ -68,6 +117,63 @@ def _load_config(config_path: str) -> dict:
     except Exception as e:
         print(f"Warning: Failed to load config from {config_path}: {e}")
         return {}
+
+
+def _list_session_files(session_dir: str) -> list:
+    """List .jsonl session files sorted by modification time (newest first)."""
+    import glob
+    files = glob.glob(os.path.join(session_dir, "*.jsonl"))
+    files.sort(key=os.path.getmtime, reverse=True)
+    return files
+
+
+def _resume_latest_session(session_dir: str):
+    """Find and load the most recent session from session dir."""
+    files = _list_session_files(session_dir)
+    if not files:
+        print("No sessions found to resume.")
+        return None
+    latest = files[0]
+    try:
+        session = Session.from_jsonl(latest)
+        return session
+    except Exception as e:
+        print(f"Error loading session: {e}")
+        return None
+
+
+def _pick_session(session_dir: str):
+    """List sessions and let user pick one to resume."""
+    files = _list_session_files(session_dir)
+    if not files:
+        print("No sessions found.")
+        return None
+    print("\nAvailable sessions:")
+    for i, f in enumerate(files[:10]):  # Show last 10
+        mtime = os.path.getmtime(f)
+        import datetime
+        dt = datetime.datetime.fromtimestamp(mtime)
+        name = os.path.splitext(os.path.basename(f))[0]
+        # Count messages
+        try:
+            with open(f, "r", encoding="utf-8") as fh:
+                msg_count = sum(1 for _ in fh)
+        except Exception:
+            msg_count = "?"
+        print(f"  [{i+1}] {name} ({msg_count} msgs, {dt.strftime('%Y-%m-%d %H:%M')})")
+    print()
+    try:
+        choice = input("Pick a session number (or Enter to cancel): ").strip()
+        if not choice:
+            return None
+        idx = int(choice) - 1
+        if 0 <= idx < len(files):
+            return Session.from_jsonl(files[idx])
+        else:
+            print("Invalid selection.")
+            return None
+    except (ValueError, EOFError, KeyboardInterrupt):
+        return None
 
 
 def main():
@@ -85,9 +191,19 @@ def main():
     parser.add_argument("--config", "-c", help="Configuration file path")
     parser.add_argument("--rules", "-r", help="Permission rules file path")
     parser.add_argument("--stream", "-s", action="store_true", help="Stream LLM responses token-by-token")
+    parser.add_argument("--append-system-prompt", help="Additional text to append to the system prompt")
+    parser.add_argument("--fallback-model", help="Fallback model to use if primary model fails with 429/503")
+    parser.add_argument("--output-format", choices=["text", "json", "stream-json"], default="text", help="Output format (default: text)")
+    parser.add_argument("--bare", action="store_true", help="Bare mode: skip memory loading, use minimal system prompt")
+    parser.add_argument("--effort", choices=["low", "medium", "high"], default="medium", help="Effort level: low, medium (default), high")
+    parser.add_argument("--session-dir", default=None, help="Directory for auto-saving sessions (default: ~/.mimo/sessions/)")
+    parser.add_argument("--continue", dest="continue_session", action="store_true", help="Resume the most recent session from session dir")
+    parser.add_argument("--resume", action="store_true", help="List sessions and let user pick one to resume")
+    parser.add_argument("--name", default=None, help="Name for the current session")
     args = parser.parse_args()
 
-    print_banner()
+    if args.output_format == "text":
+        print_banner()
 
     # Load configuration
     config = {}
@@ -105,7 +221,15 @@ def main():
         log_file=args.log_file or config.get("log_file"),
         plan_mode=args.plan or config.get("plan_mode", False),
         stream=args.stream or config.get("stream", False),
+        fallback_model=args.fallback_model or config.get("fallback_model"),
+        bare=args.bare or config.get("bare", False),
+        effort=args.effort or config.get("effort", "medium"),
     )
+
+    # Append extra system prompt text if provided (S15)
+    append_prompt = args.append_system_prompt or config.get("append_system_prompt", "")
+    if append_prompt:
+        harness._append_system_prompt = append_prompt
 
     # Load permission rules
     rules_path = args.rules or config.get("rules_file")
@@ -120,25 +244,66 @@ def main():
         harness._hook_runner = HookRunner()
         harness._hook_runner.load_from_config(config)
 
-    if args.task:
-        result = harness.run(args.task)
-        print(result)
+    # C1: Read stdin if piped
+    stdin_content = ""
+    try:
+        if not sys.stdin.isatty():
+            stdin_content = sys.stdin.read()
+    except (OSError, EOFError):
+        pass
+
+    # Build task from stdin and/or --task
+    task = None
+    if stdin_content and args.task:
+        task = f"{stdin_content}\n\n{args.task}"
+    elif stdin_content:
+        task = stdin_content
+    elif args.task:
+        task = args.task
+
+    if task:
+        start_time = time.time()
+        result = harness.run(task)
+        duration = time.time() - start_time
+        _output(result, args.output_format, duration=duration)
         return
 
     # Interactive REPL mode
     print(f"Model: {harness.model}")
     if MIMO_API_KEY:
-        print(f"API Key: {'*' * 8}...{MIMO_API_KEY[-4:]}")
+        print(f"API Key: {'*' * 12}")
     mode_str = 'plan' if args.plan else 'dry-run' if args.dry_run else 'auto-approve' if args.auto_approve else 'interactive'
     print(f"Mode: {mode_str}")
     print("Type /help for commands, or just start chatting.\n")
 
     import secrets
 
-    session = Session(
-        session_id=secrets.token_hex(4),
-    )
+    # A4+X1: Session directory setup
+    session_dir = args.session_dir or os.path.join(os.path.expanduser("~"), ".mimo", "sessions")
+    os.makedirs(session_dir, exist_ok=True)
+
+    # A3+C2: Session resume logic
+    session = None
+    if args.continue_session:
+        session = _resume_latest_session(session_dir)
+    elif args.resume:
+        session = _pick_session(session_dir)
+
+    if session is None:
+        session = Session(
+            session_id=secrets.token_hex(4),
+            auto_save_dir=session_dir,
+            name=args.name or "",
+        )
+    else:
+        session.auto_save_dir = session_dir
+        if args.name:
+            session.name = args.name
+        print(f"Resumed session: {session.session_id} ({len(session.messages)} messages)")
+
     memory_store = MemoryStore(".")
+    checkpoint_manager = CheckpointManager(session.session_id)
+    harness._checkpoint_manager = checkpoint_manager
 
     while True:
         # Show token count in prompt
@@ -158,9 +323,34 @@ def main():
         if user_input.startswith("/"):
             parts = user_input.split()
             cmd = [parts[0].lower()] + parts[1:]
-            action, session = _handle_command(cmd, harness, session, memory_store)
+            action, session = _handle_command(cmd, harness, session, memory_store, checkpoint_manager)
             if action == "quit":
                 break
+            continue
+
+        # C7: !command prefix — execute shell command directly
+        if user_input.startswith("!"):
+            shell_cmd = user_input[1:]
+            # Route through permission system for logging and protection
+            from .permissions import Permission
+            action_desc = f"run_command({shell_cmd[:100]})"
+            if not harness.perms.check(Permission.WRITE, action_desc, params={"command": shell_cmd}):
+                print("[blocked by permission system]")
+                continue
+            try:
+                result = subprocess.run(
+                    shell_cmd, shell=True, capture_output=True, text=True, timeout=30
+                )
+                if result.stdout:
+                    print(result.stdout, end="")
+                if result.stderr:
+                    print(result.stderr, end="")
+                if result.returncode != 0 and not result.stdout and not result.stderr:
+                    print(f"[exit code: {result.returncode}]")
+            except subprocess.TimeoutExpired:
+                print("[command timed out after 30s]")
+            except Exception as e:
+                print(f"[error: {e}]")
             continue
 
         # Run agent
@@ -171,7 +361,7 @@ def main():
             harness.run(user_input, session)
 
 
-def _handle_command(cmd, harness, session, memory_store):
+def _handle_command(cmd, harness, session, memory_store, checkpoint_manager=None):
     """Handle a single REPL command.
 
     Returns (action, session) where action is 'quit' or 'continue'.
@@ -287,7 +477,7 @@ def _handle_command(cmd, harness, session, memory_store):
                 api_key = require_api_key()
                 from openai import OpenAI
                 client = OpenAI(api_key=api_key, base_url=MIMO_BASE_URL)
-                compacted = compact_context(
+                compacted, _, _, _ = compact_context(
                     session.messages,
                     client=client,
                     model=harness.model,
@@ -299,7 +489,7 @@ def _handle_command(cmd, harness, session, memory_store):
                 print(f"Done: {_format_tokens(tokens_before)} -> {_format_tokens(tokens_after)} tokens")
             except Exception as e:
                 # Fallback: no LLM, just truncation
-                compacted = compact_context(
+                compacted, _, _, _ = compact_context(
                     session.messages,
                     estimated_tokens=tokens_before,
                 )
@@ -308,6 +498,37 @@ def _handle_command(cmd, harness, session, memory_store):
                 tokens_after = estimate_tokens(session.messages)
                 print(f"Done (truncation): {_format_tokens(tokens_before)} -> {_format_tokens(tokens_after)} tokens")
         print()
+    elif cmd[0] == "/context":
+        # C9: Per-message token breakdown
+        if not session.messages:
+            print("No messages in session.")
+        else:
+            print(f"\nContext breakdown ({len(session.messages)} messages):")
+            print(f"{'#':<4} {'Role':<12} {'Tokens':>8}  Content preview")
+            print("-" * 70)
+            total_tokens = 0
+            msg_tokens = []
+            for i, msg in enumerate(session.messages):
+                role = msg.get("role", "?")
+                tokens = _estimate_message_tokens(msg)
+                total_tokens += tokens
+                content = msg.get("content", "")
+                if not isinstance(content, str):
+                    content = str(content) if content else ""
+                preview = content[:50].replace("\n", " ")
+                msg_tokens.append((i, role, tokens, preview))
+            # Sort by token count descending to highlight heavy messages
+            sorted_by_tokens = sorted(msg_tokens, key=lambda x: x[2], reverse=True)
+            for i, role, tokens, preview in msg_tokens:
+                marker = " <<" if tokens == sorted_by_tokens[0][2] and tokens > 100 else ""
+                print(f"{i:<4} {role:<12} {_format_tokens(tokens):>8}  {preview}{marker}")
+            print("-" * 70)
+            print(f"{'Total':<16} {_format_tokens(total_tokens):>8}")
+            # Highlight top consumers
+            if sorted_by_tokens and sorted_by_tokens[0][2] > 100:
+                top = sorted_by_tokens[0]
+                print(f"\nLargest: msg #{top[0]} ({top[1]}) — {_format_tokens(top[2])} tokens")
+            print()
     elif cmd[0] == "/init":
         from .project_scanner import scan_project, generate_agents_md
         agents_md_path = os.path.join(os.getcwd(), "AGENTS.md")
@@ -329,6 +550,18 @@ def _handle_command(cmd, harness, session, memory_store):
             print(f"  Frameworks: {', '.join(result['frameworks'])}")
         if result.get("test_runner"):
             print(f"  Test runner: {result['test_runner']}")
+        print()
+    elif cmd[0] == "/rewind":
+        if checkpoint_manager:
+            restored = checkpoint_manager.restore_last()
+            if restored:
+                print(f"Restored {len(restored)} file(s):")
+                for p in restored:
+                    print(f"  {p}")
+            else:
+                print("No checkpoint to restore.")
+        else:
+            print("No checkpoint manager available.")
         print()
     elif cmd[0] == "/save" and len(cmd) > 1:
         try:

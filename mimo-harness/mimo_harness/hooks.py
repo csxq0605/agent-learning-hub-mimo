@@ -24,6 +24,17 @@ class HookEvent(Enum):
     SESSION_START = "SessionStart"
     SESSION_END = "SessionEnd"
     USER_PROMPT_SUBMIT = "UserPromptSubmit"
+    PRE_COMPACT = "PreCompact"
+    POST_COMPACT = "PostCompact"
+    TASK_CREATED = "TaskCreated"
+    TASK_COMPLETED = "TaskCompleted"
+    SUBAGENT_START = "SubagentStart"
+    SUBAGENT_STOP = "SubagentStop"
+    PERMISSION_REQUEST = "PermissionRequest"
+    PERMISSION_DENIED = "PermissionDenied"
+    CONFIG_CHANGE = "ConfigChange"
+    CWD_CHANGED = "CwdChanged"
+    FILE_CHANGED = "FileChanged"
 
 
 class HookDecision(Enum):
@@ -226,13 +237,20 @@ class HookRunner:
         }, ensure_ascii=False)
 
         try:
-            subprocess.Popen(
+            proc = subprocess.Popen(
                 config.command,
                 shell=True,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
+            # Write hook input to stdin and close the pipe so the
+            # subprocess does not hang waiting for EOF.
+            try:
+                proc.stdin.write(hook_input.encode("utf-8"))
+                proc.stdin.close()
+            except Exception:
+                pass  # If stdin write fails, let the process continue
         except Exception:
             pass  # Async hooks are fire-and-forget
 

@@ -41,11 +41,11 @@
 
 ### What I Learned
 
-1. **The harness is the product, not the model.** Claude Code's power comes from its tool design, permission system, and context management -- not just from Claude's capabilities.
+1. **The harness is the product, not the model.** Agent harness power comes from tool design, permission system, and context management -- not just from the LLM's capabilities.
 
-2. **Tool design is critical.** Anthropic spent more time optimizing SWE-bench tools than on the overall prompt. The Agent-Computer Interface (ACI) matters as much as the model.
+2. **Tool design is critical.** The Agent-Computer Interface (ACI) matters as much as the model. Tool descriptions, parameter schemas, and error messages directly affect LLM decision quality.
 
-3. **Context compaction is essential.** Without it, long conversations hit context limits. Claude Code auto-summarizes older messages.
+3. **Context compaction is essential.** Without it, long conversations hit context limits. Auto-summarization of older messages keeps the conversation going.
 
 4. **Permission gates prevent disasters.** Destructive operations (delete, force push) should be blocked by default. Write operations should prompt for confirmation.
 
@@ -64,8 +64,9 @@ A working harness demo (`harness_demo.py`) with:
 
 ## How to Run
 ```bash
-export ANTHROPIC_API_KEY=your-key
-pip install anthropic
+# 使用 MiMo 模型（通过 OpenAI 兼容接口）
+# 在 .env 中配置 MIMO_BASE_URL, MIMO_API_KEY, MIMO_MODEL
+pip install openai python-dotenv
 python harness_demo.py
 ```
 

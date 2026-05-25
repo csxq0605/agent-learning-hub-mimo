@@ -193,10 +193,10 @@ class TestCompressionIntegration:
             session.add_message("user", f"q{i} {big}")
             session.add_message("assistant", f"a{i} {big}")
 
-        # Mock compact_context to return a summary
+        # Mock compact_context to return a summary (tuple: messages, attempts, failures, thrashing)
         summary = [{"role": "assistant", "content": "[Conversation Summary]\nTest summary"}]
 
-        with patch("mimo_harness.agent.compact_context", return_value=summary):
+        with patch("mimo_harness.agent.compact_context", return_value=(summary, 1, 0, False)):
             # Mock the LLM response
             mock_response = MagicMock()
             mock_response.choices = [MagicMock()]
@@ -470,7 +470,7 @@ class TestClaudeMdSurvivesCompact:
         # Mock load_memory to return CLAUDE.md content
         memory_text = "# CLAUDE.md\nThis is the project memory"
 
-        with patch("mimo_harness.agent.compact_context", return_value=summary), \
+        with patch("mimo_harness.agent.compact_context", return_value=(summary, 1, 0, False)), \
              patch("mimo_harness.agent.load_memory", return_value=memory_text):
 
             mock_response = MagicMock()
@@ -821,3 +821,144 @@ class TestDynamicShellPermission:
         harness = MiMoHarness()
         perm = harness._check_shell_permission("ls && rm -rf /")
         assert perm == Permission.WRITE
+
+
+class TestAppendSystemPrompt:
+    """S15: _build_system_prompt appends append_system_prompt text."""
+
+    def test_build_system_prompt_appends_text(self, monkeypatch):
+        """S15: _append_system_prompt is appended to system prompt."""
+        monkeypatch.setenv("MIMO_API_KEY", "test-key")
+        monkeypatch.setenv("MIMO_BASE_URL", "http://test.com")
+        monkeypatch.setenv("MIMO_MODEL", "test-model")
+
+        harness = MiMoHarness()
+        harness._append_system_prompt = "CUSTOM INSTRUCTIONS: Always be verbose."
+        prompt = harness._build_system_prompt()
+        assert "CUSTOM INSTRUCTIONS: Always be verbose." in prompt
+
+    def test_build_system_prompt_no_append(self, monkeypatch):
+        """S15: Without _append_system_prompt, no extra text is added."""
+        monkeypatch.setenv("MIMO_API_KEY", "test-key")
+        monkeypatch.setenv("MIMO_BASE_URL", "http://test.com")
+        monkeypatch.setenv("MIMO_MODEL", "test-model")
+
+        harness = MiMoHarness()
+        prompt = harness._build_system_prompt()
+        # Should not contain any custom instruction marker
+        assert "CUSTOM INSTRUCTIONS" not in prompt
+
+    def test_build_system_prompt_empty_append(self, monkeypatch):
+        """S15: Empty _append_system_prompt does not modify prompt."""
+        monkeypatch.setenv("MIMO_API_KEY", "test-key")
+        monkeypatch.setenv("MIMO_BASE_URL", "http://test.com")
+        monkeypatch.setenv("MIMO_MODEL", "test-model")
+
+        harness = MiMoHarness()
+        harness._append_system_prompt = ""
+        prompt_with_empty = harness._build_system_prompt()
+
+        harness2 = MiMoHarness()
+        prompt_without = harness2._build_system_prompt()
+
+        # Both should be the same (empty append adds nothing)
+        assert prompt_with_empty == prompt_without
+
+    def test_append_system_prompt_via_cli_flag(self, monkeypatch):
+        """S15: CLI --append-system-prompt sets _append_system_prompt on harness."""
+        monkeypatch.setenv("MIMO_API_KEY", "test-key")
+        monkeypatch.setenv("MIMO_BASE_URL", "http://test.com")
+        monkeypatch.setenv("MIMO_MODEL", "test-model")
+
+        harness = MiMoHarness()
+        # Simulate what cli.py does
+        harness._append_system_prompt = "EXTRA TEXT FROM CLI"
+        prompt = harness._build_system_prompt()
+        assert "EXTRA TEXT FROM CLI" in prompt
+
+
+class TestFallbackModel:
+    """S16: fallback_model parameter is stored and used correctly."""
+
+    def test_fallback_model_stored(self, monkeypatch):
+        """S16: fallback_model parameter is stored on the harness."""
+        monkeypatch.setenv("MIMO_API_KEY", "test-key")
+        monkeypatch.setenv("MIMO_BASE_URL", "http://test.com")
+        monkeypatch.setenv("MIMO_MODEL", "test-model")
+
+        harness = MiMoHarness(fallback_model="mimo-v2.5-flash")
+        assert harness.fallback_model == "mimo-v2.5-flash"
+
+    def test_fallback_model_default_none(self, monkeypatch):
+        """S16: fallback_model defaults to None."""
+        monkeypatch.setenv("MIMO_API_KEY", "test-key")
+        monkeypatch.setenv("MIMO_BASE_URL", "http://test.com")
+        monkeypatch.setenv("MIMO_MODEL", "test-model")
+
+        harness = MiMoHarness()
+        assert harness.fallback_model is None
+
+    def test_fallback_model_used_on_429(self, monkeypatch):
+        """S16: Fallback model is used when primary returns 429."""
+        monkeypatch.setenv("MIMO_API_KEY", "test-key")
+        monkeypatch.setenv("MIMO_BASE_URL", "http://test.com")
+        monkeypatch.setenv("MIMO_MODEL", "test-model")
+
+        harness = MiMoHarness(max_steps=1, fallback_model="mimo-v2.5-flash")
+
+        # Track which model was called
+        models_called = []
+
+        def mock_create(**kwargs):
+            models_called.append(kwargs.get("model"))
+            if kwargs.get("model") == "test-model":
+                err = Exception("Rate limited")
+                err.status_code = 429
+                raise err
+            resp = MagicMock()
+            resp.choices = [MagicMock()]
+            resp.choices[0].message.content = "Fallback response"
+            resp.choices[0].message.tool_calls = None
+            return resp
+
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.side_effect = mock_create
+
+        session = Session(session_id="test")
+        with patch.object(harness.deps, 'llm_client_factory', return_value=mock_client):
+            result = harness.run("test task", session)
+
+        assert "Fallback response" in result
+        assert "mimo-v2.5-flash" in models_called
+
+    def test_fallback_model_used_on_503(self, monkeypatch):
+        """S16: Fallback model is used when primary returns 503."""
+        monkeypatch.setenv("MIMO_API_KEY", "test-key")
+        monkeypatch.setenv("MIMO_BASE_URL", "http://test.com")
+        monkeypatch.setenv("MIMO_MODEL", "test-model")
+
+        harness = MiMoHarness(max_steps=1, fallback_model="backup-model")
+
+        models_called = []
+
+        def mock_create(**kwargs):
+            models_called.append(kwargs.get("model"))
+            if kwargs.get("model") == "test-model":
+                err = Exception("Service unavailable")
+                err.status_code = 503
+                raise err
+            resp = MagicMock()
+            resp.choices = [MagicMock()]
+            resp.choices[0].message.content = "Backup response"
+            resp.choices[0].message.tool_calls = None
+            return resp
+
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.side_effect = mock_create
+
+        session = Session(session_id="test")
+        with patch.object(harness.deps, 'llm_client_factory', return_value=mock_client):
+            result = harness.run("test task", session)
+
+        assert "Backup response" in result
+        assert "backup-model" in models_called

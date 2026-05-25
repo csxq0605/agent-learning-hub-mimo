@@ -229,3 +229,131 @@ class TestHookEvent:
         assert HookEvent.STOP.value == "Stop"
         assert HookEvent.SESSION_START.value == "SessionStart"
         assert HookEvent.SESSION_END.value == "SessionEnd"
+
+    def test_s6_new_events_exist(self):
+        """S6: New hook events are defined in the enum."""
+        assert hasattr(HookEvent, "PRE_COMPACT")
+        assert HookEvent.PRE_COMPACT.value == "PreCompact"
+        assert hasattr(HookEvent, "POST_COMPACT")
+        assert HookEvent.POST_COMPACT.value == "PostCompact"
+        assert hasattr(HookEvent, "TASK_CREATED")
+        assert HookEvent.TASK_CREATED.value == "TaskCreated"
+        assert hasattr(HookEvent, "TASK_COMPLETED")
+        assert HookEvent.TASK_COMPLETED.value == "TaskCompleted"
+        assert hasattr(HookEvent, "SUBAGENT_START")
+        assert HookEvent.SUBAGENT_START.value == "SubagentStart"
+        assert hasattr(HookEvent, "SUBAGENT_STOP")
+        assert HookEvent.SUBAGENT_STOP.value == "SubagentStop"
+        assert hasattr(HookEvent, "PERMISSION_REQUEST")
+        assert HookEvent.PERMISSION_REQUEST.value == "PermissionRequest"
+        assert hasattr(HookEvent, "PERMISSION_DENIED")
+        assert HookEvent.PERMISSION_DENIED.value == "PermissionDenied"
+        assert hasattr(HookEvent, "CONFIG_CHANGE")
+        assert HookEvent.CONFIG_CHANGE.value == "ConfigChange"
+        assert hasattr(HookEvent, "CWD_CHANGED")
+        assert HookEvent.CWD_CHANGED.value == "CwdChanged"
+        assert hasattr(HookEvent, "FILE_CHANGED")
+        assert HookEvent.FILE_CHANGED.value == "FileChanged"
+        assert hasattr(HookEvent, "USER_PROMPT_SUBMIT")
+        assert HookEvent.USER_PROMPT_SUBMIT.value == "UserPromptSubmit"
+        assert hasattr(HookEvent, "POST_TOOL_USE_FAILURE")
+        assert HookEvent.POST_TOOL_USE_FAILURE.value == "PostToolUseFailure"
+
+    def test_s6_pre_compact_hook_fires(self):
+        """S6: PRE_COMPACT event can be registered and fired."""
+        runner = HookRunner()
+        fired = []
+
+        def on_pre_compact(**kwargs):
+            fired.append(True)
+            return HookResult(decision=HookDecision.APPROVE)
+
+        runner.register_function(HookEvent.PRE_COMPACT, on_pre_compact)
+        result = runner.run_hooks(HookEvent.PRE_COMPACT, "compact")
+        assert not result.is_blocking
+        assert len(fired) == 1
+
+    def test_s6_post_compact_hook_fires(self):
+        """S6: POST_COMPACT event can be registered and fired."""
+        runner = HookRunner()
+        fired = []
+
+        def on_post_compact(**kwargs):
+            fired.append(True)
+            return HookResult(decision=HookDecision.APPROVE)
+
+        runner.register_function(HookEvent.POST_COMPACT, on_post_compact)
+        result = runner.run_hooks(HookEvent.POST_COMPACT, "compact")
+        assert not result.is_blocking
+        assert len(fired) == 1
+
+
+class TestAsyncHookStdin:
+    """S18: Async hooks receive stdin input correctly."""
+
+    def test_async_hook_receives_stdin(self, tmp_path):
+        """S18: Async hook receives JSON input via stdin."""
+        # Create a Python script that reads stdin and writes to a file
+        output_file = tmp_path / "stdin_received.txt"
+        script = tmp_path / "stdin_reader.py"
+        script.write_text(
+            f"import sys, json\n"
+            f"data = sys.stdin.read()\n"
+            f"with open(r'{output_file}', 'w') as f:\n"
+            f"    f.write(data)\n"
+        )
+        runner = HookRunner()
+        runner.register(HookConfig(
+            event=HookEvent.POST_TOOL_USE,
+            matcher="*",
+            command=f'python "{script}"',
+            async_mode=True,
+        ))
+
+        import time
+        runner.run_hooks(HookEvent.POST_TOOL_USE, "test_tool", tool_result="ok")
+
+        # Wait for async process to complete
+        for _ in range(30):
+            if output_file.exists():
+                break
+            time.sleep(0.1)
+
+        assert output_file.exists(), "Async hook did not receive stdin"
+        content = output_file.read_text(encoding="utf-8")
+        data = json.loads(content)
+        assert data["event"] == "PostToolUse"
+        assert data["tool_name"] == "test_tool"
+
+    def test_async_hook_closes_stdin(self, tmp_path):
+        """S18: Async hook stdin is closed after writing so subprocess doesn't hang."""
+        # Create a script that reads all of stdin then exits
+        output_file = tmp_path / "stdin_closed.txt"
+        script = tmp_path / "stdin_close_test.py"
+        script.write_text(
+            f"import sys\n"
+            f"data = sys.stdin.read()\n"
+            f"with open(r'{output_file}', 'w') as f:\n"
+            f"    f.write('received:' + str(len(data)))\n"
+        )
+        runner = HookRunner()
+        runner.register(HookConfig(
+            event=HookEvent.PRE_TOOL_USE,
+            matcher="*",
+            command=f'python "{script}"',
+            async_mode=True,
+            timeout=5.0,
+        ))
+
+        import time
+        runner.run_hooks(HookEvent.PRE_TOOL_USE, "test")
+
+        # Wait for the process to finish (should not hang)
+        for _ in range(50):
+            if output_file.exists():
+                break
+            time.sleep(0.1)
+
+        assert output_file.exists(), "Async hook hung waiting for stdin EOF"
+        content = output_file.read_text()
+        assert content.startswith("received:")

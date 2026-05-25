@@ -7,7 +7,7 @@ import sys
 import pytest
 from unittest.mock import patch, MagicMock
 
-from mimo_harness.cli import _format_tokens, _load_config, print_help, _handle_command
+from mimo_harness.cli import _format_tokens, _load_config, print_help, _handle_command, _output, _estimate_message_tokens, _list_session_files, _resume_latest_session, _pick_session
 
 
 class TestParseArgs:
@@ -579,7 +579,7 @@ class TestHandleCommand:
             session.add_message("assistant", f"Response to message {i} " * 10)
         # Mock require_api_key and OpenAI to avoid real API call
         with patch("mimo_harness.cli.compact_context") as mock_compact:
-            mock_compact.return_value = [{"role": "system", "content": "compacted"}]
+            mock_compact.return_value = ([{"role": "system", "content": "compacted"}], 1, 0, False)
             _handle_command(["/compact"], harness, session, memory_store)
         captured = capsys.readouterr()
         assert "Compressing" in captured.out
@@ -904,3 +904,330 @@ class TestConfigIntegration:
             main()
         # Verify load_rules_from_file was called
         mock_instance.perms.load_rules_from_file.assert_called_once_with(str(rules_file))
+
+
+# ============================================================================
+# R2: Round 2 CLI tests — bare mode, effort, output format, !command,
+#     /context, --continue, --resume, --session-dir, --name
+# ============================================================================
+
+
+class TestBareFlag:
+    """R2: --bare flag enables bare mode (no memory loading)."""
+
+    def test_bare_flag_passed_to_harness(self, monkeypatch):
+        monkeypatch.setenv("MIMO_API_KEY", "test-key")
+        monkeypatch.setenv("MIMO_BASE_URL", "http://test.com")
+        monkeypatch.setenv("MIMO_MODEL", "test-model")
+        monkeypatch.setattr("sys.argv", ["mimo", "--task", "test", "--bare"])
+        with patch("mimo_harness.cli.MiMoHarness") as MockHarness:
+            mock_instance = MagicMock()
+            mock_instance.run.return_value = "done"
+            MockHarness.return_value = mock_instance
+            from mimo_harness.cli import main
+            main()
+        call_kwargs = MockHarness.call_args
+        assert call_kwargs[1].get("bare") is True or call_kwargs.kwargs.get("bare") is True
+
+
+class TestEffortFlag:
+    """R2: --effort flag sets effort level."""
+
+    def test_effort_low(self, monkeypatch):
+        monkeypatch.setenv("MIMO_API_KEY", "test-key")
+        monkeypatch.setenv("MIMO_BASE_URL", "http://test.com")
+        monkeypatch.setenv("MIMO_MODEL", "test-model")
+        monkeypatch.setattr("sys.argv", ["mimo", "--task", "test", "--effort", "low"])
+        with patch("mimo_harness.cli.MiMoHarness") as MockHarness:
+            mock_instance = MagicMock()
+            mock_instance.run.return_value = "done"
+            MockHarness.return_value = mock_instance
+            from mimo_harness.cli import main
+            main()
+        call_kwargs = MockHarness.call_args
+        assert call_kwargs[1].get("effort") == "low" or call_kwargs.kwargs.get("effort") == "low"
+
+    def test_effort_high(self, monkeypatch):
+        monkeypatch.setenv("MIMO_API_KEY", "test-key")
+        monkeypatch.setenv("MIMO_BASE_URL", "http://test.com")
+        monkeypatch.setenv("MIMO_MODEL", "test-model")
+        monkeypatch.setattr("sys.argv", ["mimo", "--task", "test", "--effort", "high"])
+        with patch("mimo_harness.cli.MiMoHarness") as MockHarness:
+            mock_instance = MagicMock()
+            mock_instance.run.return_value = "done"
+            MockHarness.return_value = mock_instance
+            from mimo_harness.cli import main
+            main()
+        call_kwargs = MockHarness.call_args
+        assert call_kwargs[1].get("effort") == "high" or call_kwargs.kwargs.get("effort") == "high"
+
+
+class TestOutputFormat:
+    """R2: --output-format controls JSON output."""
+
+    def test_json_output_format(self, monkeypatch, capsys):
+        monkeypatch.setenv("MIMO_API_KEY", "test-key")
+        monkeypatch.setenv("MIMO_BASE_URL", "http://test.com")
+        monkeypatch.setenv("MIMO_MODEL", "test-model")
+        monkeypatch.setattr("sys.argv", [
+            "mimo", "--task", "test", "--output-format", "json"
+        ])
+        with patch("mimo_harness.cli.MiMoHarness") as MockHarness:
+            mock_instance = MagicMock()
+            mock_instance.run.return_value = "Result text"
+            MockHarness.return_value = mock_instance
+            from mimo_harness.cli import main
+            main()
+        captured = capsys.readouterr()
+        output = json.loads(captured.out.strip())
+        assert output["type"] == "result"
+        assert output["content"] == "Result text"
+
+    def test_stream_json_output_format(self, monkeypatch, capsys):
+        monkeypatch.setenv("MIMO_API_KEY", "test-key")
+        monkeypatch.setenv("MIMO_BASE_URL", "http://test.com")
+        monkeypatch.setenv("MIMO_MODEL", "test-model")
+        monkeypatch.setattr("sys.argv", [
+            "mimo", "--task", "test", "--output-format", "stream-json"
+        ])
+        with patch("mimo_harness.cli.MiMoHarness") as MockHarness:
+            mock_instance = MagicMock()
+            mock_instance.run.return_value = "Stream result"
+            MockHarness.return_value = mock_instance
+            from mimo_harness.cli import main
+            main()
+        captured = capsys.readouterr()
+        output = json.loads(captured.out.strip())
+        assert output["type"] == "result"
+        assert output["content"] == "Stream result"
+
+
+class TestOutputFunction:
+    """R2: _output function handles different formats."""
+
+    def test_output_text(self, capsys):
+        _output("Hello", output_format="text")
+        captured = capsys.readouterr()
+        assert captured.out.strip() == "Hello"
+
+    def test_output_json(self, capsys):
+        _output("Hello", output_format="json")
+        captured = capsys.readouterr()
+        data = json.loads(captured.out.strip())
+        assert data["type"] == "result"
+        assert data["content"] == "Hello"
+
+    def test_output_json_with_session(self, capsys):
+        from mimo_harness.context import Session
+        session = Session(session_id="abc123")
+        _output("Hello", output_format="json", session=session, steps=3, duration=1.5)
+        captured = capsys.readouterr()
+        data = json.loads(captured.out.strip())
+        assert data["session_id"] == "abc123"
+        assert data["steps"] == 3
+        assert data["duration"] == 1.5
+
+    def test_output_stream_json(self, capsys):
+        _output("Stream content", output_format="stream-json")
+        captured = capsys.readouterr()
+        data = json.loads(captured.out.strip())
+        assert data["type"] == "result"
+        assert data["content"] == "Stream content"
+
+
+class TestEstimateMessageTokens:
+    """R2: _estimate_message_tokens helper."""
+
+    def test_basic_message(self):
+        msg = {"role": "user", "content": "hello world"}
+        tokens = _estimate_message_tokens(msg)
+        assert tokens > 0
+        assert tokens < 10
+
+    def test_message_with_tool_calls(self):
+        msg = {
+            "role": "assistant",
+            "content": "ok",
+            "tool_calls": [{"id": "tc1", "function": {"name": "test", "arguments": "{}"}}],
+        }
+        tokens = _estimate_message_tokens(msg)
+        assert tokens > 0
+
+    def test_empty_content(self):
+        msg = {"role": "user", "content": ""}
+        tokens = _estimate_message_tokens(msg)
+        assert tokens >= 1  # minimum 1
+
+    def test_none_content(self):
+        msg = {"role": "user", "content": None}
+        tokens = _estimate_message_tokens(msg)
+        assert tokens >= 1
+
+
+class TestShellCommandPrefix:
+    """R2: !command prefix in REPL (subprocess execution)."""
+
+    def test_bang_prefix_executes_command(self):
+        """The ! prefix triggers subprocess.run. Test via _handle_command path is not
+        directly testable (it's in the REPL loop), but we can test the subprocess
+        behavior that would occur."""
+        import subprocess
+        result = subprocess.run("echo hello", shell=True, capture_output=True, text=True, timeout=5)
+        assert result.returncode == 0
+        assert "hello" in result.stdout
+
+
+class TestContextCommand:
+    """R2: /context command shows per-message token breakdown."""
+
+    def test_context_command_with_messages(self, monkeypatch, tmp_path, capsys):
+        harness, session = _HarnessFixture.make(monkeypatch)
+        from mimo_harness.memory import MemoryStore
+        memory_store = MemoryStore(str(tmp_path))
+        session.add_message("user", "hello world")
+        session.add_message("assistant", "hi there friend")
+        _handle_command(["/context"], harness, session, memory_store)
+        captured = capsys.readouterr()
+        assert "Context breakdown" in captured.out
+        assert "2 messages" in captured.out
+        assert "user" in captured.out
+        assert "assistant" in captured.out
+        assert "Total" in captured.out
+
+    def test_context_command_empty_session(self, monkeypatch, tmp_path, capsys):
+        harness, session = _HarnessFixture.make(monkeypatch)
+        from mimo_harness.memory import MemoryStore
+        memory_store = MemoryStore(str(tmp_path))
+        _handle_command(["/context"], harness, session, memory_store)
+        captured = capsys.readouterr()
+        assert "No messages" in captured.out
+
+
+class TestSessionDirAndName:
+    """R2: --session-dir and --name CLI flags."""
+
+    def test_session_dir_flag(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("MIMO_API_KEY", "test-key")
+        monkeypatch.setenv("MIMO_BASE_URL", "http://test.com")
+        monkeypatch.setenv("MIMO_MODEL", "test-model")
+        session_dir = str(tmp_path / "my_sessions")
+        monkeypatch.setattr("sys.argv", [
+            "mimo", "--session-dir", session_dir
+        ])
+        with patch("builtins.input", side_effect=["/quit"]):
+            from mimo_harness.cli import main
+            main()
+        # Directory should have been created
+        assert os.path.isdir(session_dir)
+
+    def test_name_flag_stored_on_session(self, monkeypatch, tmp_path, capsys):
+        monkeypatch.setenv("MIMO_API_KEY", "test-key")
+        monkeypatch.setenv("MIMO_BASE_URL", "http://test.com")
+        monkeypatch.setenv("MIMO_MODEL", "test-model")
+        session_dir = str(tmp_path / "sessions")
+        monkeypatch.setattr("sys.argv", [
+            "mimo", "--session-dir", session_dir, "--name", "my-session"
+        ])
+        # The name flag sets session.name, verify it's accepted without error
+        with patch("builtins.input", side_effect=["/quit"]):
+            from mimo_harness.cli import main
+            main()
+        captured = capsys.readouterr()
+        assert "Bye!" in captured.out
+        # Session dir was created
+        assert os.path.isdir(session_dir)
+
+
+class TestSessionListAndResume:
+    """R2: _list_session_files and _resume_latest_session."""
+
+    def test_list_session_files(self, tmp_path):
+        # Create some .jsonl files
+        for name in ["sess1.jsonl", "sess2.jsonl", "other.txt"]:
+            (tmp_path / name).write_text('{"test": true}\n')
+        files = _list_session_files(str(tmp_path))
+        assert len(files) == 2
+        assert all(f.endswith(".jsonl") for f in files)
+
+    def test_list_session_files_empty_dir(self, tmp_path):
+        files = _list_session_files(str(tmp_path))
+        assert files == []
+
+    def test_resume_latest_session(self, tmp_path):
+        session_file = tmp_path / "abc123.jsonl"
+        session_file.write_text(
+            json.dumps({"role": "user", "content": "hello"}) + "\n"
+            + json.dumps({"role": "assistant", "content": "hi"}) + "\n",
+            encoding="utf-8",
+        )
+        session = _resume_latest_session(str(tmp_path))
+        assert session is not None
+        assert session.session_id == "abc123"
+        assert len(session.messages) == 2
+
+    def test_resume_latest_no_sessions(self, tmp_path):
+        session = _resume_latest_session(str(tmp_path))
+        assert session is None
+
+
+class TestContinueAndResumeFlags:
+    """R2: --continue and --resume session resume."""
+
+    def test_continue_flag_resumes_latest(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("MIMO_API_KEY", "test-key")
+        monkeypatch.setenv("MIMO_BASE_URL", "http://test.com")
+        monkeypatch.setenv("MIMO_MODEL", "test-model")
+        session_dir = str(tmp_path / "sessions")
+        os.makedirs(session_dir, exist_ok=True)
+        # Pre-create a session file
+        session_file = os.path.join(session_dir, "resumable.jsonl")
+        with open(session_file, "w", encoding="utf-8") as f:
+            f.write(json.dumps({"role": "user", "content": "previous message"}) + "\n")
+
+        monkeypatch.setattr("sys.argv", [
+            "mimo", "--session-dir", session_dir, "--continue"
+        ])
+        with patch("builtins.input", side_effect=["/quit"]):
+            from mimo_harness.cli import main
+            main()
+        # No crash means resume worked
+
+    def test_resume_flag_picks_session(self, monkeypatch, tmp_path, capsys):
+        monkeypatch.setenv("MIMO_API_KEY", "test-key")
+        monkeypatch.setenv("MIMO_BASE_URL", "http://test.com")
+        monkeypatch.setenv("MIMO_MODEL", "test-model")
+        session_dir = str(tmp_path / "sessions")
+        os.makedirs(session_dir, exist_ok=True)
+        # Pre-create a session file
+        session_file = os.path.join(session_dir, "pickable.jsonl")
+        with open(session_file, "w", encoding="utf-8") as f:
+            f.write(json.dumps({"role": "user", "content": "msg"}) + "\n")
+
+        monkeypatch.setattr("sys.argv", [
+            "mimo", "--session-dir", session_dir, "--resume"
+        ])
+        # Simulate user picking session 1 then quitting
+        with patch("builtins.input", side_effect=["1", "/quit"]):
+            from mimo_harness.cli import main
+            main()
+        captured = capsys.readouterr()
+        assert "Resumed session" in captured.out
+
+
+class TestHandleCommandContext:
+    """R2: Additional /context command edge cases."""
+
+    def test_context_with_tool_calls(self, monkeypatch, tmp_path, capsys):
+        harness, session = _HarnessFixture.make(monkeypatch)
+        from mimo_harness.memory import MemoryStore
+        memory_store = MemoryStore(str(tmp_path))
+        session.add_message("user", "run something")
+        session.add_message(
+            "assistant", "",
+            tool_calls=[{"id": "tc1", "function": {"name": "test", "arguments": "{}"}}],
+        )
+        session.add_message("tool", "result", tool_call_id="tc1")
+        _handle_command(["/context"], harness, session, memory_store)
+        captured = capsys.readouterr()
+        assert "Context breakdown" in captured.out
+        assert "3 messages" in captured.out

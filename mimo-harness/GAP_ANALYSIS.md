@@ -4,7 +4,34 @@
 
 ## Executive Summary
 
-MiMo Harness has a solid foundation (11 tools, 4-stage permissions, LLM-based compression, memory system, hooks), but significant gaps exist compared to Claude Code (40+ tools, MCP, sub-agents, streaming, worktrees) and Codex CLI (platform-native sandboxing, image I/O, cloud tasks). This document categorizes gaps by priority and provides an optimization roadmap.
+MiMo Harness has a solid foundation (16 tools, 4-stage permissions, LLM-based compression, memory system, hooks), but significant gaps exist compared to Claude Code (40+ tools, MCP, sub-agents, streaming, worktrees, OS-level sandboxing, 30+ hook events) and Codex CLI (platform-native sandboxing, auto-review agent, image I/O, cloud tasks). This document categorizes gaps by priority and provides an optimization roadmap.
+
+### Deep Audit Summary (2026-05-25 refresh)
+
+After reviewing Claude Code official docs (code.claude.com/docs) and Codex CLI docs (developers.openai.com/codex), the following **critical security and correctness gaps** were identified beyond the original analysis:
+
+| # | Gap | Severity | Claude Code Reference | Codex Reference |
+|---|-----|----------|----------------------|-----------------|
+| S1 | `write_file()` has no read-before-write check for existing files | **Critical** | Write tool requires read first | File write within sandbox roots |
+| S2 | Shell compound commands not parsed for permission matching | **Critical** | `&&`, `||`, `;`, `|` each matched independently | Sandbox constrains entire execution |
+| S3 | No credential scrubbing for subprocesses | **High** | `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` | Sandbox env isolation |
+| S4 | No protected paths (.git, config files) | **High** | `.git`, `.vscode`, `.claude` never auto-approved | `.git`, `.agents`, `.codex` always read-only |
+| S5 | Large tool outputs truncated, not saved to disk | **Medium** | Bash >30K saved to file with preview | Output display in TUI |
+| S6 | Hook system missing 20+ events | **Medium** | 30+ events including PreCompact, TaskCreated | N/A |
+| S7 | Only 3 permission modes (vs Claude Code's 6) | **Medium** | default, acceptEdits, plan, auto, dontAsk, bypass | on-request, untrusted, never |
+| S8 | No process wrapper stripping before permission matching | **Medium** | `timeout`, `nice`, `nohup` stripped | N/A |
+| S9 | `_is_readonly()` blocks all chaining operators (too strict) | **Low** | Subcommands matched independently | Sandbox-based |
+| S10 | No output_mode/files_with_matches/count for grep | **Low** | Three output modes via ripgrep | N/A |
+| S11 | Glob ignores .gitignore by default | **Low** | Configurable via env var | N/A |
+| S12 | No session checkpoints/rewind | **Medium** | Every edit snapshotted, Esc twice to rewind | N/A |
+| S13 | Shell environment doesn't persist across commands | **Low** | Env vars don't persist (same) | N/A |
+| S14 | WebFetch has no response cache | **Low** | 15-minute cache | N/A |
+| S15 | No `--append-system-prompt` CLI flag | **Low** | Supported | N/A |
+| S16 | No `--fallback-model` for overload | **Low** | Supported | N/A |
+| S17 | No `dontAsk` permission mode | **Medium** | Auto-denies unapproved tools | `never` approval policy |
+| S18 | Async hook doesn't pass stdin input | **Bug** | N/A | N/A |
+| S19 | `_is_readonly()` missing common safe prefixes (grep, find, file, stat) | **Low** | Full Bash permission rules | N/A |
+| S20 | No disk spillover for oversized tool results | **Medium** | `BASH_MAX_OUTPUT_LENGTH` with file save | TUI display |
 
 ---
 
@@ -253,3 +280,148 @@ Impact ↑
 | `mimo_harness/cli.py` | Pipe input, session resume, named sessions, output formats |
 | `mimo_harness/memory.py` | Path-scoped rules, `@import` syntax |
 | `tests/` | CLI tests, logging tests, integration tests, hook command tests |
+
+---
+
+## 8. DEEP AUDIT IMPLEMENTATION PLAN (S1-S20)
+
+### Batch 1: Critical Security Fixes (S1, S2, S3, S4)
+
+**S1: write_file read-before-write check**
+- File: `mimo_harness/tools/file_ops.py`
+- Add `_write_allowed_files` set tracking (like `_read_files`)
+- `write_file()` checks if file exists → if yes, must be in `_read_files`
+- Claude Code: "Write to an unread existing file fails with error"
+
+**S2: Compound command parsing for permissions**
+- File: `mimo_harness/tools/shell.py`
+- Parse `&&`, `||`, `;`, `|`, `|&` to extract subcommands
+- Match each subcommand independently against permission rules
+- Claude Code: "Each subcommand matched independently"
+
+**S3: Credential scrubbing**
+- File: `mimo_harness/tools/shell.py`
+- Add `_scrub_env()` that removes API keys, tokens, secrets from subprocess env
+- Pattern: `MIMO_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `*_SECRET`, `*_TOKEN`
+- Claude Code: `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB`
+
+**S4: Protected paths**
+- File: `mimo_harness/permissions.py`
+- Add `PROTECTED_PATHS` constant: `.git`, `.vscode`, `.idea`, `.claude`, `.env`, `.gitconfig`
+- Add `PROTECTED_FILES`: `.gitconfig`, `.gitmodules`, `.bashrc`, `.zshrc`
+- `check()` blocks writes to protected paths unless in bypass mode
+- Claude Code: "never auto-approved except in bypassPermissions"
+
+### Batch 2: Tool Hardening (S5, S8, S9, S10, S11, S14, S19, S20)
+
+**S5+S20: Output disk spillover**
+- File: `mimo_harness/tools/shell.py`, `mimo_harness/tools/registry.py`
+- When output > 30K chars, save to `.mimo/outputs/<uuid>.txt`, return preview
+- Configurable via `MIMO_MAX_OUTPUT_LENGTH` env var
+
+**S8: Process wrapper stripping**
+- File: `mimo_harness/tools/shell.py`
+- Strip `timeout`, `time`, `nice`, `nohup`, `stdbuf` before matching
+- Claude Code: "Process wrappers stripped before matching"
+
+**S9: Relaxed chaining operator detection**
+- File: `mimo_harness/tools/shell.py`
+- Only block `;`, `|`, `&` when NOT part of `&&`, `||` (valid subcommand chains)
+- Parse subcommands and match each independently (ties to S2)
+
+**S10: Grep output modes**
+- File: `mimo_harness/tools/file_ops.py`
+- Add `output_mode` param: `files_with_matches` (default), `content`, `count`
+- Add `head_limit`, `offset` for pagination
+- Add `-n` (line numbers), `-i` (case insensitive), `-o` (only matching)
+
+**S11: Glob .gitignore respect**
+- File: `mimo_harness/tools/file_ops.py`
+- Add optional `respect_gitignore` param (default True)
+- Parse `.gitignore` patterns and filter matches
+
+**S14: WebFetch response cache**
+- File: `mimo_harness/tools/web_tools.py`
+- Add `_fetch_cache` dict with TTL (15 min default)
+- Cache key: URL hash
+
+**S19: Extended readonly prefixes**
+- File: `mimo_harness/tools/shell.py`
+- Add: `grep`, `find`, `file`, `stat`, `env`, `printenv`, `set`, `alias`, `history`, `realpath`, `readlink`
+
+### Batch 3: Permission Modes (S7, S17)
+
+**S7: Additional permission modes**
+- File: `mimo_harness/permissions.py`
+- Add `ACCEPT_EDITS`: reads + file edits auto-approved, shell still asks
+- Add `DONT_ASK`: only pre-approved tools, auto-deny rest
+- Add `BYPASS`: everything allowed (circuit breaker only for `rm -rf /`)
+
+**S17: dontAsk mode**
+- Integrated into S7
+
+### Batch 4: Hook System Enhancements (S6, S18)
+
+**S6: Additional hook events**
+- File: `mimo_harness/hooks.py`
+- Add events: `PreCompact`, `PostCompact`, `TaskCreated`, `TaskCompleted`,
+  `SubagentStart`, `SubagentStop`, `PermissionRequest`, `PermissionDenied`,
+  `ConfigChange`, `CwdChanged`, `FileChanged`
+
+**S18: Fix async hook stdin**
+- File: `mimo_harness/hooks.py`
+- `_run_async()` passes `hook_input` via stdin pipe to subprocess
+
+### Batch 5: CLI Enhancements (S12, S15, S16)
+
+**S12: Session checkpoints**
+- File: `mimo_harness/context.py`, `mimo_harness/cli.py`
+- Before each file edit, snapshot the file to `.mimo/checkpoints/<session>/<seq>/`
+- `/rewind` command restores last checkpoint
+
+**S15: --append-system-prompt**
+- File: `mimo_harness/cli.py`
+- Append custom text to system prompt
+
+**S16: --fallback-model**
+- File: `mimo_harness/cli.py`, `mimo_harness/agent.py`
+- On 429/503, switch to fallback model
+
+---
+
+## 8. ROUND 2 IMPLEMENTATION SUMMARY (2026-05-25)
+
+### New Files Created
+
+| File | Feature | Description |
+|------|---------|-------------|
+| `mimo_harness/settings.py` | A1 | 4-level settings hierarchy (managed/user/project/local) with deny-rule precedence |
+| `mimo_harness/tools/notebook_tools.py` | T3 | `notebook_edit` tool — replace/insert/delete modes on .ipynb cells |
+| `mimo_harness/tools/task_tools.py` | T2 | 5 task tools (create/get/list/update/delete) with thread-safe TaskStore |
+
+### Features Implemented
+
+| ID | Feature | Files Modified | Status |
+|----|---------|---------------|--------|
+| A1 | Settings hierarchy | `settings.py` (new) | Done |
+| A3+C2 | Session resume (`--continue`/`--resume`) | `cli.py` | Done |
+| A4+X1 | Auto-save sessions (JSONL) | `context.py`, `cli.py` | Done |
+| A5 | Path-scoped rules (`.mimo/rules/*.md`) | `context.py` | Done |
+| A6 | @import syntax in CLAUDE.md | `context.py` | Done |
+| A7 | Tool output disk spillover | `registry.py` | Done |
+| A8 | Thrashing protection for compaction | `context.py`, `agent.py` | Done |
+| A9 | Compact instruction preservation | `context.py` | Done |
+| C1 | Pipe input (stdin) | `cli.py` | Done |
+| C3 | Output formats (text/json/stream-json) | `cli.py` | Done |
+| C4 | `--bare` mode | `cli.py`, `agent.py` | Done |
+| C7 | `!command` prefix | `cli.py` | Done |
+| C9 | `/context` command | `cli.py` | Done |
+| C11 | Effort levels (low/medium/high) | `cli.py`, `agent.py` | Done |
+| T2 | Task management tools | `task_tools.py` (new) | Done |
+| T3 | NotebookEdit tool | `notebook_tools.py` (new) | Done |
+| X2 | Multi-file checkpoint batch | `context.py`, `agent.py` | Done |
+
+### Test Status
+- **543 tests passing** (up from 441 in Round 1)
+- All Round 1 tests updated for new `compact_context` tuple return signature
+- Round 3 (test coverage for Round 2 features) in progress

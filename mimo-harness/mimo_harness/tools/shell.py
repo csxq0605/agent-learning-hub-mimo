@@ -6,6 +6,7 @@ Ch3 markers:
 """
 
 import json
+import os
 import re
 import subprocess
 import platform
@@ -19,26 +20,187 @@ _background_jobs: dict[str, dict] = {}
 _background_jobs_lock = threading.Lock()
 MAX_BACKGROUND_JOBS = 20
 
-# Commands that are safe to auto-approve (read-only)
+# S5+S20: Configurable output length limit via env var
+MAX_OUTPUT_LENGTH = int(os.environ.get("MIMO_MAX_OUTPUT_LENGTH", "30000"))
+
+# S19: Commands that are safe to auto-approve (read-only) — extended
 READONLY_PREFIXES = [
     "ls", "dir", "cat", "type", "head", "tail", "wc", "echo", "pwd",
     "git status", "git log", "git diff", "git show", "git branch", "git remote",
     "which", "where", "whereis", "tree", "file", "du", "df",
     "python --version", "pip list", "pip show", "node --version", "npm list",
     "uname", "hostname", "whoami", "date",
+    # S19: extended readonly prefixes
+    "grep", "find", "stat", "env", "printenv", "realpath", "readlink",
+    "basename", "dirname", "sort", "uniq", "cut", "tr", "sed -n", "awk '",
 ]
 
-# Patterns that indicate command chaining / injection (Ch4: security)
-_CHAINING_PATTERN = re.compile(r'[;|&`$]|\$\(')
+# S8: Wrapper prefixes that should be stripped before readonly detection
+_WRAPPER_PREFIXES = ["timeout", "time", "nice", "nohup", "stdbuf"]
+
+# Patterns that indicate command injection (Ch4: security) - backticks and $()
+# C1/C3: also reject shell redirections (>, >>) to prevent readonly-bypass attacks
+_CHAINING_PATTERN = re.compile(r'[`>]|\$\(')
+
+# S3: Credential patterns to scrub from environment (M6: extended)
+_CREDENTIAL_PATTERNS = [
+    "API_KEY", "SECRET", "TOKEN", "PASSWORD", "CREDENTIAL", "AUTH",
+    "PRIVATE_KEY", "PASSPHRASE", "SIGNING_KEY", "ENCRYPTION_KEY",
+    "DATABASE_URL", "CONNECTION_STRING", "DSN",
+]
+
+
+def _split_compound_command(command: str) -> list[str]:
+    """S2: Split a compound command on &&, ||, ;, |, |& while respecting quotes."""
+    parts = []
+    current = []
+    i = 0
+    in_single = False
+    in_double = False
+    while i < len(command):
+        ch = command[i]
+        # Track quote state
+        if ch == "'" and not in_double:
+            in_single = not in_single
+            current.append(ch)
+            i += 1
+        elif ch == '"' and not in_single:
+            in_double = not in_double
+            current.append(ch)
+            i += 1
+        elif ch == '\\' and in_double:
+            # H1: handle backslash escapes inside double quotes
+            current.append(ch)
+            i += 1
+            if i < len(command):
+                current.append(command[i])
+                i += 1
+        elif in_single or in_double:
+            current.append(ch)
+            i += 1
+        else:
+            # Check for splitting operators (longest first)
+            if command[i:i+2] == "&&":
+                parts.append("".join(current).strip())
+                current = []
+                i += 2
+            elif command[i:i+2] == "||":
+                parts.append("".join(current).strip())
+                current = []
+                i += 2
+            elif command[i:i+2] == "|&":
+                parts.append("".join(current).strip())
+                current = []
+                i += 2
+            elif ch == ";":
+                parts.append("".join(current).strip())
+                current = []
+                i += 1
+            elif ch == "|":
+                parts.append("".join(current).strip())
+                current = []
+                i += 1
+            else:
+                current.append(ch)
+                i += 1
+    remainder = "".join(current).strip()
+    if remainder:
+        parts.append(remainder)
+    return [p for p in parts if p]
+
+
+def _scrub_env() -> dict:
+    """S3: Copy os.environ and remove keys matching credential patterns."""
+    env = dict(os.environ)
+    keys_to_remove = []
+    for key in env:
+        key_upper = key.upper()
+        for pattern in _CREDENTIAL_PATTERNS:
+            if pattern in key_upper:
+                keys_to_remove.append(key)
+                break
+    for key in keys_to_remove:
+        del env[key]
+    return env
+
+
+def _strip_wrappers(command: str) -> str:
+    """S8: Remove known process wrapper prefixes and their arguments."""
+    cmd = command.strip()
+    changed = True
+    depth = 0
+    MAX_DEPTH = 5  # H4: prevent runaway loops
+    while changed and depth < MAX_DEPTH:
+        changed = False
+        depth += 1
+        for prefix in _WRAPPER_PREFIXES:
+            if cmd.lower().startswith(prefix + " "):
+                # Remove the wrapper name, then skip its arguments
+                rest = cmd[len(prefix):].lstrip()
+                # Skip numeric/flag arguments that belong to the wrapper
+                parts = rest.split(None, 1)
+                if len(parts) == 2:
+                    arg, remainder = parts
+                    # Skip numeric args (e.g. timeout 30) or flag args (e.g. nice -n 10)
+                    if arg.lstrip("-").isdigit() or arg.startswith("-"):
+                        # For flags like "-n 10", consume the next token too
+                        if arg == "-n" and remainder:
+                            sub_parts = remainder.split(None, 1)
+                            if len(sub_parts) == 2 and sub_parts[0].lstrip("-").isdigit():
+                                cmd = sub_parts[1]
+                                changed = True
+                                continue
+                        cmd = remainder
+                        changed = True
+                        continue
+                # No more arguments or just the wrapper command
+                if len(parts) == 1:
+                    cmd = parts[0]
+                    changed = True
+                    continue
+                cmd = rest
+                changed = True
+    return cmd
 
 
 def _is_readonly(command: str) -> bool:
     cmd = command.strip()
-    # Ch4: reject any command containing chaining operators
+    # Ch4: reject any command containing backticks or $() (injection)
     if _CHAINING_PATTERN.search(cmd):
         return False
+    # S2: split compound commands and check that ALL subcommands are readonly
+    subcommands = _split_compound_command(cmd)
+    if len(subcommands) > 1:
+        return all(_is_readonly_single(sub) for sub in subcommands)
+    # S8: strip wrapper prefixes before checking readonly
+    cmd = _strip_wrappers(cmd)
     cmd_lower = cmd.lower()
     return any(cmd_lower.startswith(p) for p in READONLY_PREFIXES)
+
+
+def _is_readonly_single(command: str) -> bool:
+    """S2: Check if a single (non-compound) command is readonly."""
+    cmd = command.strip()
+    # S8: strip wrapper prefixes before checking readonly
+    cmd = _strip_wrappers(cmd)
+    cmd_lower = cmd.lower()
+    return any(cmd_lower.startswith(p) for p in READONLY_PREFIXES)
+
+
+def _spill_output(output: str) -> str:
+    """S5+S20: Save oversized output to disk, return a preview with file path."""
+    try:
+        outputs_dir = os.path.join(".mimo", "outputs")
+        os.makedirs(outputs_dir, exist_ok=True)
+        fname = f"{uuid.uuid4().hex}.txt"
+        fpath = os.path.join(outputs_dir, fname)
+        with open(fpath, "w", encoding="utf-8") as f:
+            f.write(output)
+        preview = output[:1000] + "\n... [truncated] ...\n" + output[-500:]
+        return preview + f"\n\n[Full output saved to: {os.path.abspath(fpath)}]"
+    except Exception:
+        # Fallback to simple truncation if file write fails
+        return output[:MAX_OUTPUT_LENGTH] + "\n... [truncated]"
 
 
 def run_command(params: dict) -> str:
@@ -64,19 +226,21 @@ def run_command(params: dict) -> str:
             }
         def _run_bg():
             try:
+                scrubbed_env = _scrub_env()
                 if platform.system() == "Windows":
                     result = subprocess.run(
                         command, shell=True, capture_output=True, text=True,
-                        timeout=timeout, encoding="utf-8", errors="replace"
+                        timeout=timeout, encoding="utf-8", errors="replace",
+                        env=scrubbed_env
                     )
                 else:
                     result = subprocess.run(
                         command, shell=True, capture_output=True, text=True,
-                        timeout=timeout
+                        timeout=timeout, env=scrubbed_env
                     )
                 output = (result.stdout + result.stderr).strip()
-                if len(output) > 30000:
-                    output = output[:30000] + "\n... [truncated]"
+                if len(output) > MAX_OUTPUT_LENGTH:
+                    output = _spill_output(output)
                 with _background_jobs_lock:
                     _background_jobs[job_id]["output"] = output
                     _background_jobs[job_id]["exit_code"] = result.returncode
@@ -99,19 +263,21 @@ def run_command(params: dict) -> str:
         })
 
     try:
+        scrubbed_env = _scrub_env()
         if platform.system() == "Windows":
             result = subprocess.run(
                 command, shell=True, capture_output=True, text=True,
-                timeout=timeout, encoding="utf-8", errors="replace"
+                timeout=timeout, encoding="utf-8", errors="replace",
+                env=scrubbed_env
             )
         else:
             result = subprocess.run(
                 command, shell=True, capture_output=True, text=True,
-                timeout=timeout
+                timeout=timeout, env=scrubbed_env
             )
         output = (result.stdout + result.stderr).strip()
-        if len(output) > 30000:
-            output = output[:30000] + "\n... [truncated]"
+        if len(output) > MAX_OUTPUT_LENGTH:
+            output = _spill_output(output)
         return json.dumps({
             "command": command,
             "exit_code": result.returncode,

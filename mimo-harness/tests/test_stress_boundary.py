@@ -205,7 +205,10 @@ class TestShellInjection:
         assert not shell._is_readonly("ls; rm -rf /")
 
     def test_chaining_pipe_detected(self):
-        assert not shell._is_readonly("cat /etc/passwd | grep root")
+        # Pipe with both readonly: cat + grep = readonly (correct behavior)
+        assert shell._is_readonly("cat /etc/passwd | grep root")
+        # Pipe with non-readonly: cat + python = not readonly
+        assert not shell._is_readonly("cat /etc/passwd | python -c 'import sys'")
 
     def test_chaining_ampersand_detected(self):
         assert not shell._is_readonly("echo hello && rm -rf /")
@@ -305,8 +308,11 @@ class TestLargeInput:
         assert "result" in result or "error" in result
 
     def test_registry_result_truncation(self):
-        """Tool results over 10KB should be truncated."""
+        """Tool results over threshold should be spilled to disk."""
         registry = ToolRegistry()
+        # Override thresholds for testing
+        registry.SPILL_THRESHOLD_CHARS = 5000
+        registry.MAX_RESULT_CHARS = 10000
         def big_result(params):
             return "x" * 20000
         registry.register(ToolDef(
@@ -315,7 +321,7 @@ class TestLargeInput:
         ))
         gate = PermissionGate(auto_approve=True)
         result = registry.execute("big_tool", {}, gate)
-        assert len(result) <= 10200  # 10000 + truncation marker
+        assert len(result) <= 10200  # MAX + spillover message
 
 
 # ============================================================================
@@ -637,14 +643,14 @@ class TestContextCompression:
 
     def test_compact_context_preserves_recent(self):
         messages = [{"role": "user", "content": f"msg {i}"} for i in range(100)]
-        result = compact_context(messages, max_messages=20)
+        result, _, _, _ = compact_context(messages, max_messages=20)
         assert len(result) <= 20
         # Last message should be preserved
         assert result[-1]["content"] == "msg 99"
 
     def test_compact_context_short_unchanged(self):
         messages = [{"role": "user", "content": "hello"}]
-        result = compact_context(messages)
+        result, _, _, _ = compact_context(messages)
         assert len(result) == 1
 
     def test_compact_context_1000_messages(self):
@@ -654,7 +660,7 @@ class TestContextCompression:
             role = "user" if i % 2 == 0 else "assistant"
             messages.append({"role": role, "content": f"message {i}"})
         start = time.time()
-        result = compact_context(messages, max_messages=30)
+        result, _, _, _ = compact_context(messages, max_messages=30)
         elapsed = time.time() - start
         assert len(result) <= 30
         assert elapsed < 1.0  # Should be fast
@@ -666,7 +672,7 @@ class TestContextCompression:
             messages.append({"role": "user", "content": f"task {i}"})
             messages.append({"role": "assistant", "content": "ok", "tool_calls": [{"id": f"tc{i}"}]})
             messages.append({"role": "tool", "content": f"result {i}", "tool_call_id": f"tc{i}"})
-        result = compact_context(messages, max_messages=20)
+        result, _, _, _ = compact_context(messages, max_messages=20)
         assert len(result) <= 20
 
     def test_session_compaction_count(self):
@@ -1122,3 +1128,205 @@ class TestPathTraversalInPermissionRule:
         assert rule.matches("read_file", "/secrets/api_key.txt")
         assert rule.matches("write_file", "/secrets/config.json")
         assert not rule.matches("read_file", "/public/readme.txt")
+
+
+# ============================================================================
+# 17. S1: WRITE READ-BEFORE-WRITE ENFORCEMENT
+# ============================================================================
+
+class TestWriteReadBeforeWrite:
+    """S1: write_file must read existing files before overwriting."""
+
+    def test_write_to_existing_unread_file_blocked(self, tmp_path, monkeypatch):
+        """S1: Writing to an existing file that was never read should error."""
+        monkeypatch.setattr(file_ops, "_ALLOWED_WRITE_DIR", tmp_path)
+        monkeypatch.setattr(file_ops, "_write_allowed_files", set())
+        f = tmp_path / "existing.txt"
+        f.write_text("original content")
+        result = json.loads(file_ops.write_file({
+            "path": str(f),
+            "content": "new content",
+        }))
+        assert "error" in result
+        assert "read" in result["error"].lower()
+
+    def test_write_to_existing_read_file_succeeds(self, tmp_path, monkeypatch):
+        """S1: Writing to an existing file that was read should succeed."""
+        monkeypatch.setattr(file_ops, "_ALLOWED_WRITE_DIR", tmp_path)
+        monkeypatch.setattr(file_ops, "_write_allowed_files", set())
+        f = tmp_path / "existing.txt"
+        f.write_text("original content")
+        # Read the file first
+        file_ops.read_file({"path": str(f)})
+        result = json.loads(file_ops.write_file({
+            "path": str(f),
+            "content": "new content",
+        }))
+        assert result.get("status") == "written"
+        assert f.read_text() == "new content"
+
+    def test_write_to_new_file_succeeds(self, tmp_path, monkeypatch):
+        """S1: Writing to a file that does not exist yet should succeed without read."""
+        monkeypatch.setattr(file_ops, "_ALLOWED_WRITE_DIR", tmp_path)
+        monkeypatch.setattr(file_ops, "_write_allowed_files", set())
+        f = tmp_path / "brand_new.txt"
+        assert not f.exists()
+        result = json.loads(file_ops.write_file({
+            "path": str(f),
+            "content": "first write",
+        }))
+        assert result.get("status") == "written"
+        assert f.read_text() == "first write"
+
+
+# ============================================================================
+# 18. S2: COMMAND PARSING AND QUOTED OPERATORS
+# ============================================================================
+
+class TestCompoundCommandParsing:
+    """S2: Compound command splitting respects quotes."""
+
+    def test_compound_with_and_is_not_readonly(self):
+        """S2: `ls && echo hi` has two subcommands, both readonly."""
+        # ls and echo are both readonly, so the whole thing is readonly
+        assert shell._is_readonly("ls && echo hi")
+
+    def test_compound_with_and_rm_is_not_readonly(self):
+        """S2: `ls && rm -rf /` has rm which is not readonly."""
+        assert not shell._is_readonly("ls && rm -rf /")
+
+    def test_quoted_and_is_readonly(self):
+        """S2: `echo '&&test'` should be readonly (&& is inside quotes)."""
+        assert shell._is_readonly("echo '&&test'")
+
+    def test_quoted_and_with_double_quotes(self):
+        """S2: `echo \"&&test\"` should be readonly (&& is inside double quotes)."""
+        assert shell._is_readonly('echo "&&test"')
+
+    def test_split_compound_respects_single_quotes(self):
+        """S2: _split_compound_command should not split on && inside single quotes."""
+        parts = shell._split_compound_command("echo 'a && b'")
+        assert len(parts) == 1
+        assert "a && b" in parts[0]
+
+    def test_split_compound_respects_double_quotes(self):
+        """S2: _split_compound_command should not split on && inside double quotes."""
+        parts = shell._split_compound_command('echo "a && b"')
+        assert len(parts) == 1
+        assert "a && b" in parts[0]
+
+    def test_split_compound_on_semicolon(self):
+        parts = shell._split_compound_command("ls; rm file")
+        assert len(parts) == 2
+
+    def test_split_compound_on_pipe(self):
+        parts = shell._split_compound_command("cat file | grep pattern")
+        assert len(parts) == 2
+
+    def test_split_compound_on_double_pipe(self):
+        parts = shell._split_compound_command("ls || echo failed")
+        assert len(parts) == 2
+
+
+# ============================================================================
+# 19. S3: CREDENTIAL SCRUBBING
+# ============================================================================
+
+class TestCredentialScrubbing:
+    """S3: _scrub_env removes sensitive keys from environment."""
+
+    def test_scrub_removes_api_key(self, monkeypatch):
+        """S3: API_KEY is removed from environment."""
+        monkeypatch.setenv("MY_API_KEY", "secret123")
+        env = shell._scrub_env()
+        assert "MY_API_KEY" not in env
+
+    def test_scrub_removes_secret(self, monkeypatch):
+        """S3: SECRET is removed from environment."""
+        monkeypatch.setenv("APP_SECRET", "topsecret")
+        env = shell._scrub_env()
+        assert "APP_SECRET" not in env
+
+    def test_scrub_removes_token(self, monkeypatch):
+        """S3: TOKEN is removed from environment."""
+        monkeypatch.setenv("AUTH_TOKEN", "bearer_abc")
+        env = shell._scrub_env()
+        assert "AUTH_TOKEN" not in env
+
+    def test_scrub_removes_password(self, monkeypatch):
+        """S3: PASSWORD is removed from environment."""
+        monkeypatch.setenv("DB_PASSWORD", "pass123")
+        env = shell._scrub_env()
+        assert "DB_PASSWORD" not in env
+
+    def test_scrub_removes_credential(self, monkeypatch):
+        """S3: CREDENTIAL is removed from environment."""
+        monkeypatch.setenv("AWS_CREDENTIAL", "cred_value")
+        env = shell._scrub_env()
+        assert "AWS_CREDENTIAL" not in env
+
+    def test_scrub_preserves_normal_vars(self, monkeypatch):
+        """S3: Non-sensitive environment variables are preserved."""
+        monkeypatch.setenv("MIMO_NORMAL_VAR", "safe_value")
+        env = shell._scrub_env()
+        assert env.get("MIMO_NORMAL_VAR") == "safe_value"
+
+    def test_scrub_case_insensitive(self, monkeypatch):
+        """S3: Credential pattern matching is case-insensitive."""
+        monkeypatch.setenv("my_api_key_lower", "secret")
+        monkeypatch.setenv("MY_SECRET_UPPER", "secret")
+        env = shell._scrub_env()
+        assert "my_api_key_lower" not in env
+        assert "MY_SECRET_UPPER" not in env
+
+
+# ============================================================================
+# 20. S4: PROTECTED PATH BLOCKING
+# ============================================================================
+
+class TestProtectedPathBlocking:
+    """S4: Writes to protected dirs/files are blocked by PermissionGate."""
+
+    def test_write_to_git_config_blocked(self):
+        """S4: Write to .git/config is blocked."""
+        gate = PermissionGate(auto_approve=True)
+        assert not gate.check(Permission.WRITE, "write_file(path=.git/config)")
+
+    def test_write_to_env_blocked(self):
+        """S4: Write to .env is blocked."""
+        gate = PermissionGate(auto_approve=True)
+        assert not gate.check(Permission.WRITE, "write_file(path=.env)")
+
+    def test_write_to_bashrc_blocked(self):
+        """S4: Write to .bashrc is blocked."""
+        gate = PermissionGate(auto_approve=True)
+        assert not gate.check(Permission.WRITE, "write_file(path=.bashrc)")
+
+    def test_write_to_normal_file_allowed(self):
+        """S4: Write to a normal file is allowed with auto_approve."""
+        gate = PermissionGate(auto_approve=True)
+        assert gate.check(Permission.WRITE, "write_file(path=src/main.py)")
+
+    def test_protected_path_bypass_mode(self):
+        """BYPASS mode still blocks writes to critical protected paths."""
+        gate = PermissionGate()
+        gate.mode = PermissionMode.BYPASS
+        assert not gate.check(Permission.WRITE, "write_file(path=.env)")
+
+    def test_is_protected_path_git_dir(self):
+        """S4: _is_protected_path detects .git/."""
+        from mimo_harness.permissions import _is_protected_path
+        assert _is_protected_path("project/.git/config")
+        assert _is_protected_path(".git/HEAD")
+
+    def test_is_protected_path_env_file(self):
+        """S4: _is_protected_path detects .env."""
+        from mimo_harness.permissions import _is_protected_path
+        assert _is_protected_path(".env")
+        assert _is_protected_path("project/.env")
+
+    def test_is_protected_path_normal_file(self):
+        """S4: _is_protected_path does not block normal files."""
+        from mimo_harness.permissions import _is_protected_path
+        assert not _is_protected_path("src/main.py")
+        assert not _is_protected_path("README.md")

@@ -162,3 +162,205 @@ class TestPermissionMode:
         assert PermissionMode.DEFAULT.value == "default"
         assert PermissionMode.PLAN.value == "plan"
         assert PermissionMode.AUTO.value == "auto"
+        assert PermissionMode.ACCEPT_EDITS.value == "accept_edits"
+        assert PermissionMode.DONT_ASK.value == "dont_ask"
+        assert PermissionMode.BYPASS.value == "bypass"
+
+
+# ============================================================================
+# S4: Protected path checks
+# ============================================================================
+
+class TestProtectedPaths:
+    """S4: Protected directories and files cannot be written to."""
+
+    def test_blocks_git_dir(self):
+        """S4: Write to .git/ is blocked."""
+        gate = PermissionGate(auto_approve=True)
+        assert not gate.check(Permission.WRITE, "write_file(path=.git/config)")
+
+    def test_blocks_git_head(self):
+        """S4: Write to .git/HEAD is blocked."""
+        gate = PermissionGate(auto_approve=True)
+        assert not gate.check(Permission.WRITE, "write_file(path=.git/HEAD)")
+
+    def test_blocks_env_file(self):
+        """S4: Write to .env is blocked."""
+        gate = PermissionGate(auto_approve=True)
+        assert not gate.check(Permission.WRITE, "write_file(path=.env)")
+
+    def test_blocks_bashrc(self):
+        """S4: Write to .bashrc is blocked."""
+        gate = PermissionGate(auto_approve=True)
+        assert not gate.check(Permission.WRITE, "write_file(path=.bashrc)")
+
+    def test_blocks_zshrc(self):
+        """S4: Write to .zshrc is blocked."""
+        gate = PermissionGate(auto_approve=True)
+        assert not gate.check(Permission.WRITE, "write_file(path=.zshrc)")
+
+    def test_blocks_profile(self):
+        """S4: Write to .profile is blocked."""
+        gate = PermissionGate(auto_approve=True)
+        assert not gate.check(Permission.WRITE, "write_file(path=.profile)")
+
+    def test_allows_normal_file(self):
+        """S4: Write to a normal file is allowed."""
+        gate = PermissionGate(auto_approve=True)
+        assert gate.check(Permission.WRITE, "write_file(path=src/main.py)")
+
+    def test_blocks_nested_git_dir(self):
+        """S4: Write to nested .git/ path is blocked."""
+        gate = PermissionGate(auto_approve=True)
+        assert not gate.check(Permission.WRITE, "write_file(path=project/.git/config)")
+
+    def test_read_not_blocked_by_protected_path(self):
+        """S4: Read operations are not affected by protected path checks."""
+        gate = PermissionGate()
+        assert gate.check(Permission.READ, "read_file(path=.env)")
+        assert gate.check(Permission.READ, "read_file(path=.git/config)")
+
+
+# ============================================================================
+# S7: ACCEPT_EDITS permission mode
+# ============================================================================
+
+class TestAcceptEditsMode:
+    """S7: ACCEPT_EDITS mode auto-approves file writes but asks for shell."""
+
+    def test_accept_edits_approves_file_write(self):
+        """S7: ACCEPT_EDITS mode auto-approves write_file."""
+        gate = PermissionGate()
+        gate.mode = PermissionMode.ACCEPT_EDITS
+        assert gate.check(Permission.WRITE, "write_file(path=output.txt)")
+
+    def test_accept_edits_approves_edit_file(self):
+        """S7: ACCEPT_EDITS mode auto-approves edit_file."""
+        gate = PermissionGate()
+        gate.mode = PermissionMode.ACCEPT_EDITS
+        assert gate.check(Permission.WRITE, "edit_file(path=output.txt)")
+
+    def test_accept_edits_approves_read(self):
+        """S7: ACCEPT_EDITS mode auto-approves read operations."""
+        gate = PermissionGate()
+        gate.mode = PermissionMode.ACCEPT_EDITS
+        assert gate.check(Permission.READ, "read_file(path=output.txt)")
+
+    def test_accept_edits_asks_for_shell(self, monkeypatch):
+        """S7: ACCEPT_EDITS mode falls through to interactive for shell commands."""
+        gate = PermissionGate()
+        gate.mode = PermissionMode.ACCEPT_EDITS
+        monkeypatch.setattr("builtins.input", lambda _: "y")
+        # run_command is NOT in _FILE_TOOLS, so it should fall through
+        assert gate.check(Permission.WRITE, "run_command(npm install)")
+
+    def test_accept_edits_denies_shell_if_user_says_no(self, monkeypatch):
+        """S7: ACCEPT_EDITS mode denies shell if user says no."""
+        gate = PermissionGate()
+        gate.mode = PermissionMode.ACCEPT_EDITS
+        monkeypatch.setattr("builtins.input", lambda _: "n")
+        assert not gate.check(Permission.WRITE, "run_command(rm -rf /)")
+
+
+# ============================================================================
+# S7: DONT_ASK permission mode
+# ============================================================================
+
+class TestDontAskMode:
+    """S7: DONT_ASK mode denies tools not in allow rules."""
+
+    def test_dont_ask_allows_rule_match(self):
+        """S7: DONT_ASK mode allows tools matching allow rules."""
+        gate = PermissionGate(rules=[
+            PermissionRule("read_file", "allow"),
+        ])
+        gate.mode = PermissionMode.DONT_ASK
+        assert gate.check(Permission.READ, "read_file(path=test.txt)")
+
+    def test_dont_ask_denies_no_rule(self):
+        """S7: DONT_ASK mode denies tools with no matching rules."""
+        gate = PermissionGate(rules=[
+            PermissionRule("read_file", "allow"),
+        ])
+        gate.mode = PermissionMode.DONT_ASK
+        assert not gate.check(Permission.WRITE, "write_file(path=test.txt)")
+
+    def test_dont_ask_deny_overrides_allow(self):
+        """S7: DONT_ASK mode respects deny over allow."""
+        gate = PermissionGate(rules=[
+            PermissionRule("write_file", "allow"),
+            PermissionRule("write_file", "deny"),
+        ])
+        gate.mode = PermissionMode.DONT_ASK
+        assert not gate.check(Permission.WRITE, "write_file(path=test.txt)")
+
+    def test_dont_ask_shell_deny_no_rules(self):
+        """S7: DONT_ASK mode denies shell commands without allow rules."""
+        gate = PermissionGate()
+        gate.mode = PermissionMode.DONT_ASK
+        assert not gate.check(Permission.WRITE, "run_command(npm install)")
+
+    def test_dont_ask_shell_allowed_by_rule(self):
+        """S7: DONT_ASK mode allows shell commands matching allow rules."""
+        gate = PermissionGate(rules=[
+            PermissionRule("run_command:*", "allow"),
+        ])
+        gate.mode = PermissionMode.DONT_ASK
+        assert gate.check(Permission.WRITE, "run_command(npm install)")
+
+
+# ============================================================================
+# S7: BYPASS permission mode
+# ============================================================================
+
+class TestBypassMode:
+    """S7: BYPASS mode approves everything except dangerous rm -rf."""
+
+    def test_bypass_approves_write(self):
+        """S7: BYPASS mode approves file writes."""
+        gate = PermissionGate()
+        gate.mode = PermissionMode.BYPASS
+        assert gate.check(Permission.WRITE, "write_file(path=test.txt)")
+
+    def test_bypass_approves_shell(self):
+        """S7: BYPASS mode approves shell commands."""
+        gate = PermissionGate()
+        gate.mode = PermissionMode.BYPASS
+        assert gate.check(Permission.WRITE, "run_command(npm install)")
+
+    def test_bypass_approves_destructive(self):
+        """S7: BYPASS mode approves destructive operations."""
+        gate = PermissionGate()
+        gate.mode = PermissionMode.BYPASS
+        assert gate.check(Permission.DESTRUCTIVE, "run_command(rm file.txt)")
+
+    def test_bypass_blocks_rm_rf_root(self):
+        """S7: BYPASS mode blocks rm -rf /."""
+        gate = PermissionGate()
+        gate.mode = PermissionMode.BYPASS
+        assert not gate.check(Permission.WRITE, "run_command(rm -rf /)")
+
+    def test_bypass_blocks_rm_rf_tilde(self):
+        """S7: BYPASS mode blocks rm -rf ~."""
+        gate = PermissionGate()
+        gate.mode = PermissionMode.BYPASS
+        assert not gate.check(Permission.WRITE, "run_command(rm -rf ~)")
+
+    def test_bypass_blocks_rm_rf_root_trailing_space(self):
+        """S7: BYPASS mode blocks rm -rf / even with trailing space."""
+        gate = PermissionGate()
+        gate.mode = PermissionMode.BYPASS
+        assert not gate.check(Permission.WRITE, "run_command(rm -rf / )")
+
+    def test_bypass_allows_normal_rm(self):
+        """S7: BYPASS mode allows rm on non-root paths."""
+        gate = PermissionGate()
+        gate.mode = PermissionMode.BYPASS
+        assert gate.check(Permission.WRITE, "run_command(rm -rf tmp/test)")
+
+    def test_bypass_still_blocks_protected_paths(self):
+        """BYPASS mode still blocks writes to critical protected paths."""
+        gate = PermissionGate()
+        gate.mode = PermissionMode.BYPASS
+        assert not gate.check(Permission.WRITE, "write_file(path=.env)")
+        assert not gate.check(Permission.WRITE, "write_file(path=.git/config)")

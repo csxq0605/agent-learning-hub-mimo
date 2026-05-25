@@ -3,11 +3,13 @@
 Implements Ch3 patterns:
 - Tool protocol with concurrency-safe/unsafe markers (fail-closed defaults)
 - Input validation before execution
-- Tool result budget management (truncation)
+- Tool result budget management (disk spillover for large outputs)
 - Execution with permission gate integration
 """
 
 import json
+import os
+import uuid
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 from ..permissions import Permission, PermissionGate
@@ -32,11 +34,15 @@ class ToolRegistry:
     Follows Ch3 patterns:
     - fail-closed: unknown tools rejected
     - input validation before execution
-    - result budget: truncate large outputs
+    - result budget: disk spillover for large outputs
     """
 
-    # Ch3: tool result budget — prevent context overflow
-    MAX_RESULT_LENGTH = 10000
+    # A7: disk spillover thresholds (approx 4 chars per token)
+    SPILL_THRESHOLD_TOKENS = 10000   # ~40K chars
+    MAX_RESULT_TOKENS = 25000        # ~100K chars
+    SPILL_THRESHOLD_CHARS = SPILL_THRESHOLD_TOKENS * 4   # 40000
+    MAX_RESULT_CHARS = MAX_RESULT_TOKENS * 4              # 100000
+    SPILL_DIR = ".mimo/outputs"
 
     def __init__(self):
         self._tools: dict[str, ToolDef] = {}
@@ -108,6 +114,29 @@ class ToolRegistry:
 
         return None
 
+    def _spill_to_disk(self, result: str, tool_name: str) -> str:
+        """Save large result to disk and return preview + file path (A7)."""
+        os.makedirs(self.SPILL_DIR, exist_ok=True)
+        file_id = str(uuid.uuid4())[:8]
+        file_path = os.path.join(self.SPILL_DIR, f"{file_id}.txt")
+
+        try:
+            with open(file_path, "w", encoding="utf-8") as f:
+                f.write(result)
+        except Exception as e:
+            # Fallback: hard truncate if disk write fails
+            return (
+                result[:self.MAX_RESULT_CHARS]
+                + "\n... [truncated — disk spill failed]"
+            )
+
+        # Return preview (first SPILL_THRESHOLD chars) + file path
+        preview = result[:self.SPILL_THRESHOLD_CHARS]
+        return (
+            f"{preview}\n\n"
+            f"... [output truncated — full result ({len(result)} chars) saved to {file_path}]"
+        )
+
     def execute(self, name: str, params: dict, perms: PermissionGate) -> str:
         """Execute a tool with full 4-stage pipeline (Ch4).
 
@@ -115,7 +144,7 @@ class ToolRegistry:
         1. validateInput — parameter validation
         2. checkPermissions — permission gate
         3. handler execution
-        4. result budget management
+        4. result budget management (disk spillover for large outputs)
         """
         # Ch3: fail-closed — unknown tools rejected
         tool = self._tools.get(name)
@@ -127,9 +156,9 @@ class ToolRegistry:
         if validation_error:
             return json.dumps({"error": f"Validation failed: {validation_error}"})
 
-        # Stage 2: Permission check
+        # Stage 2: Permission check (C2: pass params for accurate protected path detection)
         action_desc = f"{name}({json.dumps(params, ensure_ascii=False)[:100]})"
-        if not perms.check(tool.permission, action_desc):
+        if not perms.check(tool.permission, action_desc, params=params):
             return json.dumps({"error": f"Permission denied for '{name}'"})
 
         # Stage 3: Execute handler
@@ -138,10 +167,10 @@ class ToolRegistry:
         except Exception as e:
             return json.dumps({"error": f"Tool '{name}' failed: {str(e)}"})
 
-        # Stage 4: Result budget (Ch3: prevent context overflow)
-        if len(result) > self.MAX_RESULT_LENGTH:
-            result = (
-                result[:self.MAX_RESULT_LENGTH]
-                + "\n... [truncated to prevent context overflow]"
-            )
+        # Stage 4: Result budget (A7: disk spillover for large outputs)
+        if len(result) > self.MAX_RESULT_CHARS:
+            # Hard cap: truncate to MAX before spilling
+            result = result[:self.MAX_RESULT_CHARS]
+        if len(result) > self.SPILL_THRESHOLD_CHARS:
+            result = self._spill_to_disk(result, name)
         return result

@@ -1,6 +1,6 @@
 # Agent Learning Hub - MiMo 全阶段实践
 
-> 基于 [datawhalechina/Agent-Learning-Hub](https://github.com/datawhalechina/Agent-Learning-Hub) 学习路线，使用小米 **MiMo 模型**（`mimo-v2.5-pro`）完成 Stage 0-8 全部实践，包含完整运行结果与代码审查。
+> 基于 [datawhalechina/Agent-Learning-Hub](https://github.com/datawhalechina/Agent-Learning-Hub) 学习路线，使用小米 **MiMo 模型**（`mimo-v2.5-pro`）完成 Stage 0-8 全部实践，包含完整运行结果。
 
 ## 项目来源
 
@@ -37,7 +37,6 @@
 ```
 ├── config.py                    # 统一配置加载（从 .env 读取）
 ├── STAGE_RESULTS.md             # 全阶段运行结果与深度解析
-├── CODE_REVIEW.md               # 代码审查报告
 ├── stage-0/note-why-agent.md    # 理论笔记
 ├── stage-1/minimal_agent.py     # 最小 Agent（安全数学求值）
 ├── stage-2/research_assistant.py # RAG 研究助手
@@ -49,10 +48,6 @@
 ├── stage-8/devops-agent/        # 生产级 DevOps Agent
 └── mimo-harness/                # 完整 Agent Harness（可安装使用）
 ```
-
-## 代码审查
-
-对 Stage 0-8 及 MiMo Harness 进行了系统性代码审查，涵盖安全漏洞、可靠性问题和代码质量。详细审查报告见 [CODE_REVIEW.md](CODE_REVIEW.md)。
 
 ## 运行结果
 
@@ -97,9 +92,9 @@ mimo-harness  # 进入交互模式
 
 基于 Stage 0-8 的经验，构建了一个完整的、可下载体验的 Agent Harness，参考 Claude Code 架构设计。
 
-**核心能力**：Agent Loop（DI + 熔断 + Token 预算 + 并行调度 + 流式响应）、15 个工具（并发安全标记）、4 阶段权限管线（路径级规则）、Token-based 上下文压缩（200K 窗口 + LLM 语义摘要）、4 类型记忆系统、Hook 生命周期、`/init` 生成 AGENTS.md、交互式 REPL、后台监控。
+**核心能力**：Agent Loop（DI + 熔断 + Token 预算 + 并行调度 + 流式响应 + 努力级别）、18 个工具（并发安全标记、磁盘溢出）、6 种权限模式（default/plan/auto/accept_edits/dont_ask/bypass）、4 阶段权限管线（受保护路径）、Token-based 上下文压缩（200K 窗口 + LLM 语义摘要 + 防抖动）、4 类型记忆系统（@import + 路径规则）、4 级设置层级、Hook 生命周期（18 事件）、会话管理（自动保存/恢复/命名）、`/init` 生成 AGENTS.md、交互式 REPL（管道输入/输出格式/裸模式/!命令/上下文）。
 
-**测试覆盖**：441 个测试（含 119 个压力/边界测试），90% 代码覆盖率，覆盖路径遍历、SSRF、Shell 注入、大输入、Unicode、权限压力、并发安全、数学 DoS、压缩集成、并行调度、流式响应、后台任务、交互式工具、CLI 参数解析、日志系统、Hook 子进程执行、Web 工具 Mock、Monitor 流读取、文档工具等场景。
+**测试覆盖**：700 个测试，覆盖路径遍历、SSRF、Shell 注入、大输入、Unicode、权限压力、并发安全、数学 DoS、压缩集成、并行调度、流式响应、后台任务、交互式工具、CLI 参数解析、日志系统、Hook 子进程执行、Web 工具 Mock、Monitor 流读取、文档工具、设置层级、Notebook 编辑、任务管理等场景。
 
 详见 [mimo-harness/README.md](mimo-harness/README.md)。
 

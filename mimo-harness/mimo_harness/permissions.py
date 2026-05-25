@@ -27,6 +27,33 @@ class PermissionMode(Enum):
     DEFAULT = "default"    # Every write needs confirmation
     PLAN = "plan"          # Read-only, no writes allowed
     AUTO = "auto"          # Auto-approve safe operations
+    ACCEPT_EDITS = "accept_edits"  # Reads + file edits auto-approved, shell still asks
+    DONT_ASK = "dont_ask"  # Only pre-approved tools, auto-deny rest
+    BYPASS = "bypass"      # Everything allowed (circuit breaker only for rm -rf /)
+
+
+# S4: Protected directories and files that cannot be written to
+PROTECTED_DIRS = {".git", ".vscode", ".idea", ".husky", ".claude", ".mimo"}
+PROTECTED_FILES = {".gitconfig", ".gitmodules", ".bashrc", ".bash_profile", ".zshrc", ".zprofile", ".profile", ".env"}
+
+
+def _is_protected_path(path: str) -> bool:
+    """S4: Check if any component of the path matches protected dirs/files."""
+    # Normalize and split the path into components
+    normalized = os.path.normpath(path)
+    components = normalized.split(os.sep)
+    filename = os.path.basename(normalized)
+
+    # Check if filename matches protected files
+    if filename in PROTECTED_FILES:
+        return True
+
+    # Check if any directory component matches protected dirs
+    for component in components:
+        if component in PROTECTED_DIRS:
+            return True
+
+    return False
 
 
 @dataclass
@@ -153,11 +180,17 @@ class PermissionGate:
 
         return None
 
-    def check(self, permission: Permission, action_desc: str) -> bool:
+    # File tools that are auto-approved in ACCEPT_EDITS mode
+    _FILE_TOOLS = {"read_file", "write_file", "edit_file", "glob_files", "grep_files"}
+
+    def check(self, permission: Permission, action_desc: str, params: dict = None) -> bool:
         """Full 4-stage permission check.
 
         Returns True if allowed, False if denied.
         """
+        # Extract tool name from action description
+        tool_name = action_desc.split("(")[0] if "(" in action_desc else action_desc
+
         # Stage 1: Plan mode blocks all writes (Ch4: plan mode)
         if self.mode == PermissionMode.PLAN:
             if permission in (Permission.WRITE, Permission.DESTRUCTIVE):
@@ -165,13 +198,56 @@ class PermissionGate:
                 print(f"  [PLAN MODE] Write blocked: {action_desc}")
                 return False
 
+        # S4: Protected path check - block writes to protected dirs/files
+        # BYPASS mode still protects critical credential/shell files
+        if permission in (Permission.WRITE, Permission.DESTRUCTIVE):
+            # C2: Use params-based check when available, fallback to string parsing
+            is_protected = False
+            if params:
+                is_protected = self._has_protected_path_from_params(tool_name, params)
+            else:
+                is_protected = self._has_protected_path(action_desc)
+            if is_protected:
+                # BYPASS mode still blocks writes to .env, .bashrc, .git etc.
+                self._log(permission, action_desc, "denied_protected_path")
+                print(f"  [PROTECTED PATH] Write blocked: {action_desc}")
+                return False
+
+        # BYPASS mode: approve everything except dangerous rm -rf patterns
+        if self.mode == PermissionMode.BYPASS:
+            if self._is_dangerous_rm(action_desc):
+                self._log(permission, action_desc, "denied_circuit_breaker")
+                print(f"  [BYPASS BLOCKED] Dangerous command blocked: {action_desc}")
+                return False
+            self._log(permission, action_desc, "bypass_approved")
+            return True
+
+        # DONT_ASK mode: only pre-approved tools, deny rest without prompting
+        if self.mode == PermissionMode.DONT_ASK:
+            context = action_desc.split("(", 1)[1].rstrip(")") if "(" in action_desc else ""
+            rule_result = self._match_rules(permission, tool_name, context)
+            if rule_result == "allow":
+                self._log(permission, action_desc, "allowed_by_rule")
+                return True
+            self._log(permission, action_desc, "denied_dont_ask")
+            return False
+
+        # ACCEPT_EDITS mode: auto-approve READ + file tool writes, ask for shell/destructive
+        if self.mode == PermissionMode.ACCEPT_EDITS:
+            if permission == Permission.READ:
+                self._log(permission, action_desc, "auto_approved")
+                return True
+            if permission == Permission.WRITE and tool_name in self._FILE_TOOLS:
+                self._log(permission, action_desc, "accept_edits_approved")
+                return True
+            # Shell/destructive: fall through to interactive prompt
+
         # READ is always auto-approved (Ch4: safe tool allowlist)
         if permission == Permission.READ:
             self._log(permission, action_desc, "auto_approved")
             return True
 
         # Stage 2: Rule matching
-        tool_name = action_desc.split("(")[0] if "(" in action_desc else action_desc
         context = action_desc.split("(", 1)[1].rstrip(")") if "(" in action_desc else ""
         rule_result = self._match_rules(permission, tool_name, context)
 
@@ -199,6 +275,42 @@ class PermissionGate:
 
         # Stage 4: Interactive confirmation
         return self._interactive_confirm(permission, action_desc)
+
+    def _is_dangerous_rm(self, action_desc: str) -> bool:
+        """H2: Check for dangerous destructive patterns (circuit breaker for BYPASS mode)."""
+        import re
+        patterns = [
+            r'\brm\s+.*-rf\s+/', r'\brm\s+.*-rf\s+~',
+            r'\brm\s+.*-rf\s+\*', r'\brm\s+.*-rf\s+\.',
+            r'\bmkfs\b', r'\bdd\s+if=.*of=/dev/',
+            r'\bchmod\s+.*-R\s+777\s+/',
+            r'\bshutdown\b', r'\breboot\b', r'\bhalt\b',
+            r':\(\)\s*\{.*:\|:.*\}',  # fork bomb
+        ]
+        for pat in patterns:
+            if re.search(pat, action_desc):
+                return True
+        return False
+
+    def _has_protected_path_from_params(self, tool_name: str, params: dict) -> bool:
+        """C2: Check if params contain a path matching protected dirs/files."""
+        path = params.get("path", params.get("file_path", ""))
+        if path and _is_protected_path(path):
+            return True
+        command = params.get("command", "")
+        if command and _is_protected_path(command):
+            return True
+        return False
+
+    def _has_protected_path(self, action_desc: str) -> bool:
+        """S4: Fallback check using action_desc string parsing."""
+        import re
+        path_matches = re.findall(r'path=([^,\s\)]+)', action_desc)
+        for path in path_matches:
+            path = path.strip('"').strip("'")
+            if _is_protected_path(path):
+                return True
+        return False
 
     def _interactive_confirm(
         self, permission: Permission, action_desc: str

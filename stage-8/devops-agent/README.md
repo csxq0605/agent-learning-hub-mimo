@@ -37,10 +37,11 @@ DevOps engineers and SREs who need quick system diagnostics and log analysis.
 ### Deployment
 ```bash
 # Install
-pip install anthropic
+pip install openai python-dotenv
+
+# 在 .env 中配置 MIMO_BASE_URL, MIMO_API_KEY, MIMO_MODEL
 
 # Run interactively
-export ANTHROPIC_API_KEY=your-key
 python src/agent.py
 
 # Run with a specific task
@@ -61,7 +62,7 @@ python src/agent.py --dry-run --task "Analyze logs/app.log"
     ├── [CostTracker] ──> enforce limits
     ├── [PermissionGate] ──> confirm risky ops
     └── [Agent Loop]
-         ├── LLM (Claude)
+         ├── LLM (MiMo)
          └── Tools
               ├── check_system_health
               ├── read_log_file
@@ -73,8 +74,9 @@ python src/agent.py --dry-run --task "Analyze logs/app.log"
 
 | Env Variable | Default | Description |
 |-------------|---------|-------------|
-| `ANTHROPIC_API_KEY` | (required) | Anthropic API key |
-| `AGENT_MODEL` | claude-sonnet-4-20250514 | Model to use |
+| `MIMO_API_KEY` | (required) | MiMo API key |
+| `MIMO_BASE_URL` | https://token-plan-cn.xiaomimimo.com/v1 | API base URL |
+| `MIMO_MODEL` | mimo-v2.5-pro | Model to use |
 | `AGENT_LOG_FILE` | logs/agent.log | Log file path |
 
 ## Extending

@@ -11,6 +11,9 @@ from mimo_harness.context import (
     llm_compress, COMPRESS_MARKER, estimate_tokens,
     COMPRESS_TRIGGER_TOKENS, CONTEXT_WINDOW_TOKENS,
     STARTUP_RESERVE_TOKENS, build_system_prompt,
+    CheckpointManager,
+    _extract_instructions, _resolve_imports, _parse_frontmatter,
+    _load_path_scoped_rules,
 )
 
 
@@ -161,14 +164,14 @@ class TestTokenConstants:
 class TestCompactContext:
     def test_within_token_limits(self):
         messages = [{"role": "user", "content": "hi"}] * 5
-        result = compact_context(messages)
+        result, attempts, failures, thrashing = compact_context(messages)
         assert len(result) == 5
 
     def test_no_compression_when_below_trigger(self):
         messages = [{"role": "user", "content": "x" * 100}] * 100
         tokens = estimate_tokens(messages)
         assert tokens < COMPRESS_TRIGGER_TOKENS
-        result = compact_context(messages, estimated_tokens=tokens)
+        result, _, _, _ = compact_context(messages, estimated_tokens=tokens)
         assert len(result) == 100
 
     def test_truncation_fallback_produces_few_messages(self):
@@ -178,7 +181,7 @@ class TestCompactContext:
         tokens = estimate_tokens(messages)
         assert tokens > COMPRESS_TRIGGER_TOKENS
 
-        result = compact_context(messages, estimated_tokens=tokens)
+        result, _, _, _ = compact_context(messages, estimated_tokens=tokens)
         # Should be: system marker + last user + last assistant = 3 messages
         assert len(result) <= 4
         assert result[0]["role"] == "system"
@@ -197,7 +200,7 @@ class TestCompactContext:
         all_msgs = big + messages
         tokens = estimate_tokens(all_msgs)
 
-        result = compact_context(all_msgs, estimated_tokens=tokens)
+        result, _, _, _ = compact_context(all_msgs, estimated_tokens=tokens)
         # Should have system marker + last 2 messages
         contents = [m.get("content", "") for m in result]
         assert any("recent question" in c for c in contents)
@@ -332,7 +335,7 @@ class TestCompactContextWithLLM:
         with patch("mimo_harness.context.llm_compress", return_value=[
             {"role": "assistant", "content": "[Conversation Summary]\nLLM summary"}
         ]) as mock_compress:
-            result = compact_context(messages, client=client, model="test", estimated_tokens=tokens)
+            result, _, _, _ = compact_context(messages, client=client, model="test", estimated_tokens=tokens)
             mock_compress.assert_called_once()
 
     def test_falls_back_to_truncation_on_llm_failure(self):
@@ -342,7 +345,7 @@ class TestCompactContextWithLLM:
         client = MagicMock()
         client.chat.completions.create.side_effect = Exception("fail")
 
-        result = compact_context(messages, client=client, model="test", estimated_tokens=tokens)
+        result, _, _, _ = compact_context(messages, client=client, model="test", estimated_tokens=tokens)
         # Fallback: system marker + last 2 messages
         assert len(result) <= 4
         assert result[0]["role"] == "system"
@@ -353,7 +356,7 @@ class TestCompactContextWithLLM:
         assert tokens < COMPRESS_TRIGGER_TOKENS
 
         with patch("mimo_harness.context.llm_compress") as mock_compress:
-            result = compact_context(messages, client=MagicMock(), estimated_tokens=tokens)
+            result, _, _, _ = compact_context(messages, client=MagicMock(), estimated_tokens=tokens)
             mock_compress.assert_not_called()
 
     def test_backward_compatible_no_client(self):
@@ -361,7 +364,7 @@ class TestCompactContextWithLLM:
         messages = self._make_big_messages(60)
         tokens = estimate_tokens(messages)
         assert tokens > COMPRESS_TRIGGER_TOKENS
-        result = compact_context(messages, estimated_tokens=tokens)
+        result, _, _, _ = compact_context(messages, estimated_tokens=tokens)
         # Fallback: system marker + last 2 messages
         assert len(result) <= 4
         assert result[0]["role"] == "system"
@@ -434,18 +437,18 @@ class TestCompactContextEdgeCases:
     """Edge cases for compact_context."""
 
     def test_empty_messages(self):
-        result = compact_context([])
+        result, _, _, _ = compact_context([])
         assert result == []
 
     def test_single_message_no_compress(self):
         msg = [{"role": "user", "content": "hi"}]
-        result = compact_context(msg)
+        result, _, _, _ = compact_context(msg)
         assert result == msg
 
     def test_max_messages_legacy_path(self):
         """When max_messages is set and tokens are low, use message count."""
         messages = [{"role": "user", "content": f"msg {i}"} for i in range(100)]
-        result = compact_context(messages, max_messages=10)
+        result, _, _, _ = compact_context(messages, max_messages=10)
         assert len(result) == 10
         assert result[0]["content"] == "msg 90"
         assert result[-1]["content"] == "msg 99"
@@ -457,7 +460,7 @@ class TestCompactContextEdgeCases:
             {"role": "tool", "content": "result", "tool_call_id": "tc1"},
             {"role": "tool", "content": "orphan", "tool_call_id": "tc999"},
         ]
-        result = compact_context(messages, max_messages=10)
+        result, _, _, _ = compact_context(messages, max_messages=10)
         assert len(result) == 2  # orphan filtered
 
     def test_token_compress_with_tool_calls(self):
@@ -475,7 +478,7 @@ class TestCompactContextEdgeCases:
         tokens = estimate_tokens(messages)
         assert tokens > COMPRESS_TRIGGER_TOKENS
 
-        result = compact_context(messages, estimated_tokens=tokens)
+        result, _, _, _ = compact_context(messages, estimated_tokens=tokens)
         # Fallback: system marker + last 2 messages
         assert len(result) <= 4
         assert result[0]["role"] == "system"
@@ -504,3 +507,586 @@ class TestBuildSystemPrompt:
         prompt = build_system_prompt(tools_desc=tools_desc)
         assert "read_file" in prompt
         assert "write_file" in prompt
+
+
+# ============================================================================
+# S12: CheckpointManager tests
+# ============================================================================
+
+class TestCheckpointManager:
+    """S12: CheckpointManager snapshot and restore."""
+
+    def test_snapshot_saves_file_copy(self, tmp_path, monkeypatch):
+        """S12: snapshot() saves a copy of the file to the checkpoint directory."""
+        monkeypatch.chdir(tmp_path)
+        source = tmp_path / "source.txt"
+        source.write_text("original content")
+
+        mgr = CheckpointManager("test-session")
+        checkpoint_path = mgr.snapshot(str(source))
+
+        assert os.path.exists(checkpoint_path)
+        with open(checkpoint_path, encoding="utf-8") as f:
+            assert f.read() == "original content"
+
+    def test_snapshot_increments_sequence(self, tmp_path, monkeypatch):
+        """S12: Each snapshot increments the sequence number."""
+        monkeypatch.chdir(tmp_path)
+        f1 = tmp_path / "file1.txt"
+        f1.write_text("content 1")
+        f2 = tmp_path / "file2.txt"
+        f2.write_text("content 2")
+
+        mgr = CheckpointManager("test-session")
+        path1 = mgr.snapshot(str(f1))
+        path2 = mgr.snapshot(str(f2))
+
+        # Paths should be in different sequence directories
+        seq1 = os.path.basename(os.path.dirname(path1))
+        seq2 = os.path.basename(os.path.dirname(path2))
+        assert seq1 == "1"
+        assert seq2 == "2"
+
+    def test_restore_last_restores_file(self, tmp_path, monkeypatch):
+        """S12: restore_last() restores files from the latest checkpoint."""
+        monkeypatch.chdir(tmp_path)
+        source = tmp_path / "important.txt"
+        source.write_text("important data")
+
+        mgr = CheckpointManager("test-session")
+        mgr.snapshot(str(source))
+
+        # Modify the file
+        source.write_text("corrupted data")
+        assert source.read_text() == "corrupted data"
+
+        # Restore
+        restored = mgr.restore_last()
+        assert len(restored) >= 1
+        assert source.read_text() == "important data"
+
+    def test_restore_last_with_no_checkpoints(self, tmp_path, monkeypatch):
+        """S12: restore_last() returns empty list when no checkpoints exist."""
+        monkeypatch.chdir(tmp_path)
+        mgr = CheckpointManager("empty-session")
+        restored = mgr.restore_last()
+        assert restored == []
+
+    def test_snapshot_preserves_file_metadata(self, tmp_path, monkeypatch):
+        """S12: snapshot() preserves file modification time via shutil.copy2."""
+        monkeypatch.chdir(tmp_path)
+        source = tmp_path / "metadata.txt"
+        source.write_text("content")
+
+        mgr = CheckpointManager("test-session")
+        checkpoint_path = mgr.snapshot(str(source))
+
+        # Both files should exist
+        assert os.path.exists(source)
+        assert os.path.exists(checkpoint_path)
+
+    def test_multiple_snapshots_and_restore(self, tmp_path, monkeypatch):
+        """S12: Multiple snapshots, restore restores the latest one."""
+        monkeypatch.chdir(tmp_path)
+        source = tmp_path / "versioned.txt"
+        source.write_text("version 1")
+        mgr = CheckpointManager("test-session")
+
+        mgr.snapshot(str(source))
+        source.write_text("version 2")
+        mgr.snapshot(str(source))
+
+        # Corrupt
+        source.write_text("corrupted")
+
+        # Restore should get version 2
+        mgr.restore_last()
+        assert source.read_text() == "version 2"
+
+
+# ============================================================================
+# R2: Round 2 — compact_context tuple return, _extract_instructions,
+#     _resolve_imports, _parse_frontmatter, Session.from_jsonl,
+#     CheckpointManager batch operations
+# ============================================================================
+
+
+class TestCompactContextTupleReturn:
+    """R2: compact_context returns (messages, attempts, failures, thrashing)."""
+
+    def test_returns_four_element_tuple(self):
+        messages = [{"role": "user", "content": "hi"}] * 5
+        result = compact_context(messages)
+        assert isinstance(result, tuple)
+        assert len(result) == 4
+
+    def test_attempts_and_failures_default_zero(self):
+        messages = [{"role": "user", "content": "hi"}] * 5
+        _, attempts, failures, thrashing = compact_context(messages)
+        assert attempts == 0
+        assert failures == 0
+        assert thrashing is False
+
+    def test_attempts_increments_on_compression(self):
+        """When LLM compression succeeds, attempts should increment."""
+        big = "x" * 8000
+        messages = [{"role": "user", "content": big}] * 100
+        tokens = estimate_tokens(messages)
+        assert tokens > COMPRESS_TRIGGER_TOKENS
+
+        client = MagicMock()
+        response = MagicMock()
+        response.choices = [MagicMock()]
+        response.choices[0].message.content = "Summary"
+        client.chat.completions.create.return_value = response
+
+        with patch("mimo_harness.context.llm_compress", return_value=[
+            {"role": "assistant", "content": "[Conversation Summary]\nSummary"}
+        ]):
+            _, attempts, failures, thrashing = compact_context(
+                messages, client=client, estimated_tokens=tokens,
+                compaction_attempts=0, compaction_failures=0,
+            )
+        assert attempts >= 1
+        assert thrashing is False
+
+    def test_failures_increment_on_llm_failure(self):
+        """When LLM compression fails, failures should increment."""
+        big = "x" * 8000
+        messages = [{"role": "user", "content": big}] * 100
+        tokens = estimate_tokens(messages)
+        assert tokens > COMPRESS_TRIGGER_TOKENS
+
+        client = MagicMock()
+        client.chat.completions.create.side_effect = Exception("API error")
+
+        _, attempts, failures, thrashing = compact_context(
+            messages, client=client, estimated_tokens=tokens,
+            compaction_attempts=0, compaction_failures=0,
+        )
+        assert failures >= 1
+
+    def test_thrashing_detected_after_three_failures(self):
+        """Thrashing flag is True when compaction_failures >= 3."""
+        big = "x" * 8000
+        messages = [{"role": "user", "content": big}] * 100
+        tokens = estimate_tokens(messages)
+        assert tokens > COMPRESS_TRIGGER_TOKENS
+
+        _, _, _, thrashing = compact_context(
+            messages, estimated_tokens=tokens,
+            compaction_attempts=5, compaction_failures=3,
+        )
+        assert thrashing is True
+
+    def test_no_compression_preserves_attempts_failures(self):
+        """When no compression needed, attempts/failures are passed through."""
+        messages = [{"role": "user", "content": "hi"}]
+        _, attempts, failures, thrashing = compact_context(
+            messages, compaction_attempts=2, compaction_failures=1,
+        )
+        assert attempts == 2
+        assert failures == 1
+        assert thrashing is False
+
+
+class TestExtractInstructions:
+    """R2: _extract_instructions extracts system messages with project memory."""
+
+    def test_extracts_system_with_project_memory(self):
+        from mimo_harness.context import _extract_instructions
+        messages = [
+            {"role": "system", "content": "## Project Memory\nUse pytest."},
+            {"role": "user", "content": "hello"},
+        ]
+        result = _extract_instructions(messages)
+        assert len(result) == 1
+        assert "Project Memory" in result[0]["content"]
+
+    def test_extracts_system_with_instructions_keyword(self):
+        from mimo_harness.context import _extract_instructions
+        messages = [
+            {"role": "system", "content": "Follow these instructions carefully."},
+            {"role": "user", "content": "hello"},
+        ]
+        result = _extract_instructions(messages)
+        assert len(result) == 1
+
+    def test_extracts_system_with_rules_keyword(self):
+        from mimo_harness.context import _extract_instructions
+        messages = [
+            {"role": "system", "content": "Project rules: be concise."},
+            {"role": "user", "content": "hello"},
+        ]
+        result = _extract_instructions(messages)
+        assert len(result) == 1
+
+    def test_ignores_non_system_messages(self):
+        from mimo_harness.context import _extract_instructions
+        messages = [
+            {"role": "user", "content": "Project Memory: something"},
+            {"role": "assistant", "content": "instructions here"},
+        ]
+        result = _extract_instructions(messages)
+        assert len(result) == 0
+
+    def test_ignores_system_without_keywords(self):
+        from mimo_harness.context import _extract_instructions
+        messages = [
+            {"role": "system", "content": "You are a helpful assistant."},
+        ]
+        result = _extract_instructions(messages)
+        assert len(result) == 0
+
+    def test_extracts_multiple_instructions(self):
+        from mimo_harness.context import _extract_instructions
+        messages = [
+            {"role": "system", "content": "Project Memory: section 1"},
+            {"role": "user", "content": "hi"},
+            {"role": "system", "content": "Additional rules for testing."},
+        ]
+        result = _extract_instructions(messages)
+        assert len(result) == 2
+
+    def test_empty_messages(self):
+        from mimo_harness.context import _extract_instructions
+        assert _extract_instructions([]) == []
+
+
+class TestResolveImports:
+    """R2: _resolve_imports with @import syntax."""
+
+    def test_resolves_simple_import(self, tmp_path):
+        from mimo_harness.context import _resolve_imports
+        imported_file = tmp_path / "rules.md"
+        imported_file.write_text("Be concise.")
+        content = "See @rules.md for details."
+        result = _resolve_imports(content, str(tmp_path))
+        assert "Be concise." in result
+        assert "@rules.md" not in result
+
+    def test_unresolved_import_left_as_is(self, tmp_path):
+        from mimo_harness.context import _resolve_imports
+        content = "See @nonexistent.md for details."
+        result = _resolve_imports(content, str(tmp_path))
+        assert "@nonexistent.md" in result
+
+    def test_nested_imports_resolved(self, tmp_path):
+        from mimo_harness.context import _resolve_imports
+        (tmp_path / "outer.md").write_text("Outer: @inner.md")
+        (tmp_path / "inner.md").write_text("Inner content.")
+        result = _resolve_imports("Read @outer.md", str(tmp_path))
+        assert "Inner content." in result
+
+    def test_depth_limit_prevents_infinite_loop(self, tmp_path):
+        from mimo_harness.context import _resolve_imports
+        # Create circular import
+        (tmp_path / "a.md").write_text("@b.md")
+        (tmp_path / "b.md").write_text("@a.md")
+        # Should not raise, just stop at depth limit
+        result = _resolve_imports("@a.md", str(tmp_path))
+        assert isinstance(result, str)
+
+    def test_no_imports_returns_unchanged(self, tmp_path):
+        from mimo_harness.context import _resolve_imports
+        content = "No imports here."
+        result = _resolve_imports(content, str(tmp_path))
+        assert result == content
+
+    def test_multiple_imports(self, tmp_path):
+        from mimo_harness.context import _resolve_imports
+        (tmp_path / "a.md").write_text("Content A")
+        (tmp_path / "b.md").write_text("Content B")
+        content = "@a.md and @b.md"
+        result = _resolve_imports(content, str(tmp_path))
+        assert "Content A" in result
+        assert "Content B" in result
+
+
+class TestParseFrontmatter:
+    """R2: _parse_frontmatter with YAML-like frontmatter."""
+
+    def test_parses_simple_frontmatter(self):
+        from mimo_harness.context import _parse_frontmatter
+        content = "---\npaths: [\"*.py\", \"*.js\"]\n---\nBody content here."
+        meta, body = _parse_frontmatter(content)
+        assert meta["paths"] == ["*.py", "*.js"]
+        assert "Body content" in body
+
+    def test_no_frontmatter(self):
+        from mimo_harness.context import _parse_frontmatter
+        content = "Just plain content."
+        meta, body = _parse_frontmatter(content)
+        assert meta == {}
+        assert body == content
+
+    def test_unclosed_frontmatter(self):
+        from mimo_harness.context import _parse_frontmatter
+        content = "---\npaths: [\"*.py\"]\nNo closing delimiter"
+        meta, body = _parse_frontmatter(content)
+        assert meta == {}
+        assert body == content
+
+    def test_frontmatter_with_scalar_values(self):
+        from mimo_harness.context import _parse_frontmatter
+        content = "---\nname: test-rule\nseverity: high\n---\nRule body."
+        meta, body = _parse_frontmatter(content)
+        assert meta["name"] == "test-rule"
+        assert meta["severity"] == "high"
+        assert "Rule body" in body
+
+    def test_frontmatter_with_quoted_values(self):
+        from mimo_harness.context import _parse_frontmatter
+        content = '---\nname: "quoted value"\n---\nBody.'
+        meta, body = _parse_frontmatter(content)
+        assert meta["name"] == "quoted value"
+
+    def test_empty_frontmatter(self):
+        from mimo_harness.context import _parse_frontmatter
+        content = "---\n---\nBody."
+        meta, body = _parse_frontmatter(content)
+        assert meta == {}
+        assert "Body" in body
+
+
+class TestLoadPathScopedRules:
+    """R2: _load_path_scoped_rules scans .mimo/rules/*.md."""
+
+    def test_loads_rules_from_directory(self, tmp_path):
+        from mimo_harness.context import _load_path_scoped_rules
+        rules_dir = tmp_path / ".mimo" / "rules"
+        rules_dir.mkdir(parents=True)
+        (rules_dir / "python.md").write_text(
+            '---\npaths: ["*.py"]\n---\nUse type hints.'
+        )
+        rules = _load_path_scoped_rules(str(tmp_path))
+        assert len(rules) == 1
+        assert rules[0][0] == ["*.py"]
+        assert "type hints" in rules[0][1]
+
+    def test_no_rules_directory(self, tmp_path):
+        from mimo_harness.context import _load_path_scoped_rules
+        rules = _load_path_scoped_rules(str(tmp_path))
+        assert rules == []
+
+    def test_empty_rules_directory(self, tmp_path):
+        from mimo_harness.context import _load_path_scoped_rules
+        rules_dir = tmp_path / ".mimo" / "rules"
+        rules_dir.mkdir(parents=True)
+        rules = _load_path_scoped_rules(str(tmp_path))
+        assert rules == []
+
+    def test_rule_without_body_skipped(self, tmp_path):
+        from mimo_harness.context import _load_path_scoped_rules
+        rules_dir = tmp_path / ".mimo" / "rules"
+        rules_dir.mkdir(parents=True)
+        (rules_dir / "empty.md").write_text("---\npaths: [\"*.py\"]\n---\n")
+        rules = _load_path_scoped_rules(str(tmp_path))
+        assert len(rules) == 0
+
+
+class TestSessionFromJsonl:
+    """R2: Session.from_jsonl() reconstruction."""
+
+    def test_from_jsonl_basic(self, tmp_path):
+        jsonl_file = tmp_path / "abc123.jsonl"
+        lines = [
+            json.dumps({"role": "user", "content": "hello"}),
+            json.dumps({"role": "assistant", "content": "hi there"}),
+        ]
+        jsonl_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+        session = Session.from_jsonl(str(jsonl_file))
+        assert session.session_id == "abc123"
+        assert len(session.messages) == 2
+        assert session.messages[0]["role"] == "user"
+        assert session.messages[1]["role"] == "assistant"
+
+    def test_from_jsonl_empty_file(self, tmp_path):
+        jsonl_file = tmp_path / "empty.jsonl"
+        jsonl_file.write_text("", encoding="utf-8")
+
+        session = Session.from_jsonl(str(jsonl_file))
+        assert session.session_id == "empty"
+        assert len(session.messages) == 0
+
+    def test_from_jsonl_session_id_from_filename(self, tmp_path):
+        jsonl_file = tmp_path / "my-session-id.jsonl"
+        jsonl_file.write_text(
+            json.dumps({"role": "user", "content": "test"}) + "\n",
+            encoding="utf-8",
+        )
+        session = Session.from_jsonl(str(jsonl_file))
+        assert session.session_id == "my-session-id"
+
+    def test_from_jsonl_skips_blank_lines(self, tmp_path):
+        jsonl_file = tmp_path / "test.jsonl"
+        content = (
+            json.dumps({"role": "user", "content": "msg1"}) + "\n"
+            + "\n"
+            + json.dumps({"role": "assistant", "content": "msg2"}) + "\n"
+        )
+        jsonl_file.write_text(content, encoding="utf-8")
+        session = Session.from_jsonl(str(jsonl_file))
+        assert len(session.messages) == 2
+
+    def test_from_jsonl_preserves_created_at(self, tmp_path):
+        import os
+        jsonl_file = tmp_path / "timed.jsonl"
+        jsonl_file.write_text(
+            json.dumps({"role": "user", "content": "test"}) + "\n",
+            encoding="utf-8",
+        )
+        session = Session.from_jsonl(str(jsonl_file))
+        # created_at should be close to the file's mtime
+        mtime = os.path.getmtime(str(jsonl_file))
+        assert abs(session.created_at - mtime) < 1.0
+
+    def test_from_jsonl_with_tool_calls(self, tmp_path):
+        jsonl_file = tmp_path / "tools.jsonl"
+        msg = {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{"id": "tc1", "function": {"name": "read_file", "arguments": "{}"}}],
+        }
+        jsonl_file.write_text(json.dumps(msg) + "\n", encoding="utf-8")
+        session = Session.from_jsonl(str(jsonl_file))
+        assert session.messages[0]["tool_calls"][0]["id"] == "tc1"
+
+
+class TestCheckpointManagerBatch:
+    """R2: CheckpointManager batch operations (begin_batch, snapshot_to_batch, end_batch)."""
+
+    def test_begin_batch_returns_directory(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        mgr = CheckpointManager("batch-test")
+        batch_dir = mgr.begin_batch()
+        assert os.path.isdir(batch_dir)
+        assert "1" in batch_dir  # sequence 1
+
+    def test_snapshot_to_batch_saves_file(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        source = tmp_path / "file.txt"
+        source.write_text("batch content")
+
+        mgr = CheckpointManager("batch-test")
+        mgr.begin_batch()
+        dest = mgr.snapshot_to_batch(str(source))
+        assert os.path.exists(dest)
+        with open(dest, encoding="utf-8") as f:
+            assert f.read() == "batch content"
+
+    def test_snapshot_to_batch_without_begin_raises(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        source = tmp_path / "file.txt"
+        source.write_text("content")
+
+        mgr = CheckpointManager("batch-test")
+        with pytest.raises(RuntimeError, match="No active batch"):
+            mgr.snapshot_to_batch(str(source))
+
+    def test_batch_multiple_files(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        f1 = tmp_path / "a.txt"
+        f1.write_text("content a")
+        f2 = tmp_path / "b.txt"
+        f2.write_text("content b")
+
+        mgr = CheckpointManager("batch-test")
+        mgr.begin_batch()
+        mgr.snapshot_to_batch(str(f1))
+        mgr.snapshot_to_batch(str(f2))
+        mgr.end_batch()
+
+        # Both files should be in the batch directory
+        batch_dir = os.path.join(mgr.checkpoint_dir, "1")
+        files = [f for f in os.listdir(batch_dir) if f != "meta.json"]
+        assert len(files) == 2
+
+    def test_end_batch_clears_active(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        mgr = CheckpointManager("batch-test")
+        mgr.begin_batch()
+        mgr.end_batch()
+        # After end_batch, snapshot_to_batch should raise
+        source = tmp_path / "x.txt"
+        source.write_text("x")
+        with pytest.raises(RuntimeError, match="No active batch"):
+            mgr.snapshot_to_batch(str(source))
+
+    def test_batch_sequence_continues_from_snapshots(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        source = tmp_path / "f.txt"
+        source.write_text("content")
+
+        mgr = CheckpointManager("seq-test")
+        # Two regular snapshots use seq 1, 2
+        mgr.snapshot(str(source))
+        mgr.snapshot(str(source))
+        # Batch should use seq 3
+        batch_dir = mgr.begin_batch()
+        assert "3" in batch_dir
+        mgr.end_batch()
+
+    def test_batch_meta_json_written(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        source = tmp_path / "meta.txt"
+        source.write_text("meta test")
+
+        mgr = CheckpointManager("meta-test")
+        mgr.begin_batch()
+        mgr.snapshot_to_batch(str(source))
+        mgr.end_batch()
+
+        meta_path = os.path.join(mgr.checkpoint_dir, "1", "meta.json")
+        assert os.path.exists(meta_path)
+        with open(meta_path, encoding="utf-8") as f:
+            meta = json.load(f)
+        assert "original_path" in meta
+        assert "safe_name" in meta
+
+
+class TestCompactContextPreservesInstructions:
+    """R2: compact_context preserves system instructions during compression."""
+
+    def test_instructions_preserved_after_truncation(self):
+        big = "x" * 8000
+        messages = [
+            {"role": "system", "content": "## Project Memory\nUse pytest for testing."},
+        ]
+        for i in range(100):
+            messages.append({"role": "user", "content": f"q{i} {big}"})
+            messages.append({"role": "assistant", "content": f"a{i} {big}"})
+        tokens = estimate_tokens(messages)
+        assert tokens > COMPRESS_TRIGGER_TOKENS
+
+        result, _, _, _ = compact_context(messages, estimated_tokens=tokens)
+        # Instructions should be preserved (possibly at the beginning)
+        contents = [m.get("content", "") for m in result]
+        assert any("Use pytest" in c for c in contents)
+
+    def test_instructions_preserved_after_llm_compress(self):
+        messages = [
+            {"role": "system", "content": "## Project Memory\nFollow PEP 8."},
+        ]
+        big = "x" * 8000
+        for i in range(100):
+            messages.append({"role": "user", "content": f"q{i} {big}"})
+            messages.append({"role": "assistant", "content": f"a{i} {big}"})
+        tokens = estimate_tokens(messages)
+        assert tokens > COMPRESS_TRIGGER_TOKENS
+
+        client = MagicMock()
+        response = MagicMock()
+        response.choices = [MagicMock()]
+        response.choices[0].message.content = "LLM summary"
+        client.chat.completions.create.return_value = response
+
+        with patch("mimo_harness.context.llm_compress", return_value=[
+            {"role": "assistant", "content": "[Conversation Summary]\nLLM summary"}
+        ]):
+            result, _, _, _ = compact_context(
+                messages, client=client, estimated_tokens=tokens,
+            )
+        contents = [m.get("content", "") for m in result]
+        assert any("Follow PEP 8" in c for c in contents)
