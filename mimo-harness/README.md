@@ -207,19 +207,22 @@ pip install -e ".[dev]"
 python -m pytest tests/ -v
 ```
 
-306 tests across 9 test files:
+373 tests across 12 test files, 77% code coverage:
 
 | Test File | Tests | Coverage |
 |-----------|-------|----------|
-| test_agent.py | 27 | DI, circuit breaker, token budget, retry, compression, parallel dispatch, streaming, CLAUDE.md survival |
-| test_permissions.py | 21 | 4-stage pipeline, rule matching, plan mode, path-scoped rules |
-| test_context.py | 42 | Token-based compression, LLM compression, edge cases, session management |
+| test_agent.py | 39 | DI, circuit breaker, token budget, retry, compression, parallel dispatch, streaming, CLAUDE.md survival, tool calls, AttrBag |
+| test_cli.py | 29 | Arg parsing, config loading, REPL commands, token formatting |
+| test_config.py | 4 | Env vars, defaults, API key validation |
+| test_permissions.py | 22 | 4-stage pipeline, rule matching, plan mode, path-scoped rules |
+| test_context.py | 46 | Token-based compression, LLM compression, edge cases, session management, system prompt |
 | test_registry.py | 13 | Validation, dispatch, truncation |
-| test_hooks.py | 12 | Lifecycle events, command/function hooks |
+| test_hooks.py | 20 | Lifecycle events, command/function hooks, subprocess execution, async hooks, hook chaining |
+| test_logging.py | 11 | TraceLogger init, trace/info/error, tool_call, session_summary, file handler, verbose mode |
 | test_memory.py | 14 | Typed storage, frontmatter, validation |
-| test_tools.py | 31 | File ops, shell, code exec, math, web, interactive, monitor |
+| test_tools.py | 36 | File ops, shell, code exec, math, web, interactive, monitor |
 | test_stress_boundary.py | 119 | Path traversal, SSRF, shell injection, large input, Unicode, permissions, concurrency, math DoS, context compression, memory boundaries, registry edge cases, background jobs, monitors |
-| test_project_scanner.py | 18 | Language/framework detection, AGENTS.md generation |
+| test_project_scanner.py | 20 | Language/framework detection, AGENTS.md generation |
 
 ## Performance
 

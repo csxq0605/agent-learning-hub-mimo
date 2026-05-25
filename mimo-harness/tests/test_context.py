@@ -10,7 +10,7 @@ from mimo_harness.context import (
     _filter_orphan_tool_results, make_compact_boundary, load_memory,
     llm_compress, COMPRESS_MARKER, estimate_tokens,
     COMPRESS_TRIGGER_TOKENS, CONTEXT_WINDOW_TOKENS,
-    STARTUP_RESERVE_TOKENS,
+    STARTUP_RESERVE_TOKENS, build_system_prompt,
 )
 
 
@@ -479,3 +479,28 @@ class TestCompactContextEdgeCases:
         # Fallback: system marker + last 2 messages
         assert len(result) <= 4
         assert result[0]["role"] == "system"
+
+
+class TestBuildSystemPrompt:
+    def test_build_system_prompt_basic(self):
+        """Contains MiMo Harness, cwd, platform info."""
+        prompt = build_system_prompt(tools_desc="- read_file: read files")
+        assert "MiMo Harness" in prompt
+        assert os.getcwd() in prompt
+        assert "Platform" in prompt or "platform" in prompt.lower()
+        assert "read_file" in prompt
+
+    def test_build_system_prompt_with_memory(self):
+        """memory_content is appended to prompt."""
+        prompt = build_system_prompt(
+            tools_desc="- test_tool: testing",
+            memory_content="This is project memory content",
+        )
+        assert "project memory content" in prompt.lower() or "Project Memory" in prompt
+
+    def test_build_system_prompt_with_tools(self):
+        """tools_desc is included in prompt."""
+        tools_desc = "- read_file: reads files\n- write_file: writes files"
+        prompt = build_system_prompt(tools_desc=tools_desc)
+        assert "read_file" in prompt
+        assert "write_file" in prompt

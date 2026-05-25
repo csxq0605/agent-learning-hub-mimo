@@ -6,10 +6,11 @@ import threading
 from unittest.mock import MagicMock, patch
 from mimo_harness.agent import (
     MiMoHarness, AgentDeps, CircuitBreaker, TokenBudget,
-    TerminationReason, retry_with_backoff,
+    TerminationReason, retry_with_backoff, _AttrBag,
 )
 from mimo_harness.context import Session
 from mimo_harness.tools import file_ops
+from mimo_harness.tools import shell
 
 
 class TestCircuitBreaker:
@@ -524,3 +525,299 @@ class TestClaudeMdSurvivesCompact:
         # No compaction happened, load_memory was only called during system prompt build
         # (not for re-loading after compression)
         assert session.compaction_count == 0
+
+
+class TestAttrBag:
+    def test_attrbag_basic(self):
+        bag = _AttrBag(name="test", value=42)
+        assert bag.name == "test"
+        assert bag.value == 42
+
+    def test_attrbag_model_dump(self):
+        bag = _AttrBag(
+            content="hello",
+            model_dump=lambda: {"role": "assistant", "content": "hello"},
+        )
+        result = bag.model_dump()
+        assert result["role"] == "assistant"
+        assert result["content"] == "hello"
+
+
+class TestStreamLLMCall:
+    """Test _stream_llm_call streaming response assembly."""
+
+    def _make_stream_chunk(self, content=None, tool_call_chunk=None, finish_reason=None):
+        """Create a mock streaming chunk."""
+        delta = MagicMock()
+        delta.content = content
+        delta.tool_calls = tool_call_chunk
+
+        choice = MagicMock()
+        choice.delta = delta
+        choice.finish_reason = finish_reason
+
+        chunk = MagicMock()
+        chunk.choices = [choice]
+        return chunk
+
+    def test_stream_llm_call_content_chunks(self, monkeypatch):
+        """Content chunks are accumulated correctly."""
+        monkeypatch.setenv("MIMO_API_KEY", "test-key")
+        monkeypatch.setenv("MIMO_BASE_URL", "http://test.com")
+        monkeypatch.setenv("MIMO_MODEL", "test-model")
+
+        harness = MiMoHarness(max_steps=1, stream=True)
+
+        chunks = [
+            self._make_stream_chunk(content="Hello "),
+            self._make_stream_chunk(content="world!"),
+            self._make_stream_chunk(finish_reason="stop"),
+        ]
+
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = iter(chunks)
+
+        messages = [{"role": "user", "content": "hi"}]
+        tools_schema = []
+
+        import io
+        buf = io.StringIO()
+        with patch("sys.stdout", buf):
+            response = harness._stream_llm_call(mock_client, messages, tools_schema)
+
+        assert response.choices[0].message.content == "Hello world!"
+        assert response.choices[0].finish_reason == "stop"
+
+    def test_stream_llm_call_tool_call_chunks(self, monkeypatch):
+        """Tool call chunks are parsed and assembled."""
+        monkeypatch.setenv("MIMO_API_KEY", "test-key")
+        monkeypatch.setenv("MIMO_BASE_URL", "http://test.com")
+        monkeypatch.setenv("MIMO_MODEL", "test-model")
+
+        harness = MiMoHarness(max_steps=1, stream=True)
+
+        # Build tool call chunks
+        tc1 = MagicMock()
+        tc1.index = 0
+        tc1.id = "call_123"
+        tc1.function = MagicMock()
+        tc1.function.name = "read_file"
+        tc1.function.arguments = '{"path":'
+
+        tc2 = MagicMock()
+        tc2.index = 0
+        tc2.id = None
+        tc2.function = MagicMock()
+        tc2.function.name = None
+        tc2.function.arguments = '"/tmp/test"}'
+
+        chunks = [
+            self._make_stream_chunk(tool_call_chunk=[tc1]),
+            self._make_stream_chunk(tool_call_chunk=[tc2]),
+            self._make_stream_chunk(finish_reason="tool_calls"),
+        ]
+
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = iter(chunks)
+
+        messages = [{"role": "user", "content": "read file"}]
+        tools_schema = []
+
+        import io
+        buf = io.StringIO()
+        with patch("sys.stdout", buf):
+            response = harness._stream_llm_call(mock_client, messages, tools_schema)
+
+        assert response.choices[0].message.tool_calls is not None
+        assert len(response.choices[0].message.tool_calls) == 1
+        tc = response.choices[0].message.tool_calls[0]
+        assert tc.id == "call_123"
+        assert tc.function.name == "read_file"
+        assert tc.function.arguments == '{"path":"/tmp/test"}'
+
+    def test_stream_llm_call_handles_empty_chunks(self, monkeypatch):
+        """Empty delta chunks don't cause errors."""
+        monkeypatch.setenv("MIMO_API_KEY", "test-key")
+        monkeypatch.setenv("MIMO_BASE_URL", "http://test.com")
+        monkeypatch.setenv("MIMO_MODEL", "test-model")
+
+        harness = MiMoHarness(max_steps=1, stream=True)
+
+        empty_chunk = MagicMock()
+        empty_chunk.choices = []
+
+        chunks = [
+            empty_chunk,
+            self._make_stream_chunk(content="ok"),
+            self._make_stream_chunk(finish_reason="stop"),
+        ]
+
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = iter(chunks)
+
+        messages = [{"role": "user", "content": "hi"}]
+        tools_schema = []
+
+        import io
+        buf = io.StringIO()
+        with patch("sys.stdout", buf):
+            response = harness._stream_llm_call(mock_client, messages, tools_schema)
+
+        assert response.choices[0].message.content == "ok"
+
+
+class TestRunWithToolCalls:
+    """Test agent.run() with tool calls in the response."""
+
+    def test_run_with_tool_calls(self, monkeypatch, tmp_path):
+        """Mock LLM returns tool call, verify tool is dispatched and result fed back."""
+        monkeypatch.setenv("MIMO_API_KEY", "test-key")
+        monkeypatch.setenv("MIMO_BASE_URL", "http://test.com")
+        monkeypatch.setenv("MIMO_MODEL", "test-model")
+        monkeypatch.setattr(file_ops, "_ALLOWED_WRITE_DIR", tmp_path)
+
+        harness = MiMoHarness(max_steps=3, auto_approve=True)
+
+        # First response: tool call to calculator
+        tc = MagicMock()
+        tc.id = "tc_calc"
+        tc.function = MagicMock()
+        tc.function.name = "calculator"
+        tc.function.arguments = json.dumps({"expression": "2 + 2"})
+
+        resp1 = MagicMock()
+        resp1.choices = [MagicMock()]
+        resp1.choices[0].message.content = "Let me calculate that."
+        resp1.choices[0].message.tool_calls = [tc]
+        resp1.choices[0].message.model_dump.return_value = {
+            "role": "assistant",
+            "content": "Let me calculate that.",
+            "tool_calls": [{"id": "tc_calc", "type": "function",
+                           "function": {"name": "calculator",
+                                       "arguments": json.dumps({"expression": "2 + 2"})}}],
+        }
+
+        # Second response: final answer
+        resp2 = MagicMock()
+        resp2.choices = [MagicMock()]
+        resp2.choices[0].message.content = "2 + 2 = 4"
+        resp2.choices[0].message.tool_calls = None
+
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.side_effect = [resp1, resp2]
+
+        session = Session(session_id="test")
+        with patch.object(harness.deps, 'llm_client_factory', return_value=mock_client):
+            result = harness.run("calculate 2+2", session)
+
+        assert "2 + 2 = 4" in result
+        # Session should contain tool result
+        tool_msgs = [m for m in session.messages if m.get("role") == "tool"]
+        assert len(tool_msgs) >= 1
+
+
+class TestRunMaxStepsTermination:
+    def test_run_max_steps_termination(self, monkeypatch):
+        """Verify agent stops at max_steps."""
+        monkeypatch.setenv("MIMO_API_KEY", "test-key")
+        monkeypatch.setenv("MIMO_BASE_URL", "http://test.com")
+        monkeypatch.setenv("MIMO_MODEL", "test-model")
+
+        harness = MiMoHarness(max_steps=2)
+
+        # Always return a tool call so the agent never completes normally
+        tc = MagicMock()
+        tc.id = "tc_loop"
+        tc.function = MagicMock()
+        tc.function.name = "calculator"
+        tc.function.arguments = json.dumps({"expression": "1"})
+
+        def make_tool_response():
+            resp = MagicMock()
+            resp.choices = [MagicMock()]
+            resp.choices[0].message.content = ""
+            resp.choices[0].message.tool_calls = [tc]
+            resp.choices[0].message.model_dump.return_value = {
+                "role": "assistant", "content": "",
+                "tool_calls": [{"id": "tc_loop", "type": "function",
+                               "function": {"name": "calculator",
+                                           "arguments": json.dumps({"expression": "1"})}}],
+            }
+            return resp
+
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.side_effect = lambda **kwargs: make_tool_response()
+
+        session = Session(session_id="test")
+        with patch.object(harness.deps, 'llm_client_factory', return_value=mock_client):
+            result = harness.run("loop forever", session)
+
+        assert "Max steps reached" in result
+
+
+class TestRunCircuitBreakerTermination:
+    def test_run_circuit_breaker_termination(self, monkeypatch):
+        """Verify agent stops when circuit breaker opens."""
+        monkeypatch.setenv("MIMO_API_KEY", "test-key")
+        monkeypatch.setenv("MIMO_BASE_URL", "http://test.com")
+        monkeypatch.setenv("MIMO_MODEL", "test-model")
+
+        harness = MiMoHarness(max_steps=20)
+
+        # Always raise an exception to trigger circuit breaker
+        mock_client = MagicMock()
+        err = Exception("API failure")
+        err.status_code = 500
+        mock_client.chat.completions.create.side_effect = err
+
+        session = Session(session_id="test")
+        with patch.object(harness.deps, 'llm_client_factory', return_value=mock_client):
+            result = harness.run("fail task", session)
+
+        assert "Circuit breaker" in result or "circuit breaker" in result.lower()
+
+
+class TestDynamicShellPermission:
+    def test_dynamic_shell_permission_readonly(self, monkeypatch):
+        """Read-only commands return READ permission."""
+        monkeypatch.setenv("MIMO_API_KEY", "test-key")
+        monkeypatch.setenv("MIMO_BASE_URL", "http://test.com")
+        monkeypatch.setenv("MIMO_MODEL", "test-model")
+        from mimo_harness.permissions import Permission
+
+        harness = MiMoHarness()
+        perm = harness._check_shell_permission("ls -la")
+        assert perm == Permission.READ
+
+    def test_dynamic_shell_permission_write(self, monkeypatch):
+        """Write commands return WRITE permission."""
+        monkeypatch.setenv("MIMO_API_KEY", "test-key")
+        monkeypatch.setenv("MIMO_BASE_URL", "http://test.com")
+        monkeypatch.setenv("MIMO_MODEL", "test-model")
+        from mimo_harness.permissions import Permission
+
+        harness = MiMoHarness()
+        perm = harness._check_shell_permission("rm -rf /tmp/test")
+        assert perm == Permission.WRITE
+
+    def test_dynamic_shell_permission_git_status(self, monkeypatch):
+        """git status is readonly."""
+        monkeypatch.setenv("MIMO_API_KEY", "test-key")
+        monkeypatch.setenv("MIMO_BASE_URL", "http://test.com")
+        monkeypatch.setenv("MIMO_MODEL", "test-model")
+        from mimo_harness.permissions import Permission
+
+        harness = MiMoHarness()
+        perm = harness._check_shell_permission("git status")
+        assert perm == Permission.READ
+
+    def test_dynamic_shell_permission_chaining(self, monkeypatch):
+        """Commands with chaining operators are not readonly."""
+        monkeypatch.setenv("MIMO_API_KEY", "test-key")
+        monkeypatch.setenv("MIMO_BASE_URL", "http://test.com")
+        monkeypatch.setenv("MIMO_MODEL", "test-model")
+        from mimo_harness.permissions import Permission
+
+        harness = MiMoHarness()
+        perm = harness._check_shell_permission("ls && rm -rf /")
+        assert perm == Permission.WRITE
