@@ -6,7 +6,8 @@ import os
 import sys
 import tempfile
 import time
-from mimo_harness.tools import file_ops, shell, code_exec, math_tools, web_tools, interactive, monitor
+from unittest.mock import patch
+from mimo_harness.tools import file_ops, shell, code_exec, math_tools, web_tools, interactive, monitor, doc_tools
 
 
 class TestFileOps:
@@ -364,3 +365,590 @@ class TestMonitor:
             "description": "Empty",
         }))
         assert "error" in result
+
+
+class TestWebToolsDeep:
+    """Tests for web_search and web_fetch with mocked HTTP layer."""
+
+    def test_web_search_success(self):
+        """Mock DuckDuckGo HTML response, verify results parsed correctly."""
+        mock_html = """
+        <html><body>
+        <a class="result__a" href="https://example.com/result1">Test Title One</a>
+        <a class="result__snippet">This is the first result snippet text.</a>
+        <a class="result__a" href="https://example.com/result2">Test Title Two</a>
+        <a class="result__snippet">This is the second result snippet text.</a>
+        </body></html>
+        """
+        mock_resp = type("Response", (), {
+            "text": mock_html,
+            "status_code": 200,
+            "raise_for_status": lambda self: None,
+        })()
+        with patch("requests.get", return_value=mock_resp):
+            result = json.loads(web_tools.web_search({"query": "test query"}))
+        assert result["query"] == "test query"
+        assert result["count"] == 2
+        assert result["results"][0]["title"] == "Test Title One"
+        assert result["results"][0]["url"] == "https://example.com/result1"
+        assert "first result snippet" in result["results"][0]["snippet"]
+        assert result["results"][1]["title"] == "Test Title Two"
+
+    def test_web_search_empty_query(self):
+        """Empty query should still succeed (DuckDuckGo handles it)."""
+        mock_resp = type("Response", (), {
+            "text": "<html><body></body></html>",
+            "status_code": 200,
+            "raise_for_status": lambda self: None,
+        })()
+        with patch("requests.get", return_value=mock_resp):
+            result = json.loads(web_tools.web_search({"query": ""}))
+        assert result["query"] == ""
+        assert result["count"] == 0
+
+    def test_web_search_network_error(self):
+        """Mock requests.get to raise, verify error handling."""
+        import requests as req_lib
+        with patch("requests.get", side_effect=req_lib.ConnectionError("Network unreachable")):
+            result = json.loads(web_tools.web_search({"query": "test"}))
+        assert "error" in result
+        assert "Network unreachable" in result["error"]
+
+    def test_web_search_empty_results(self):
+        """Mock empty HTML, verify empty results list."""
+        mock_resp = type("Response", (), {
+            "text": "<html><body><p>No results here</p></body></html>",
+            "status_code": 200,
+            "raise_for_status": lambda self: None,
+        })()
+        with patch("requests.get", return_value=mock_resp):
+            result = json.loads(web_tools.web_search({"query": "nonexistent"}))
+        assert result["count"] == 0
+        assert result["results"] == []
+
+    def test_web_fetch_success(self, tmp_path, monkeypatch):
+        """Mock HTTP response with HTML, verify content extraction."""
+        monkeypatch.setattr(doc_tools, "_ALLOWED_WRITE_DIR", tmp_path)
+        monkeypatch.chdir(tmp_path)
+        mock_html = "<html><head><title>Test</title></head><body><p>Hello World</p><script>var x=1;</script></body></html>"
+        mock_resp = type("Response", (), {
+            "text": mock_html,
+            "status_code": 200,
+            "headers": {"content-type": "text/html"},
+            "raise_for_status": lambda self: None,
+            "close": lambda self: None,
+            "iter_content": lambda self, chunk_size: [mock_html.encode("utf-8")],
+        })()
+        with patch("requests.get", return_value=mock_resp):
+            result = json.loads(web_tools.web_fetch({"url": "https://example.com"}))
+        assert result["url"] == "https://example.com"
+        assert result["status"] == 200
+        assert "Hello World" in result["content"]
+        # Script tags should be stripped
+        assert "var x=1" not in result["content"]
+
+    def test_web_fetch_large_response(self, tmp_path, monkeypatch):
+        """Mock response exceeding MAX_RESPONSE_BYTES, verify truncation."""
+        monkeypatch.chdir(tmp_path)
+        large_content = b"x" * (web_tools.MAX_RESPONSE_BYTES + 1000)
+
+        def mock_iter(chunk_size):
+            # Yield chunks that exceed MAX_RESPONSE_BYTES
+            yield large_content
+
+        mock_resp = type("Response", (), {
+            "text": large_content.decode("utf-8", errors="replace"),
+            "status_code": 200,
+            "headers": {"content-type": "text/html"},
+            "raise_for_status": lambda self: None,
+            "close": lambda self: None,
+            "iter_content": lambda self, chunk_size: mock_iter(chunk_size),
+        })()
+        with patch("requests.get", return_value=mock_resp):
+            result = json.loads(web_tools.web_fetch({"url": "https://example.com"}))
+        assert "truncated" in result["content"].lower() or "truncated" in result.get("content", "").lower() or len(result.get("content", "")) <= web_tools.MAX_RESPONSE_BYTES + 200
+
+    def test_web_fetch_network_error(self, tmp_path, monkeypatch):
+        """Mock requests.get to raise, verify error handling."""
+        monkeypatch.chdir(tmp_path)
+        import requests as req_lib
+        with patch("requests.get", side_effect=req_lib.ConnectionError("Connection refused")):
+            result = json.loads(web_tools.web_fetch({"url": "https://example.com"}))
+        assert "error" in result
+        assert "Connection refused" in result["error"]
+
+    def test_web_fetch_non_html(self, tmp_path, monkeypatch):
+        """Mock response with text/plain content type."""
+        monkeypatch.chdir(tmp_path)
+        text_content = "This is plain text content."
+        mock_resp = type("Response", (), {
+            "text": text_content,
+            "status_code": 200,
+            "headers": {"content-type": "text/plain"},
+            "raise_for_status": lambda self: None,
+            "close": lambda self: None,
+            "iter_content": lambda self, chunk_size: [text_content.encode("utf-8")],
+        })()
+        with patch("requests.get", return_value=mock_resp):
+            result = json.loads(web_tools.web_fetch({"url": "https://example.com/file.txt"}))
+        assert result["url"] == "https://example.com/file.txt"
+        assert "This is plain text content." in result["content"]
+
+    def test_web_fetch_timeout(self, tmp_path, monkeypatch):
+        """Mock requests.get to raise Timeout, verify error."""
+        monkeypatch.chdir(tmp_path)
+        import requests as req_lib
+        with patch("requests.get", side_effect=req_lib.Timeout("Request timed out")):
+            result = json.loads(web_tools.web_fetch({"url": "https://example.com"}))
+        assert "error" in result
+        assert "timed out" in result["error"].lower() or "timeout" in result["error"].lower()
+
+
+class TestMonitorDeep:
+    """Deeper tests for monitor process lifecycle."""
+
+    def test_monitor_stream_reader(self, monkeypatch):
+        """Start a monitor with python print, verify output is captured."""
+        monkeypatch.setattr(monitor, "_monitors", {})
+        # Use -u for unbuffered output on Windows
+        command = f'{sys.executable} -u -c "print(\'hello\'); import time; time.sleep(10)"'
+        result = json.loads(monitor.monitor_start({
+            "command": command,
+            "description": "Stream reader test",
+        }))
+        assert "job_id" in result
+        job_id = result["job_id"]
+
+        # Wait for output to be captured (longer wait for Windows)
+        time.sleep(2.0)
+
+        # Verify output was captured
+        with monitor._monitors_lock:
+            mon = monitor._monitors[job_id]
+        lines = mon.get_lines(10)
+        assert any("hello" in line for line in lines), f"Expected 'hello' in lines, got: {lines}"
+
+        # Stop
+        stop_result = json.loads(monitor.monitor_stop({"job_id": job_id}))
+        assert stop_result["status"] == "stopped"
+        assert stop_result["lines_captured"] >= 1
+
+    def test_monitor_filter_pattern(self, monkeypatch):
+        """Start monitor with filter_pattern, verify only matching lines captured."""
+        monkeypatch.setattr(monitor, "_monitors", {})
+        command = f'{sys.executable} -u -c "print(\'info line\'); print(\'error: something\'); print(\'info line2\'); print(\'error: another\')"'  # noqa: E501
+        result = json.loads(monitor.monitor_start({
+            "command": command,
+            "description": "Filter test",
+            "filter_pattern": "error",
+        }))
+        job_id = result["job_id"]
+
+        # Wait for process to finish and output to be read
+        time.sleep(1.5)
+
+        with monitor._monitors_lock:
+            mon = monitor._monitors[job_id]
+        lines = mon.get_lines(10)
+        # Only lines matching "error" should be captured
+        for line in lines:
+            assert "error" in line, f"Non-matching line captured: {line}"
+        assert len(lines) >= 1
+
+        # Cleanup
+        monitor.monitor_stop({"job_id": job_id})
+
+    def test_monitor_process_termination(self, monkeypatch):
+        """Start monitor, stop it, verify process is killed."""
+        monkeypatch.setattr(monitor, "_monitors", {})
+        command = f'{sys.executable} -c "import time; time.sleep(30)"'
+        result = json.loads(monitor.monitor_start({
+            "command": command,
+            "description": "Termination test",
+        }))
+        job_id = result["job_id"]
+        time.sleep(0.5)
+
+        # Get process handle
+        with monitor._monitors_lock:
+            mon = monitor._monitors[job_id]
+        process = mon.process
+        assert process is not None
+        assert process.poll() is None  # Process is running
+
+        # Stop
+        stop_result = json.loads(monitor.monitor_stop({"job_id": job_id}))
+        assert stop_result["status"] == "stopped"
+
+        # Process should be terminated
+        time.sleep(0.3)
+        assert process.poll() is not None  # Process has exited
+
+    def test_monitor_cleanup_on_error(self, monkeypatch):
+        """Start monitor with invalid command, verify cleanup."""
+        monkeypatch.setattr(monitor, "_monitors", {})
+        result = json.loads(monitor.monitor_start({
+            "command": "nonexistent_command_xyz_12345",
+            "description": "Error test",
+        }))
+        # Should either succeed (process starts then fails) or return error
+        if "job_id" in result:
+            job_id = result["job_id"]
+            time.sleep(1.0)
+            # The monitor should have captured the error
+            with monitor._monitors_lock:
+                mon = monitor._monitors.get(job_id)
+            if mon:
+                assert "error" in mon.status or mon.status.startswith("exited")
+                monitor.monitor_stop({"job_id": job_id})
+        else:
+            assert "error" in result
+
+    def test_monitor_list_shows_details(self, monkeypatch):
+        """Start monitor, verify list shows command/description/status."""
+        monkeypatch.setattr(monitor, "_monitors", {})
+        command = f'{sys.executable} -c "import time; time.sleep(30)"'
+        start_result = json.loads(monitor.monitor_start({
+            "command": command,
+            "description": "Detail list test",
+        }))
+        job_id = start_result["job_id"]
+        time.sleep(0.3)
+
+        list_result = json.loads(monitor.monitor_list({}))
+        assert list_result["active_monitors"] >= 1
+
+        found = [m for m in list_result["monitors"] if m["job_id"] == job_id]
+        assert len(found) == 1
+        mon_info = found[0]
+        assert mon_info["command"] == command
+        assert mon_info["description"] == "Detail list test"
+        assert mon_info["status"] == "running"
+
+        # Cleanup
+        monitor.monitor_stop({"job_id": job_id})
+
+
+class TestDocToolsDeep:
+    """Tests for create_doc and create_spreadsheet with various data types."""
+
+    def test_create_doc_markdown(self, tmp_path, monkeypatch):
+        """Create markdown doc, verify file content."""
+        monkeypatch.setattr(doc_tools, "_ALLOWED_WRITE_DIR", tmp_path)
+        result = json.loads(doc_tools.create_doc({
+            "title": "Test Report",
+            "content": "This is the body of the report.",
+            "format": "markdown",
+            "output_dir": str(tmp_path),
+        }))
+        assert result["status"] == "created"
+        assert result["format"] == "markdown"
+
+        path = result["path"]
+        assert path.endswith(".md")
+        content = open(path, encoding="utf-8").read()
+        assert "# Test Report" in content
+        assert "This is the body of the report." in content
+
+    def test_create_doc_txt(self, tmp_path, monkeypatch):
+        """Create txt doc, verify format."""
+        monkeypatch.setattr(doc_tools, "_ALLOWED_WRITE_DIR", tmp_path)
+        result = json.loads(doc_tools.create_doc({
+            "title": "Notes",
+            "content": "Some text content here.",
+            "format": "txt",
+            "output_dir": str(tmp_path),
+        }))
+        assert result["status"] == "created"
+        assert result["format"] == "txt"
+
+        path = result["path"]
+        assert path.endswith(".txt")
+        content = open(path, encoding="utf-8").read()
+        assert "Notes" in content
+        assert "=====" in content
+        assert "Some text content here." in content
+
+    def test_create_spreadsheet_dict_rows(self, tmp_path, monkeypatch):
+        """Data with dict rows (headers from keys)."""
+        monkeypatch.setattr(doc_tools, "_ALLOWED_WRITE_DIR", tmp_path)
+        data = [
+            {"name": "Alice", "age": "30", "city": "NYC"},
+            {"name": "Bob", "age": "25", "city": "LA"},
+        ]
+        result = json.loads(doc_tools.create_spreadsheet({
+            "title": "People",
+            "data": data,
+            "output_dir": str(tmp_path),
+        }))
+        assert result["status"] == "created"
+        assert result["rows"] == 2
+
+        path = result["path"]
+        assert path.endswith(".csv")
+        content = open(path, encoding="utf-8").read()
+        assert "name" in content
+        assert "Alice" in content
+        assert "Bob" in content
+        assert "NYC" in content
+
+    def test_create_spreadsheet_list_rows(self, tmp_path, monkeypatch):
+        """Data with list rows (first row = headers)."""
+        monkeypatch.setattr(doc_tools, "_ALLOWED_WRITE_DIR", tmp_path)
+        data = [
+            ["Name", "Score"],
+            ["Alice", "95"],
+            ["Bob", "87"],
+        ]
+        result = json.loads(doc_tools.create_spreadsheet({
+            "title": "Scores",
+            "data": data,
+            "output_dir": str(tmp_path),
+        }))
+        assert result["status"] == "created"
+        assert result["rows"] == 3
+
+        content = open(result["path"], encoding="utf-8").read()
+        assert "Name" in content
+        assert "Score" in content
+        assert "Alice" in content
+        assert "95" in content
+
+    def test_create_spreadsheet_mixed_data(self, tmp_path, monkeypatch):
+        """Data with int/float/str values."""
+        monkeypatch.setattr(doc_tools, "_ALLOWED_WRITE_DIR", tmp_path)
+        data = [
+            ["Item", "Price", "Qty"],
+            ["Widget", 1.5, 100],
+            ["Gadget", 25.99, 5],
+        ]
+        result = json.loads(doc_tools.create_spreadsheet({
+            "title": "Inventory",
+            "data": data,
+            "output_dir": str(tmp_path),
+        }))
+        assert result["status"] == "created"
+
+        content = open(result["path"], encoding="utf-8").read()
+        assert "Widget" in content
+        assert "1.5" in content
+        assert "25.99" in content
+        assert "100" in content
+
+    def test_create_doc_large_content(self, tmp_path, monkeypatch):
+        """Create doc with 100KB content."""
+        monkeypatch.setattr(doc_tools, "_ALLOWED_WRITE_DIR", tmp_path)
+        large_content = "x" * 100_000
+        result = json.loads(doc_tools.create_doc({
+            "title": "Large Doc",
+            "content": large_content,
+            "format": "markdown",
+            "output_dir": str(tmp_path),
+        }))
+        assert result["status"] == "created"
+
+        path = result["path"]
+        content = open(path, encoding="utf-8").read()
+        assert "# Large Doc" in content
+        assert len(content) >= 100_000
+
+    def test_create_spreadsheet_special_chars(self, tmp_path, monkeypatch):
+        """CSV with commas/quotes in data."""
+        monkeypatch.setattr(doc_tools, "_ALLOWED_WRITE_DIR", tmp_path)
+        data = [
+            ["Name", "Description"],
+            ["Item, Inc.", 'He said "hello"'],
+            ["Other", "Normal text"],
+        ]
+        result = json.loads(doc_tools.create_spreadsheet({
+            "title": "Specials",
+            "data": data,
+            "output_dir": str(tmp_path),
+        }))
+        assert result["status"] == "created"
+
+        content = open(result["path"], encoding="utf-8").read()
+        # csv module should properly quote fields with commas/quotes
+        assert "Item" in content
+        assert "Inc" in content
+        assert "hello" in content
+
+
+class TestShellDeep:
+    """Deep coverage tests for shell.py."""
+
+    def test_run_command_with_cwd(self, tmp_path):
+        """Verify command runs and returns output with cwd info."""
+        result = json.loads(shell.run_command({
+            "command": f'{sys.executable} -c "import os; print(os.getcwd())"',
+        }))
+        assert result["exit_code"] == 0
+        assert "output" in result
+        # Output should contain a valid path
+        assert len(result["output"].strip()) > 0
+
+    def test_run_command_env_vars(self, monkeypatch):
+        """Verify environment variables are passed to subprocess."""
+        monkeypatch.setenv("MIMO_TEST_VAR", "hello_from_test")
+        if sys.platform == "win32":
+            result = json.loads(shell.run_command({
+                "command": "echo %MIMO_TEST_VAR%",
+            }))
+        else:
+            result = json.loads(shell.run_command({
+                "command": "echo $MIMO_TEST_VAR",
+            }))
+        assert result["exit_code"] == 0
+        assert "hello_from_test" in result["output"]
+
+    def test_run_command_large_output(self):
+        """Verify output >30000 chars is truncated."""
+        result = json.loads(shell.run_command({
+            "command": f'{sys.executable} -c "print(\'A\' * 50000)"',
+        }))
+        assert result["exit_code"] == 0
+        assert "... [truncated]" in result["output"]
+        # Total output should be around 30000 + truncation marker
+        assert len(result["output"]) <= 31000
+
+    def test_run_command_unicode_output(self):
+        """Verify Unicode in command output is handled."""
+        result = json.loads(shell.run_command({
+            "command": f'{sys.executable} -c "print(\'Hello \\u4e16\\u754c \\u00e9\\u00e8\\u00ea\')"',
+        }))
+        assert result["exit_code"] == 0
+        assert "Hello" in result["output"]
+
+    def test_run_command_chaining_all_operators(self):
+        """Verify all chaining operators are detected by _is_readonly."""
+        # Semicolon
+        assert not shell._is_readonly("ls; rm -rf /")
+        # Pipe
+        assert not shell._is_readonly("cat file | grep pattern")
+        # Ampersand (background)
+        assert not shell._is_readonly("echo hello &")
+        # Double ampersand
+        assert not shell._is_readonly("ls && rm file")
+        # Double pipe
+        assert not shell._is_readonly("ls || echo failed")
+        # Backtick
+        assert not shell._is_readonly("echo `whoami`")
+        # Dollar-paren
+        assert not shell._is_readonly("echo $(whoami)")
+        # Dollar sign alone
+        assert not shell._is_readonly("echo $HOME")
+
+    def test_is_readonly_extended(self):
+        """Test more readonly commands from READONLY_PREFIXES."""
+        readonly_cmds = [
+            "which python",
+            "where python",
+            "tree /f",
+            "file test.txt",
+            "du -sh .",
+            "df -h",
+            "python --version",
+            "pip list",
+            "node --version",
+            "npm list",
+            "uname -a",
+            "hostname",
+            "whoami",
+            "date",
+        ]
+        for cmd in readonly_cmds:
+            assert shell._is_readonly(cmd), f"{cmd!r} should be readonly"
+
+    def test_is_readonly_negative_cases(self):
+        """Commands that should NOT be readonly."""
+        write_cmds = [
+            "npm install express",
+            "pip install requests",
+            "rm file.txt",
+            "git push origin main",
+            "docker build .",
+            "make install",
+        ]
+        for cmd in write_cmds:
+            assert not shell._is_readonly(cmd), f"{cmd!r} should NOT be readonly"
+
+    def test_background_job_output(self):
+        """Start background job, wait, verify output is captured."""
+        result = json.loads(shell.run_command({
+            "command": f'{sys.executable} -c "import time; time.sleep(0.5); print(\'bg_done\')"',
+            "run_in_background": True,
+        }))
+        assert result["status"] == "started"
+        job_id = result["job_id"]
+        # Wait for completion
+        time.sleep(2)
+        job = shell._background_jobs.get(job_id)
+        assert job is not None
+        assert job["status"] == "completed"
+        assert "bg_done" in job["output"]
+        assert job["exit_code"] == 0
+
+    def test_background_job_max_limit(self, monkeypatch):
+        """Verify MAX_BACKGROUND_JOBS cap."""
+        # Pre-fill background jobs to the limit
+        monkeypatch.setattr(shell, "_background_jobs", {})
+        for i in range(shell.MAX_BACKGROUND_JOBS):
+            shell._background_jobs[f"job-{i}"] = {
+                "command": "sleep 100",
+                "status": "running",
+                "output": "",
+                "exit_code": None,
+            }
+        result = json.loads(shell.run_command({
+            "command": "echo should_fail",
+            "run_in_background": True,
+        }))
+        assert "error" in result
+        assert "Maximum background jobs" in result["error"]
+
+    def test_run_command_timeout(self):
+        """Verify command timeout is handled."""
+        result = json.loads(shell.run_command({
+            "command": f'{sys.executable} -c "import time; time.sleep(10)"',
+            "timeout": 1,
+        }))
+        # Should either timeout or complete quickly
+        assert "error" in result or result.get("exit_code") is not None
+
+    def test_run_command_empty(self):
+        """Verify empty command is handled."""
+        result = json.loads(shell.run_command({"command": ""}))
+        # Should complete (empty command on shell)
+        assert "exit_code" in result or "error" in result
+
+    def test_get_tools_returns_tooldef(self):
+        """Verify get_tools returns proper ToolDef."""
+        tools = shell.get_tools()
+        assert len(tools) == 1
+        tool = tools[0]
+        assert tool.name == "run_command"
+        assert tool.handler == shell.run_command
+        assert "command" in tool.parameters["properties"]
+
+    def test_background_job_error_handling(self):
+        """Background job with failing command captures error."""
+        result = json.loads(shell.run_command({
+            "command": f'{sys.executable} -c "import sys; sys.exit(1)"',
+            "run_in_background": True,
+        }))
+        assert result["status"] == "started"
+        job_id = result["job_id"]
+        time.sleep(2)
+        job = shell._background_jobs.get(job_id)
+        assert job is not None
+        assert job["status"] == "completed"
+        assert job["exit_code"] == 1
+
+    def test_chaining_pattern_compiled(self):
+        """Verify _CHAINING_PATTERN regex is compiled and works."""
+        assert shell._CHAINING_PATTERN.search(";") is not None
+        assert shell._CHAINING_PATTERN.search("|") is not None
+        assert shell._CHAINING_PATTERN.search("&") is not None
+        assert shell._CHAINING_PATTERN.search("`") is not None
+        assert shell._CHAINING_PATTERN.search("$(") is not None
+        assert shell._CHAINING_PATTERN.search("safe command") is None

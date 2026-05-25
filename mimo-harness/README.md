@@ -207,12 +207,12 @@ pip install -e ".[dev]"
 python -m pytest tests/ -v
 ```
 
-373 tests across 12 test files, 77% code coverage:
+441 tests across 12 test files, 90% code coverage:
 
 | Test File | Tests | Coverage |
 |-----------|-------|----------|
 | test_agent.py | 39 | DI, circuit breaker, token budget, retry, compression, parallel dispatch, streaming, CLAUDE.md survival, tool calls, AttrBag |
-| test_cli.py | 29 | Arg parsing, config loading, REPL commands, token formatting |
+| test_cli.py | 63 | REPL commands (save/load/memory/remember/hooks/compact/init/quit), main function paths (--task/--dry-run/--plan/--stream), config integration, arg parsing, token formatting |
 | test_config.py | 4 | Env vars, defaults, API key validation |
 | test_permissions.py | 22 | 4-stage pipeline, rule matching, plan mode, path-scoped rules |
 | test_context.py | 46 | Token-based compression, LLM compression, edge cases, session management, system prompt |
@@ -220,7 +220,7 @@ python -m pytest tests/ -v
 | test_hooks.py | 20 | Lifecycle events, command/function hooks, subprocess execution, async hooks, hook chaining |
 | test_logging.py | 11 | TraceLogger init, trace/info/error, tool_call, session_summary, file handler, verbose mode |
 | test_memory.py | 14 | Typed storage, frontmatter, validation |
-| test_tools.py | 36 | File ops, shell, code exec, math, web, interactive, monitor |
+| test_tools.py | 79 | File ops, shell, code exec, math, web (mocked HTTP), interactive, monitor, doc tools, background jobs, streaming |
 | test_stress_boundary.py | 119 | Path traversal, SSRF, shell injection, large input, Unicode, permissions, concurrency, math DoS, context compression, memory boundaries, registry edge cases, background jobs, monitors |
 | test_project_scanner.py | 20 | Language/framework detection, AGENTS.md generation |
 

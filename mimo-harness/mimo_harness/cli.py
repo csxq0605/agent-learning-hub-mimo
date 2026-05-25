@@ -13,6 +13,8 @@ import json
 from .agent import MiMoHarness
 from .config import MIMO_API_KEY, MIMO_MODEL
 from .permissions import PermissionRule
+from .context import Session, estimate_tokens, compact_context, CONTEXT_WINDOW_TOKENS
+from .memory import MemoryStore
 
 
 def print_banner():
@@ -131,8 +133,6 @@ def main():
     print(f"Mode: {mode_str}")
     print("Type /help for commands, or just start chatting.\n")
 
-    from .context import Session, estimate_tokens, compact_context, CONTEXT_WINDOW_TOKENS
-    from .memory import MemoryStore
     import secrets
 
     session = Session(
@@ -158,174 +158,9 @@ def main():
         if user_input.startswith("/"):
             parts = user_input.split()
             cmd = [parts[0].lower()] + parts[1:]
-            if cmd[0] in ("/quit", "/exit", "/q"):
-                print("Bye!")
+            action, session = _handle_command(cmd, harness, session, memory_store)
+            if action == "quit":
                 break
-            elif cmd[0] == "/help":
-                print_help()
-            elif cmd[0] == "/clear":
-                session.messages.clear()
-                print("Session cleared.")
-            elif cmd[0] == "/tools":
-                print("\nAvailable tools:")
-                for name in harness.registry.list_names():
-                    tool = harness.registry.get(name)
-                    markers = []
-                    if tool.is_read_only:
-                        markers.append("RO")
-                    if tool.is_concurrency_safe:
-                        markers.append("CS")
-                    if tool.is_destructive:
-                        markers.append("DST")
-                    marker_str = f" [{', '.join(markers)}]" if markers else ""
-                    print(f"  - {name}: {tool.description[:50]}...{marker_str}")
-                print()
-            elif cmd[0] == "/dry-run":
-                harness.perms.dry_run = not harness.perms.dry_run
-                print(f"Dry-run: {'ON' if harness.perms.dry_run else 'OFF'}")
-            elif cmd[0] == "/auto":
-                harness.perms.auto_approve = not harness.perms.auto_approve
-                print(f"Auto-approve: {'ON' if harness.perms.auto_approve else 'OFF'}")
-            elif cmd[0] == "/plan":
-                if harness.perms.mode.value == "plan":
-                    from .permissions import PermissionMode
-                    harness.perms.mode = PermissionMode.DEFAULT
-                    print("Plan mode: OFF")
-                else:
-                    from .permissions import PermissionMode
-                    harness.perms.mode = PermissionMode.PLAN
-                    print("Plan mode: ON (read-only)")
-            elif cmd[0] == "/memory":
-                memories = memory_store.list_memories()
-                if memories:
-                    print(f"\nStored memories ({len(memories)}):")
-                    for m in memories:
-                        print(f"  [{m.memory_type.value}] {m.name}: {m.description[:60]}")
-                else:
-                    print("No memories stored.")
-                print()
-            elif cmd[0] == "/remember":
-                print("Enter memory content (empty line to finish):")
-                lines = []
-                while True:
-                    try:
-                        line = input()
-                        if not line:
-                            break
-                        lines.append(line)
-                    except (EOFError, KeyboardInterrupt):
-                        break
-                if lines:
-                    content = "\n".join(lines)
-                    memory_store.save_memory(
-                        name=f"session-{session.session_id[:8]}",
-                        memory_type=__import__('mimo_harness.memory', fromlist=['MemoryType']).MemoryType.PROJECT,
-                        description=f"Memory from session {session.session_id[:8]}",
-                        content=content,
-                    )
-                    print("Memory saved.")
-            elif cmd[0] == "/hooks":
-                hook_runner = getattr(harness, '_hook_runner', None)
-                if hook_runner:
-                    total = sum(len(v) for v in hook_runner._hooks.values())
-                    print(f"\nRegistered hooks: {total}")
-                    for event, hooks in hook_runner._hooks.items():
-                        for h in hooks:
-                            print(f"  [{event.value}] {h.matcher} -> {h.command[:50]}")
-                else:
-                    print("No hooks registered.")
-                print()
-            elif cmd[0] == "/stats":
-                tokens = estimate_tokens(session.messages)
-                print(f"\nSession Statistics:")
-                print(f"  Messages: {len(session.messages)}")
-                print(f"  Tokens: {_format_tokens(tokens)} / {_format_tokens(CONTEXT_WINDOW_TOKENS)}")
-                print(f"  Compactions: {session.compaction_count}")
-                print(f"  Approval log: {len(harness.perms.approval_log)} entries")
-                if harness.circuit_breaker.consecutive_failures > 0:
-                    print(f"  Circuit breaker failures: {harness.circuit_breaker.consecutive_failures}")
-                print()
-            elif cmd[0] == "/tokens":
-                tokens = estimate_tokens(session.messages)
-                pct = tokens / CONTEXT_WINDOW_TOKENS * 100
-                print(f"\nToken Usage:")
-                print(f"  Conversation: {_format_tokens(tokens)} / {_format_tokens(CONTEXT_WINDOW_TOKENS)} ({pct:.1f}%)")
-                print(f"  Messages: {len(session.messages)}")
-                print(f"  Compactions: {session.compaction_count}")
-                # Progress bar
-                bar_len = 40
-                filled = int(bar_len * tokens / CONTEXT_WINDOW_TOKENS)
-                bar = '#' * min(filled, bar_len) + '-' * max(0, bar_len - filled)
-                print(f"  [{bar}] {pct:.1f}%")
-                print()
-            elif cmd[0] == "/compact":
-                tokens_before = estimate_tokens(session.messages)
-                if tokens_before < 1000:
-                    print("Not enough messages to compress.")
-                else:
-                    print(f"Compressing... ({_format_tokens(tokens_before)} tokens)")
-                    from .config import MIMO_BASE_URL, require_api_key
-                    try:
-                        api_key = require_api_key()
-                        from openai import OpenAI
-                        client = OpenAI(api_key=api_key, base_url=MIMO_BASE_URL)
-                        compacted = compact_context(
-                            session.messages,
-                            client=client,
-                            model=harness.model,
-                            estimated_tokens=tokens_before,
-                        )
-                        session.messages = compacted
-                        session.compaction_count += 1
-                        tokens_after = estimate_tokens(session.messages)
-                        print(f"Done: {_format_tokens(tokens_before)} -> {_format_tokens(tokens_after)} tokens")
-                    except Exception as e:
-                        # Fallback: no LLM, just truncation
-                        compacted = compact_context(
-                            session.messages,
-                            estimated_tokens=tokens_before,
-                        )
-                        session.messages = compacted
-                        session.compaction_count += 1
-                        tokens_after = estimate_tokens(session.messages)
-                        print(f"Done (truncation): {_format_tokens(tokens_before)} -> {_format_tokens(tokens_after)} tokens")
-                print()
-            elif cmd[0] == "/init":
-                from .project_scanner import scan_project, generate_agents_md
-                agents_md_path = os.path.join(os.getcwd(), "AGENTS.md")
-                if os.path.exists(agents_md_path):
-                    confirm = input(
-                        "AGENTS.md already exists. Overwrite? [y/N] "
-                    ).strip().lower()
-                    if confirm not in ("y", "yes"):
-                        print("Skipped.")
-                        continue
-                print("Scanning project...")
-                result = scan_project(".")
-                content = generate_agents_md(result)
-                with open(agents_md_path, "w", encoding="utf-8") as f:
-                    f.write(content)
-                print(f"AGENTS.md generated at {agents_md_path}")
-                print(f"  Language: {result.get('language', 'unknown')}")
-                if result.get("frameworks"):
-                    print(f"  Frameworks: {', '.join(result['frameworks'])}")
-                if result.get("test_runner"):
-                    print(f"  Test runner: {result['test_runner']}")
-                print()
-            elif cmd[0] == "/save" and len(cmd) > 1:
-                try:
-                    session.save(cmd[1])
-                    print(f"Session saved to {cmd[1]}")
-                except Exception as e:
-                    print(f"Error: {e}")
-            elif cmd[0] == "/load" and len(cmd) > 1:
-                try:
-                    session = Session.load(cmd[1])
-                    print(f"Session loaded from {cmd[1]}")
-                except Exception as e:
-                    print(f"Error: {e}")
-            else:
-                print(f"Unknown command: {cmd[0]}. Type /help for commands.")
             continue
 
         # Run agent
@@ -334,6 +169,182 @@ def main():
             harness.run(user_input, session)
         else:
             harness.run(user_input, session)
+
+
+def _handle_command(cmd, harness, session, memory_store):
+    """Handle a single REPL command.
+
+    Returns (action, session) where action is 'quit' or 'continue'.
+    The session may be replaced by /load.
+    """
+    if cmd[0] in ("/quit", "/exit", "/q"):
+        print("Bye!")
+        return "quit", session
+    elif cmd[0] == "/help":
+        print_help()
+    elif cmd[0] == "/clear":
+        session.messages.clear()
+        print("Session cleared.")
+    elif cmd[0] == "/tools":
+        print("\nAvailable tools:")
+        for name in harness.registry.list_names():
+            tool = harness.registry.get(name)
+            markers = []
+            if tool.is_read_only:
+                markers.append("RO")
+            if tool.is_concurrency_safe:
+                markers.append("CS")
+            if tool.is_destructive:
+                markers.append("DST")
+            marker_str = f" [{', '.join(markers)}]" if markers else ""
+            print(f"  - {name}: {tool.description[:50]}...{marker_str}")
+        print()
+    elif cmd[0] == "/dry-run":
+        harness.perms.dry_run = not harness.perms.dry_run
+        print(f"Dry-run: {'ON' if harness.perms.dry_run else 'OFF'}")
+    elif cmd[0] == "/auto":
+        harness.perms.auto_approve = not harness.perms.auto_approve
+        print(f"Auto-approve: {'ON' if harness.perms.auto_approve else 'OFF'}")
+    elif cmd[0] == "/plan":
+        from .permissions import PermissionMode
+        if harness.perms.mode.value == "plan":
+            harness.perms.mode = PermissionMode.DEFAULT
+            print("Plan mode: OFF")
+        else:
+            harness.perms.mode = PermissionMode.PLAN
+            print("Plan mode: ON (read-only)")
+    elif cmd[0] == "/memory":
+        memories = memory_store.list_memories()
+        if memories:
+            print(f"\nStored memories ({len(memories)}):")
+            for m in memories:
+                print(f"  [{m.memory_type.value}] {m.name}: {m.description[:60]}")
+        else:
+            print("No memories stored.")
+        print()
+    elif cmd[0] == "/remember":
+        print("Enter memory content (empty line to finish):")
+        lines = []
+        while True:
+            try:
+                line = input()
+                if not line:
+                    break
+                lines.append(line)
+            except (EOFError, KeyboardInterrupt):
+                break
+        if lines:
+            content = "\n".join(lines)
+            memory_store.save_memory(
+                name=f"session-{session.session_id[:8]}",
+                memory_type=__import__('mimo_harness.memory', fromlist=['MemoryType']).MemoryType.PROJECT,
+                description=f"Memory from session {session.session_id[:8]}",
+                content=content,
+            )
+            print("Memory saved.")
+    elif cmd[0] == "/hooks":
+        hook_runner = getattr(harness, '_hook_runner', None)
+        if hook_runner:
+            total = sum(len(v) for v in hook_runner._hooks.values())
+            print(f"\nRegistered hooks: {total}")
+            for event, hooks in hook_runner._hooks.items():
+                for h in hooks:
+                    print(f"  [{event.value}] {h.matcher} -> {h.command[:50]}")
+        else:
+            print("No hooks registered.")
+        print()
+    elif cmd[0] == "/stats":
+        tokens = estimate_tokens(session.messages)
+        print(f"\nSession Statistics:")
+        print(f"  Messages: {len(session.messages)}")
+        print(f"  Tokens: {_format_tokens(tokens)} / {_format_tokens(CONTEXT_WINDOW_TOKENS)}")
+        print(f"  Compactions: {session.compaction_count}")
+        print(f"  Approval log: {len(harness.perms.approval_log)} entries")
+        if harness.circuit_breaker.consecutive_failures > 0:
+            print(f"  Circuit breaker failures: {harness.circuit_breaker.consecutive_failures}")
+        print()
+    elif cmd[0] == "/tokens":
+        tokens = estimate_tokens(session.messages)
+        pct = tokens / CONTEXT_WINDOW_TOKENS * 100
+        print(f"\nToken Usage:")
+        print(f"  Conversation: {_format_tokens(tokens)} / {_format_tokens(CONTEXT_WINDOW_TOKENS)} ({pct:.1f}%)")
+        print(f"  Messages: {len(session.messages)}")
+        print(f"  Compactions: {session.compaction_count}")
+        # Progress bar
+        bar_len = 40
+        filled = int(bar_len * tokens / CONTEXT_WINDOW_TOKENS)
+        bar = '#' * min(filled, bar_len) + '-' * max(0, bar_len - filled)
+        print(f"  [{bar}] {pct:.1f}%")
+        print()
+    elif cmd[0] == "/compact":
+        tokens_before = estimate_tokens(session.messages)
+        if tokens_before < 1000:
+            print("Not enough messages to compress.")
+        else:
+            print(f"Compressing... ({_format_tokens(tokens_before)} tokens)")
+            from .config import MIMO_BASE_URL, require_api_key
+            try:
+                api_key = require_api_key()
+                from openai import OpenAI
+                client = OpenAI(api_key=api_key, base_url=MIMO_BASE_URL)
+                compacted = compact_context(
+                    session.messages,
+                    client=client,
+                    model=harness.model,
+                    estimated_tokens=tokens_before,
+                )
+                session.messages = compacted
+                session.compaction_count += 1
+                tokens_after = estimate_tokens(session.messages)
+                print(f"Done: {_format_tokens(tokens_before)} -> {_format_tokens(tokens_after)} tokens")
+            except Exception as e:
+                # Fallback: no LLM, just truncation
+                compacted = compact_context(
+                    session.messages,
+                    estimated_tokens=tokens_before,
+                )
+                session.messages = compacted
+                session.compaction_count += 1
+                tokens_after = estimate_tokens(session.messages)
+                print(f"Done (truncation): {_format_tokens(tokens_before)} -> {_format_tokens(tokens_after)} tokens")
+        print()
+    elif cmd[0] == "/init":
+        from .project_scanner import scan_project, generate_agents_md
+        agents_md_path = os.path.join(os.getcwd(), "AGENTS.md")
+        if os.path.exists(agents_md_path):
+            confirm = input(
+                "AGENTS.md already exists. Overwrite? [y/N] "
+            ).strip().lower()
+            if confirm not in ("y", "yes"):
+                print("Skipped.")
+                return "continue", session
+        print("Scanning project...")
+        result = scan_project(".")
+        content = generate_agents_md(result)
+        with open(agents_md_path, "w", encoding="utf-8") as f:
+            f.write(content)
+        print(f"AGENTS.md generated at {agents_md_path}")
+        print(f"  Language: {result.get('language', 'unknown')}")
+        if result.get("frameworks"):
+            print(f"  Frameworks: {', '.join(result['frameworks'])}")
+        if result.get("test_runner"):
+            print(f"  Test runner: {result['test_runner']}")
+        print()
+    elif cmd[0] == "/save" and len(cmd) > 1:
+        try:
+            session.save(cmd[1])
+            print(f"Session saved to {cmd[1]}")
+        except Exception as e:
+            print(f"Error: {e}")
+    elif cmd[0] == "/load" and len(cmd) > 1:
+        try:
+            session = Session.load(cmd[1])
+            print(f"Session loaded from {cmd[1]}")
+        except Exception as e:
+            print(f"Error: {e}")
+    else:
+        print(f"Unknown command: {cmd[0]}. Type /help for commands.")
+    return "continue", session
 
 
 if __name__ == "__main__":
