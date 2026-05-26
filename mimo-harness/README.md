@@ -7,7 +7,7 @@ A production-grade AI agent harness powered by Xiaomi MiMo model, following Clau
 ## Features
 
 - **Agent Loop**: Dependency injection, circuit breaker, token budget tracking, 7 termination reasons, parallel tool dispatch, streaming responses, effort levels (low/medium/high)
-- **Tool System**: 18 tools with concurrency-safe/unsafe markers, input validation, disk spillover for large outputs, background execution
+- **Tool System**: 22 tools with concurrency-safe/unsafe markers, input validation, disk spillover for large outputs, background execution
 - **Permission Pipeline**: 6 modes (default/plan/auto/accept_edits/dont_ask/bypass), 4-stage pipeline (validate → rules → context → prompt), path-scoped rules, protected paths (.git, .env, etc.)
 - **Context Management**: LLM-based semantic compression with thrashing protection, progressive truncation (snip → microcompact → orphan filter), instruction preservation after compression
 - **Memory System**: 4 typed memories (user/feedback/project/reference), MEMORY.md index, @import syntax, path-scoped rules (`.mimo/rules/*.md`)
@@ -108,6 +108,7 @@ mimo_harness/
 ├── permissions.py    # 6 modes, 4-stage pipeline, protected paths
 ├── settings.py       # 4-level settings hierarchy (managed/user/project/local)
 ├── project_scanner.py # /init: detect language/framework/tools, generate AGENTS.md
+├── security_pipeline.py # 2-layer security: regex + model classifier
 └── tools/
     ├── registry.py   # Tool registration, validation, dispatch, disk spillover
     ├── file_ops.py   # File read/write/edit/glob/grep with output modes
@@ -119,7 +120,10 @@ mimo_harness/
     ├── interactive.py # AskUserQuestion multi-choice tool
     ├── monitor.py    # Background process monitoring
     ├── notebook_tools.py # Jupyter notebook cell editing
-    └── task_tools.py # Task management (create/get/list/update/delete)
+    ├── task_tools.py # Task management (create/get/list/update/delete)
+    ├── plan_tools.py # Plan mode workflow
+    ├── lsp_tools.py  # LSP integration (definition/references/diagnostics)
+    └── scheduler_tools.py # Session-scoped cron scheduling
 ```
 
 ### Agent Loop (Ch2: Dialog Loop)
@@ -256,7 +260,7 @@ pip install -e ".[dev]"
 python -m pytest tests/ -v
 ```
 
-700 tests across 15 test files:
+923 tests across 19 test files:
 
 | Test File | Tests | Coverage |
 |-----------|-------|----------|
@@ -270,11 +274,15 @@ python -m pytest tests/ -v
 | test_logging.py | 11 | TraceLogger init, trace/info/error, tool_call, session_summary, file handler, verbose mode |
 | test_memory.py | 14 | Typed storage, frontmatter, validation |
 | test_tools.py | 100 | File ops, shell, code exec, math, web (mocked HTTP), interactive, monitor, doc tools, background jobs, streaming, compound command parsing, credential scrubbing |
-| test_stress_boundary.py | 146 | Path traversal, SSRF, shell injection, large input, Unicode, permissions, concurrency, math DoS, context compression, memory boundaries, registry edge cases, background jobs, monitors |
+| test_stress_boundary.py | 75 | Path traversal, SSRF, shell injection, large input, Unicode, permissions, concurrency, background jobs, monitors |
 | test_project_scanner.py | 20 | Language/framework detection, AGENTS.md generation |
 | test_settings.py | 20 | 4-level hierarchy, deny rule accumulation, get/get_nested, malformed files |
 | test_notebook_tools.py | 18 | Replace/insert/delete modes, cell ID/index lookup, error cases |
 | test_task_tools.py | 36 | CRUD operations, thread safety, status transitions, deleted task filtering |
+| test_security_pipeline.py | 47 | Regex classifier, model classifier, output sanitization, prompt injection detection |
+| test_lsp_tools.py | 39 | LSP client, definition/references/diagnostics, grep-based fallback |
+| test_plan_tools.py | 19 | Enter/exit plan mode workflow |
+| test_scheduler_tools.py | 51 | Cron parsing, job CRUD, scheduler firing, thread safety |
 
 ## Performance
 
@@ -284,7 +292,7 @@ Benchmark results:
 - Context compaction: 800 messages → 30 in <1ms
 - Concurrent tools: 20 parallel in 3ms
 - Memory: 30 saves in 151ms, index auto-rebuild
-- Full test suite: 700 tests in ~57 seconds
+- Full test suite: 923 tests in ~65 seconds
 
 ## License
 
