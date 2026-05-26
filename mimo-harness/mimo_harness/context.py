@@ -97,10 +97,13 @@ class Session:
         messages = []
         created_at = os.path.getmtime(path)
         with open(path, "r", encoding="utf-8") as f:
-            for line in f:
+            for i, line in enumerate(f, 1):
                 line = line.strip()
                 if line:
-                    messages.append(json.loads(line))
+                    msg = json.loads(line)
+                    if not isinstance(msg, dict) or "role" not in msg:
+                        raise ValueError(f"Line {i} in {os.path.basename(path)} is not a valid message (expected dict with 'role' key)")
+                    messages.append(msg)
         session_id = os.path.splitext(os.path.basename(path))[0]
         return cls(
             session_id=session_id,
@@ -527,7 +530,7 @@ def cleanup_old_sessions(session_dir: str, max_age_days: int = 30) -> int:
     deleted = 0
 
     for filename in os.listdir(session_dir):
-        if not filename.endswith(".jsonl"):
+        if not (filename.endswith(".jsonl") or filename.endswith(".jsonl.corrupt")):
             continue
         filepath = os.path.join(session_dir, filename)
         try:

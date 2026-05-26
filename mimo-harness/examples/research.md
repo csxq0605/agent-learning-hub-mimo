@@ -75,7 +75,7 @@ mimo-harness
 
 ## Research with Memory
 ```
-mimo-harness --name "ml-research"
+mimo-harness --session-id "ml-research"
 
 > 搜索最近的 transformer 架构论文
 # Agent 调用 web_search 搜索
@@ -89,8 +89,8 @@ mimo-harness --name "ml-research"
 
 # --- 下次继续 ---
 
-mimo-harness --resume
-# 选择 "ml-research" 会话继续
+mimo-harness --session-id "ml-research"
+# 按 ID 精确恢复上次的研究会话
 
 > 上次我们研究到哪了？
 # Agent 从上下文和记忆中恢复研究进度

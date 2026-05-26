@@ -15,6 +15,7 @@ Enhanced with:
 
 import argparse
 import os
+import re
 import sys
 import json
 import subprocess
@@ -176,7 +177,21 @@ def _resume_latest_session(session_dir: str):
     try:
         session = Session.from_jsonl(latest)
         return session
-    except Exception as e:
+    except ValueError as e:
+        # Corrupt data — rename to .corrupt so --continue doesn't loop
+        session_id = os.path.splitext(os.path.basename(latest))[0]
+        backup = latest + ".corrupt"
+        try:
+            os.replace(latest, backup)
+            print(f"Warning: session {session_id} was corrupt ({e}), renamed to .corrupt")
+        except OSError:
+            try:
+                os.remove(latest)
+                print(f"Removed corrupt session file {session_id}.jsonl")
+            except OSError:
+                print(f"Warning: corrupt session {session_id} could not be removed")
+        return None
+    except OSError as e:
         print(f"Error loading session: {e}")
         return None
 
@@ -215,6 +230,47 @@ def _pick_session(session_dir: str):
         return None
 
 
+def _validate_session_id(session_id: str):
+    """Validate session_id is safe for use as a filename component. Raises ValueError if not."""
+    if not session_id or not session_id.strip():
+        raise ValueError("Session ID must not be empty")
+    if len(session_id) > 64:
+        raise ValueError("Session ID must be 64 characters or fewer")
+    if not re.fullmatch(r'(?=.*[a-zA-Z0-9])[a-zA-Z0-9_\-]+', session_id):
+        raise ValueError(
+            f"Session ID '{session_id}' contains invalid characters. "
+            "Only alphanumeric, hyphens, and underscores are allowed, and must contain at least one alphanumeric character."
+        )
+
+
+def _resume_by_session_id(session_dir: str, session_id: str):
+    """Try to resume a session by its ID. Returns Session if file exists, None otherwise."""
+    path = os.path.join(session_dir, f"{session_id}.jsonl")
+    if not os.path.isfile(path):
+        return None
+    try:
+        return Session.from_jsonl(path)
+    except ValueError as e:
+        # Corrupt data: json.JSONDecodeError, UnicodeDecodeError, or invalid message format
+        backup = path + ".corrupt"
+        try:
+            os.replace(path, backup)
+            print(f"Warning: session file {session_id}.jsonl was corrupt ({e}), renamed to {os.path.basename(backup)}")
+        except OSError as rename_err:
+            # os.replace failed (e.g. file lock) — try os.remove as fallback to break the loop
+            print(f"Error: session {session_id} was corrupt and could not be backed up: {rename_err}")
+            try:
+                os.remove(path)
+                print(f"Removed corrupt file {session_id}.jsonl to prevent repeated failures.")
+            except OSError:
+                print(f"Warning: corrupt file {session_id}.jsonl could not be removed either.")
+        return None
+    except OSError as e:
+        # Transient I/O error (file lock, permission) — do NOT rename, just report
+        print(f"Error reading session {session_id}.jsonl: {e}")
+        return None
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="MiMo Harness - AI Agent powered by Xiaomi MiMo model"
@@ -239,6 +295,7 @@ def main():
     parser.add_argument("--continue", dest="continue_session", action="store_true", help="Resume the most recent session from session dir")
     parser.add_argument("--resume", action="store_true", help="List sessions and let user pick one to resume")
     parser.add_argument("--name", default=None, help="Name for the current session")
+    parser.add_argument("--session-id", default=None, help="Specify a session ID to resume or create")
     parser.add_argument("--cleanup-days", type=int, default=30, help="Delete sessions older than N days (default: 30)")
     args = parser.parse_args()
 
@@ -333,9 +390,27 @@ def main():
     if spill_cleaned > 0:
         print(f"Cleaned up {spill_cleaned} old output file(s)")
 
-    # A3+C2: Session resume logic
+    # A3+C2: Session resume logic (priority: --session-id > --continue > --resume > new)
     session = None
-    if args.continue_session:
+    if args.session_id is not None:
+        try:
+            _validate_session_id(args.session_id)
+        except ValueError as e:
+            print(f"Error: {e}")
+            sys.exit(1)
+        session = _resume_by_session_id(session_dir, args.session_id)
+        if session is None:
+            session = Session(
+                session_id=args.session_id,
+                auto_save_dir=session_dir,
+                name=args.name or "",
+            )
+        else:
+            session.auto_save_dir = session_dir
+            if args.name:
+                session.name = args.name
+            print(f"Resumed session: {session.session_id} ({len(session.messages)} messages)")
+    elif args.continue_session:
         session = _resume_latest_session(session_dir)
     elif args.resume:
         session = _pick_session(session_dir)
@@ -346,7 +421,7 @@ def main():
             auto_save_dir=session_dir,
             name=args.name or "",
         )
-    else:
+    elif not args.session_id:
         session.auto_save_dir = session_dir
         if args.name:
             session.name = args.name

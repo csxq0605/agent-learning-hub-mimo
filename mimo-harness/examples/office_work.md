@@ -95,4 +95,8 @@ mimo-harness --name "quarterly-report"
 
 mimo-harness --continue
 # 自动恢复上次会话，继续写年报
+
+# 或者用指定 ID 恢复（适合自动化场景）
+mimo-harness --session-id quarterly-report
+# 按 ID 精确恢复，不存在则创建新会话
 ```

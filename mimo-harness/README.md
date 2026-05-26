@@ -11,7 +11,7 @@ A production-grade AI agent harness powered by Xiaomi MiMo model, following Clau
 - **Permission Pipeline**: 6 modes, 4-stage pipeline, protected paths
 - **Context Management**: LLM semantic compression, 200K token window, thrashing protection
 - **Memory System**: 4 types (user/feedback/project/reference), @import, path-scoped rules
-- **Session Management**: Auto-save (JSONL), resume, named sessions, checkpoints
+- **Session Management**: Auto-save (JSONL), resume, named sessions, session ID, checkpoints
 - **Settings Hierarchy**: 4-level config (managed → user → project → local)
 - **Hook System**: 18 lifecycle events, command/function hooks
 - **CLI**: Interactive REPL, pipe input, output formats, `!command`, `/context`
@@ -92,8 +92,47 @@ mimo-harness
 mimo-harness --task "What is 247 * 893?"   # 单次任务
 cat error.log | mimo-harness -p "分析这些错误"  # 管道输入
 mimo-harness --continue                    # 恢复上次会话
+mimo-harness --resume                      # 从列表中选择会话恢复
+mimo-harness --session-id my-project       # 按指定 ID 恢复或创建会话
+mimo-harness --name "weekly-report"        # 命名当前会话
 mimo-harness --auto-approve --effort high  # 自动审批 + 高努力
 ```
+
+### 会话管理
+
+会话自动保存到 `~/.mimo/sessions/`，支持多种恢复方式（优先级从高到低）：
+
+| 参数 | 说明 |
+|------|------|
+| `--session-id <id>` | 按指定 ID 恢复或创建会话（仅允许字母、数字、连字符、下划线，最长 64 字符） |
+| `--continue` | 恢复最近一次会话 |
+| `--resume` | 列出最近 10 个会话，交互式选择 |
+| `--name <name>` | 给当前会话命名 |
+| `--session-dir <dir>` | 自定义会话存储目录（默认 `~/.mimo/sessions/`） |
+| `--cleanup-days <N>` | 自动清理 N 天前的旧会话（默认 30 天） |
+
+损坏的会话文件会自动重命名为 `.jsonl.corrupt`，防止恢复循环。
+
+### 全部 CLI 参数
+
+| 参数 | 说明 |
+|------|------|
+| `--task`, `-t` | 执行单次任务后退出 |
+| `--model`, `-m` | 指定模型名称 |
+| `--auto-approve`, `-y` | 自动审批所有写操作 |
+| `--dry-run` | 干跑模式（只显示不执行） |
+| `--plan` | 计划模式（只读操作） |
+| `--max-steps` | 最大 Agent 步数（默认 20） |
+| `--verbose`, `-v` | 详细输出 |
+| `--log-file` | 日志文件路径 |
+| `--config`, `-c` | 配置文件路径 |
+| `--rules`, `-r` | 权限规则文件路径 |
+| `--stream`, `-s` | 流式输出 LLM 响应 |
+| `--bare` | 裸模式：跳过记忆加载，使用最小系统提示 |
+| `--effort` | 努力级别：low / medium（默认） / high |
+| `--output-format` | 输出格式：text（默认） / json / stream-json |
+| `--append-system-prompt` | 追加到系统提示的额外文本 |
+| `--fallback-model` | 主模型 429/503 时的备用模型 |
 
 ## Architecture
 
@@ -117,7 +156,7 @@ pip install -e ".[dev]"
 python -m pytest tests/ -v
 ```
 
-923 tests across 19 test files. Covers: path traversal, SSRF, shell injection, large input, Unicode, permissions, concurrency, compression, parallel dispatch, streaming, background jobs, CLI, hooks, settings, notebooks, tasks, security pipeline, LSP, plan mode, scheduler.
+950 tests across 19 test files. Covers: path traversal, SSRF, shell injection, large input, Unicode, permissions, concurrency, compression, parallel dispatch, streaming, background jobs, CLI, hooks, settings, notebooks, tasks, security pipeline, LSP, plan mode, scheduler, session ID validation.
 
 ## License
 

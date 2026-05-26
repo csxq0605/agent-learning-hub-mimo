@@ -7,7 +7,8 @@ import sys
 import pytest
 from unittest.mock import patch, MagicMock
 
-from mimo_harness.cli import _format_tokens, _load_config, print_help, _handle_command, _output, _estimate_message_tokens, _list_session_files, _resume_latest_session, _pick_session
+from mimo_harness.cli import _format_tokens, _load_config, print_help, _handle_command, _output, _estimate_message_tokens, _list_session_files, _resume_latest_session, _pick_session, _validate_session_id, _resume_by_session_id
+from mimo_harness.context import Session
 
 
 class TestParseArgs:
@@ -1209,6 +1210,258 @@ class TestContinueAndResumeFlags:
             main()
         captured = capsys.readouterr()
         assert "Resumed session" in captured.out
+
+
+class TestSessionIdFlag:
+    """R2: --session-id flag for deterministic session ID assignment."""
+
+    def test_session_id_flag_creates_new(self, monkeypatch, tmp_path, capsys):
+        monkeypatch.setenv("MIMO_API_KEY", "test-key")
+        monkeypatch.setenv("MIMO_BASE_URL", "http://test.com")
+        monkeypatch.setenv("MIMO_MODEL", "test-model")
+        session_dir = str(tmp_path / "sessions")
+        os.makedirs(session_dir, exist_ok=True)
+
+        monkeypatch.setattr("sys.argv", [
+            "mimo", "--session-dir", session_dir, "--session-id", "abc123"
+        ])
+        with patch("builtins.input", side_effect=["/quit"]):
+            from mimo_harness.cli import main
+            main()
+        captured = capsys.readouterr()
+        assert "Bye!" in captured.out
+        assert os.path.isdir(session_dir)
+        # Verify no "Resumed session" message (it's a new session, not a resume)
+        assert "Resumed session" not in captured.out
+
+    def test_session_id_flag_resumes_existing(self, monkeypatch, tmp_path, capsys):
+        monkeypatch.setenv("MIMO_API_KEY", "test-key")
+        monkeypatch.setenv("MIMO_BASE_URL", "http://test.com")
+        monkeypatch.setenv("MIMO_MODEL", "test-model")
+        session_dir = str(tmp_path / "sessions")
+        os.makedirs(session_dir, exist_ok=True)
+        # Pre-create a session file with messages
+        session_file = os.path.join(session_dir, "my-session.jsonl")
+        with open(session_file, "w", encoding="utf-8") as f:
+            f.write(json.dumps({"role": "user", "content": "hello"}) + "\n")
+            f.write(json.dumps({"role": "assistant", "content": "hi there"}) + "\n")
+
+        monkeypatch.setattr("sys.argv", [
+            "mimo", "--session-dir", session_dir, "--session-id", "my-session"
+        ])
+        with patch("builtins.input", side_effect=["/quit"]):
+            from mimo_harness.cli import main
+            main()
+        captured = capsys.readouterr()
+        assert "Resumed session: my-session" in captured.out
+        assert "2 messages" in captured.out
+
+    def test_session_id_flag_with_name(self, monkeypatch, tmp_path, capsys):
+        monkeypatch.setenv("MIMO_API_KEY", "test-key")
+        monkeypatch.setenv("MIMO_BASE_URL", "http://test.com")
+        monkeypatch.setenv("MIMO_MODEL", "test-model")
+        session_dir = str(tmp_path / "sessions")
+        os.makedirs(session_dir, exist_ok=True)
+
+        monkeypatch.setattr("sys.argv", [
+            "mimo", "--session-dir", session_dir, "--session-id", "named-id", "--name", "mysession"
+        ])
+        created_sessions = []
+        real_Session = Session
+        def spy_Session(*args, **kwargs):
+            s = real_Session(*args, **kwargs)
+            created_sessions.append(s)
+            return s
+        with patch("builtins.input", side_effect=["/quit"]), \
+             patch("mimo_harness.cli.Session", side_effect=spy_Session):
+            from mimo_harness.cli import main
+            main()
+        captured = capsys.readouterr()
+        assert "Bye!" in captured.out
+        assert os.path.isdir(session_dir)
+        # Verify the session was created with the specified name
+        assert len(created_sessions) == 1
+        assert created_sessions[0].name == "mysession"
+        assert created_sessions[0].session_id == "named-id"
+
+    def test_session_id_priority_over_continue(self, monkeypatch, tmp_path, capsys):
+        monkeypatch.setenv("MIMO_API_KEY", "test-key")
+        monkeypatch.setenv("MIMO_BASE_URL", "http://test.com")
+        monkeypatch.setenv("MIMO_MODEL", "test-model")
+        session_dir = str(tmp_path / "sessions")
+        os.makedirs(session_dir, exist_ok=True)
+        # Pre-create a session file with messages for --session-id
+        specific_file = os.path.join(session_dir, "specific-id.jsonl")
+        with open(specific_file, "w", encoding="utf-8") as f:
+            f.write(json.dumps({"role": "user", "content": "specific msg"}) + "\n")
+        # Pre-create another session file (the "latest" one for --continue)
+        other_file = os.path.join(session_dir, "other-session.jsonl")
+        with open(other_file, "w", encoding="utf-8") as f:
+            f.write(json.dumps({"role": "user", "content": "old msg"}) + "\n")
+
+        monkeypatch.setattr("sys.argv", [
+            "mimo", "--session-dir", session_dir, "--session-id", "specific-id", "--continue"
+        ])
+        with patch("builtins.input", side_effect=["/quit"]):
+            from mimo_harness.cli import main
+            main()
+        captured = capsys.readouterr()
+        # --session-id should win: resumed the specific-id session, not other-session
+        assert "Resumed session: specific-id" in captured.out
+
+    def test_session_id_rejects_empty(self, monkeypatch, tmp_path, capsys):
+        monkeypatch.setenv("MIMO_API_KEY", "test-key")
+        monkeypatch.setenv("MIMO_BASE_URL", "http://test.com")
+        monkeypatch.setenv("MIMO_MODEL", "test-model")
+        session_dir = str(tmp_path / "sessions")
+        os.makedirs(session_dir, exist_ok=True)
+
+        monkeypatch.setattr("sys.argv", [
+            "mimo", "--session-dir", session_dir, "--session-id", ""
+        ])
+        with pytest.raises(SystemExit) as exc_info:
+            from mimo_harness.cli import main
+            main()
+        assert exc_info.value.code == 1
+        captured = capsys.readouterr()
+        assert "must not be empty" in captured.out
+
+    def test_session_id_rejects_path_traversal(self, monkeypatch, tmp_path, capsys):
+        monkeypatch.setenv("MIMO_API_KEY", "test-key")
+        monkeypatch.setenv("MIMO_BASE_URL", "http://test.com")
+        monkeypatch.setenv("MIMO_MODEL", "test-model")
+        session_dir = str(tmp_path / "sessions")
+        os.makedirs(session_dir, exist_ok=True)
+
+        monkeypatch.setattr("sys.argv", [
+            "mimo", "--session-dir", session_dir, "--session-id", "../../evil"
+        ])
+        with pytest.raises(SystemExit) as exc_info:
+            from mimo_harness.cli import main
+            main()
+        assert exc_info.value.code == 1
+        captured = capsys.readouterr()
+        assert "invalid characters" in captured.out
+        # Verify no file was created outside session_dir
+        assert not os.path.exists(tmp_path / "sessions" / ".." / ".." / "evil.jsonl")
+
+
+class TestValidateSessionId:
+    """Unit tests for _validate_session_id."""
+
+    def test_valid_ids(self):
+        _validate_session_id("abc123")
+        _validate_session_id("my-session")
+        _validate_session_id("session_1")
+        _validate_session_id("a")
+        _validate_session_id("a-b-c")
+
+    def test_empty_string_raises(self):
+        with pytest.raises(ValueError, match="must not be empty"):
+            _validate_session_id("")
+
+    def test_whitespace_only_raises(self):
+        with pytest.raises(ValueError, match="must not be empty"):
+            _validate_session_id("   ")
+
+    def test_too_long_raises(self):
+        with pytest.raises(ValueError, match="64 characters or fewer"):
+            _validate_session_id("a" * 65)
+
+    def test_max_length_ok(self):
+        _validate_session_id("a" * 64)
+
+    def test_symbolic_only_raises(self):
+        with pytest.raises(ValueError, match="invalid characters"):
+            _validate_session_id("---")
+
+    def test_underscore_only_raises(self):
+        with pytest.raises(ValueError, match="invalid characters"):
+            _validate_session_id("___")
+
+    def test_path_traversal_raises(self):
+        with pytest.raises(ValueError, match="invalid characters"):
+            _validate_session_id("../../etc/passwd")
+
+    def test_slash_raises(self):
+        with pytest.raises(ValueError, match="invalid characters"):
+            _validate_session_id("foo/bar")
+
+    def test_backslash_raises(self):
+        with pytest.raises(ValueError, match="invalid characters"):
+            _validate_session_id("foo\\bar")
+
+    def test_dotdot_raises(self):
+        with pytest.raises(ValueError, match="invalid characters"):
+            _validate_session_id("..")
+
+
+class TestResumeBySessionId:
+    """Unit tests for _resume_by_session_id."""
+
+    def test_returns_none_for_missing_file(self, tmp_path):
+        result = _resume_by_session_id(str(tmp_path), "nonexistent")
+        assert result is None
+
+    def test_returns_session_for_existing_file(self, tmp_path):
+        session_file = tmp_path / "abc.jsonl"
+        session_file.write_text(json.dumps({"role": "user", "content": "hi"}) + "\n", encoding="utf-8")
+        result = _resume_by_session_id(str(tmp_path), "abc")
+        assert result is not None
+        assert result.session_id == "abc"
+        assert len(result.messages) == 1
+        assert result.messages[0]["role"] == "user"
+        assert result.messages[0]["content"] == "hi"
+
+    def test_corrupt_file_renamed_and_returns_none(self, tmp_path):
+        session_file = tmp_path / "bad.jsonl"
+        session_file.write_text("not valid json\n", encoding="utf-8")
+        result = _resume_by_session_id(str(tmp_path), "bad")
+        assert result is None
+        assert not (tmp_path / "bad.jsonl").exists()
+        assert (tmp_path / "bad.jsonl.corrupt").exists()
+
+    def test_corrupt_file_overwrites_existing_corrupt_backup(self, tmp_path):
+        """os.replace overwrites existing .corrupt backup, preventing infinite loop."""
+        session_file = tmp_path / "loop.jsonl"
+        session_file.write_text("bad data\n", encoding="utf-8")
+        # Pre-create a .corrupt backup from a prior run
+        (tmp_path / "loop.jsonl.corrupt").write_text("old corrupt\n", encoding="utf-8")
+        result = _resume_by_session_id(str(tmp_path), "loop")
+        assert result is None
+        # The new corrupt file should have overwritten the old backup
+        assert not (tmp_path / "loop.jsonl").exists()
+        assert (tmp_path / "loop.jsonl.corrupt").exists()
+        assert (tmp_path / "loop.jsonl.corrupt").read_text(encoding="utf-8") == "bad data\n"
+
+    def test_unicode_error_handled_gracefully(self, tmp_path):
+        """Invalid UTF-8 bytes should be caught, not crash."""
+        session_file = tmp_path / "unicode.jsonl"
+        session_file.write_bytes(b'\x80\x81\x82\n')
+        result = _resume_by_session_id(str(tmp_path), "unicode")
+        assert result is None
+        assert not (tmp_path / "unicode.jsonl").exists()
+
+    def test_transient_oserror_does_not_rename(self, tmp_path):
+        """Transient OSError (e.g. file lock) should NOT rename the file to .corrupt."""
+        session_file = tmp_path / "locked.jsonl"
+        session_file.write_text(json.dumps({"role": "user", "content": "hi"}) + "\n", encoding="utf-8")
+        # Mock from_jsonl to raise OSError (simulating file lock)
+        with patch("mimo_harness.cli.Session.from_jsonl", side_effect=OSError("Permission denied")):
+            result = _resume_by_session_id(str(tmp_path), "locked")
+        assert result is None
+        # File should NOT be renamed — it's a transient error, not corruption
+        assert session_file.exists()
+        assert not (tmp_path / "locked.jsonl.corrupt").exists()
+
+    def test_non_dict_json_raises_value_error(self, tmp_path):
+        """Valid JSON that is not a message dict should be treated as corrupt."""
+        session_file = tmp_path / "baddict.jsonl"
+        session_file.write_text("null\n", encoding="utf-8")
+        result = _resume_by_session_id(str(tmp_path), "baddict")
+        assert result is None
+        assert not (tmp_path / "baddict.jsonl").exists()
+        assert (tmp_path / "baddict.jsonl.corrupt").exists()
 
 
 class TestHandleCommandContext:

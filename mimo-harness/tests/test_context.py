@@ -1076,6 +1076,29 @@ class TestSessionFromJsonl:
         session = Session.from_jsonl(str(jsonl_file))
         assert session.messages[0]["tool_calls"][0]["id"] == "tc1"
 
+    def test_from_jsonl_with_custom_session_id(self, tmp_path):
+        """Verify from_jsonl correctly extracts session ID from filename."""
+        jsonl_file = tmp_path / "my-custom-id.jsonl"
+        msg = {"role": "user", "content": "hello"}
+        jsonl_file.write_text(json.dumps(msg) + "\n", encoding="utf-8")
+        session = Session.from_jsonl(str(jsonl_file))
+        assert session.session_id == "my-custom-id"
+        assert len(session.messages) == 1
+
+    def test_from_jsonl_rejects_non_dict_message(self, tmp_path):
+        """Valid JSON that is not a message dict should raise ValueError."""
+        jsonl_file = tmp_path / "bad.jsonl"
+        jsonl_file.write_text("null\n", encoding="utf-8")
+        with pytest.raises(ValueError, match="not a valid message"):
+            Session.from_jsonl(str(jsonl_file))
+
+    def test_from_jsonl_rejects_dict_without_role(self, tmp_path):
+        """A dict without 'role' key should raise ValueError."""
+        jsonl_file = tmp_path / "bad.jsonl"
+        jsonl_file.write_text(json.dumps({"content": "hello"}) + "\n", encoding="utf-8")
+        with pytest.raises(ValueError, match="not a valid message"):
+            Session.from_jsonl(str(jsonl_file))
+
 
 class TestCheckpointManagerBatch:
     """R2: CheckpointManager batch operations (begin_batch, snapshot_to_batch, end_batch)."""
