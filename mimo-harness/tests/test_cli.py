@@ -1395,6 +1395,19 @@ class TestValidateSessionId:
         with pytest.raises(ValueError, match="invalid characters"):
             _validate_session_id("..")
 
+    def test_leading_trailing_whitespace_stripped(self):
+        """Whitespace should be silently stripped before validation."""
+        assert _validate_session_id("  my-session  ") == "my-session"
+        assert _validate_session_id("\tsession-1\t") == "session-1"
+
+    def test_whitespace_stripping_preserves_length_check(self):
+        """After stripping, the 64-char limit should apply to the stripped value."""
+        # 65 chars with surrounding spaces — stripped to 63, should pass
+        _validate_session_id("  " + "a" * 63 + "  ")
+        # 65 chars stripped to 65 — should fail
+        with pytest.raises(ValueError, match="64 characters or fewer"):
+            _validate_session_id("  " + "a" * 65 + "  ")
+
 
 class TestResumeBySessionId:
     """Unit tests for _resume_by_session_id."""
@@ -1462,6 +1475,121 @@ class TestResumeBySessionId:
         assert result is None
         assert not (tmp_path / "baddict.jsonl").exists()
         assert (tmp_path / "baddict.jsonl.corrupt").exists()
+
+    def test_both_rename_and_remove_fail_truncates_file(self, tmp_path):
+        """When os.replace and os.remove both fail, the file should be truncated to prevent cascade data loss."""
+        session_file = tmp_path / "stuck.jsonl"
+        session_file.write_text("bad data\n", encoding="utf-8")
+        with patch("mimo_harness.cli.os.replace", side_effect=OSError("lock")), \
+             patch("mimo_harness.cli.os.remove", side_effect=OSError("lock")):
+            result = _resume_by_session_id(str(tmp_path), "stuck")
+        assert result is None
+        # File should still exist (rename and remove both failed)
+        assert session_file.exists()
+        # But it should be empty (truncated) — preventing cascade data loss
+        assert session_file.read_text(encoding="utf-8") == ""
+
+    def test_partial_corruption_below_threshold_warns(self, tmp_path, capsys):
+        """A few skipped lines (below 30%) should warn but still return the session."""
+        session_file = tmp_path / "partial.jsonl"
+        lines = [
+            json.dumps({"role": "user", "content": "hello"}) + "\n",
+            json.dumps({"role": "assistant", "content": "hi"}) + "\n",
+            json.dumps({"role": "user", "content": "bye"}) + "\n",
+            json.dumps({"role": "assistant", "content": "cya"}) + "\n",
+            json.dumps({"role": "user", "content": "extra"}) + "\n",
+            "not valid json\n",  # 1 out of 6 = 17% — below 30% threshold
+        ]
+        session_file.write_text("".join(lines), encoding="utf-8")
+        result = _resume_by_session_id(str(tmp_path), "partial")
+        assert result is not None
+        assert len(result.messages) == 5
+        captured = capsys.readouterr()
+        assert "1 invalid line(s) skipped" in captured.out
+
+    def test_partial_corruption_above_threshold_renames(self, tmp_path, capsys):
+        """Skipped lines above 30% threshold should trigger corrupt-file rename."""
+        session_file = tmp_path / "mostly-bad.jsonl"
+        lines = [
+            json.dumps({"role": "user", "content": "hello"}) + "\n",
+            json.dumps({"role": "assistant", "content": "hi"}) + "\n",
+            "bad1\n",  # 3 invalid out of 5 = 60% — above 30% threshold
+            "bad2\n",
+            "bad3\n",
+        ]
+        session_file.write_text("".join(lines), encoding="utf-8")
+        result = _resume_by_session_id(str(tmp_path), "mostly-bad")
+        assert result is None
+        assert not session_file.exists()
+        assert (tmp_path / "mostly-bad.jsonl.corrupt").exists()
+        captured = capsys.readouterr()
+        assert "corrupt" in captured.out.lower()
+
+
+class TestPickSessionRecovery:
+    """Tests for _pick_session corrupt-file recovery."""
+
+    def test_pick_session_renames_corrupt_file(self, tmp_path, monkeypatch, capsys):
+        """Corrupt session selected via --resume should be renamed to .corrupt."""
+        session_dir = str(tmp_path / "sessions")
+        os.makedirs(session_dir, exist_ok=True)
+        # Create a valid session file first (older)
+        valid_file = os.path.join(session_dir, "good-session.jsonl")
+        with open(valid_file, "w", encoding="utf-8") as f:
+            f.write(json.dumps({"role": "user", "content": "hi"}) + "\n")
+        # Create a corrupt session file after (newer, so it appears first in list)
+        corrupt_file = os.path.join(session_dir, "bad-session.jsonl")
+        with open(corrupt_file, "w", encoding="utf-8") as f:
+            f.write("not valid json\n")
+
+        # Mock input to pick the first session (the corrupt one, newest)
+        with patch("builtins.input", return_value="1"):
+            result = _pick_session(session_dir)
+        assert result is None
+        # Corrupt file should be renamed
+        assert not os.path.exists(corrupt_file)
+        assert os.path.exists(corrupt_file + ".corrupt")
+        captured = capsys.readouterr()
+        assert "corrupt" in captured.out.lower()
+
+    def test_pick_session_handles_oserror(self, tmp_path, monkeypatch, capsys):
+        """OSError from from_jsonl (e.g. file lock) should be caught, not crash."""
+        session_dir = str(tmp_path / "sessions")
+        os.makedirs(session_dir, exist_ok=True)
+        session_file = os.path.join(session_dir, "locked.jsonl")
+        with open(session_file, "w", encoding="utf-8") as f:
+            f.write(json.dumps({"role": "user", "content": "hi"}) + "\n")
+
+        with patch("builtins.input", return_value="1"), \
+             patch("mimo_harness.cli.Session.from_jsonl", side_effect=OSError("Permission denied")):
+            result = _pick_session(session_dir)
+        assert result is None
+        # File should NOT be renamed (transient error, not corruption)
+        assert os.path.exists(session_file)
+        captured = capsys.readouterr()
+        assert "Error" in captured.out
+
+    def test_pick_session_partial_corruption_above_threshold(self, tmp_path, monkeypatch, capsys):
+        """Partially corrupt session (>30% invalid) should be renamed to .corrupt."""
+        session_dir = str(tmp_path / "sessions")
+        os.makedirs(session_dir, exist_ok=True)
+        session_file = os.path.join(session_dir, "mostly-bad.jsonl")
+        lines = [
+            json.dumps({"role": "user", "content": "hello"}) + "\n",
+            "bad1\n",
+            "bad2\n",
+            "bad3\n",
+        ]
+        with open(session_file, "w", encoding="utf-8") as f:
+            f.write("".join(lines))
+
+        with patch("builtins.input", return_value="1"):
+            result = _pick_session(session_dir)
+        assert result is None
+        assert not os.path.exists(session_file)
+        assert os.path.exists(session_file + ".corrupt")
+        captured = capsys.readouterr()
+        assert "corrupt" in captured.out.lower()
 
 
 class TestHandleCommandContext:

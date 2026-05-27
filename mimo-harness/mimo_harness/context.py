@@ -16,7 +16,7 @@ import time
 import shutil
 import platform
 from dataclasses import dataclass, field
-from typing import Optional, Any
+from typing import Optional, Any, NamedTuple
 
 
 # ---------------------------------------------------------------------------
@@ -38,6 +38,17 @@ COMPRESS_TRIGGER_TOKENS = int(CONTEXT_WINDOW_TOKENS * COMPRESS_TRIGGER_RATIO)
 # ---------------------------------------------------------------------------
 # Session dataclass
 # ---------------------------------------------------------------------------
+
+class LoadResult(NamedTuple):
+    """Return type for Session.from_jsonl — carries the loaded session and
+    the number of invalid lines that were skipped during loading."""
+    session: "Session"
+    skipped: int
+
+# Corruption threshold: if more than this fraction of lines are invalid,
+# treat the file as corrupt and trigger rename-to-corrupt safeguard.
+_CORRUPT_THRESHOLD = 0.3
+
 @dataclass
 class Session:
     session_id: str
@@ -92,24 +103,45 @@ class Session:
         )
 
     @classmethod
-    def from_jsonl(cls, path: str) -> "Session":
-        """Reconstruct a Session from a JSONL file (one message per line)."""
+    def from_jsonl(cls, path: str) -> "LoadResult":
+        """Reconstruct a Session from a JSONL file (one message per line).
+
+        Skips invalid lines (non-dict, missing 'role', malformed JSON) rather
+        than raising, so that valid messages before a corrupt trailing line are
+        preserved. A ValueError is raised only if NO valid messages are found.
+
+        Returns a LoadResult(session, skipped) where skipped is the count of
+        invalid lines that were silently dropped.
+        """
         messages = []
+        skipped = 0
         created_at = os.path.getmtime(path)
         with open(path, "r", encoding="utf-8") as f:
             for i, line in enumerate(f, 1):
                 line = line.strip()
-                if line:
+                if not line:
+                    continue
+                try:
                     msg = json.loads(line)
-                    if not isinstance(msg, dict) or "role" not in msg:
-                        raise ValueError(f"Line {i} in {os.path.basename(path)} is not a valid message (expected dict with 'role' key)")
-                    messages.append(msg)
+                except json.JSONDecodeError:
+                    skipped += 1
+                    continue
+                if not isinstance(msg, dict) or "role" not in msg:
+                    skipped += 1
+                    continue
+                messages.append(msg)
+        if not messages and skipped > 0:
+            raise ValueError(
+                f"No valid messages found in {os.path.basename(path)} "
+                f"({skipped} invalid line(s))"
+            )
         session_id = os.path.splitext(os.path.basename(path))[0]
-        return cls(
+        session = cls(
             session_id=session_id,
             messages=messages,
             created_at=created_at,
         )
+        return LoadResult(session=session, skipped=skipped)
 
 
 # ---------------------------------------------------------------------------

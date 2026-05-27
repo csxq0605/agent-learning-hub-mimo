@@ -129,7 +129,7 @@ def test_6_session_persistence():
 
         s.auto_save_dir = tmp
         s.add_message("user", "Follow up")
-        loaded_jsonl = Session.from_jsonl(os.path.join(tmp, "test-123.jsonl"))
+        loaded_jsonl, _ = Session.from_jsonl(os.path.join(tmp, "test-123.jsonl"))
         assert len(loaded_jsonl.messages) >= 1
         print("  [PASS] Session save/load/JSONL persistence OK")
     finally:

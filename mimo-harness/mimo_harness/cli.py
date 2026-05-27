@@ -23,7 +23,7 @@ import time
 from .agent import MiMoHarness
 from .config import MIMO_API_KEY, MIMO_MODEL
 from .permissions import PermissionRule
-from .context import Session, CheckpointManager, estimate_tokens, compact_context, cleanup_old_sessions, cleanup_old_spill_files, CONTEXT_WINDOW_TOKENS
+from .context import Session, CheckpointManager, estimate_tokens, compact_context, cleanup_old_sessions, cleanup_old_spill_files, CONTEXT_WINDOW_TOKENS, LoadResult, _CORRUPT_THRESHOLD
 from .memory import MemoryStore
 
 
@@ -174,12 +174,31 @@ def _resume_latest_session(session_dir: str):
         print("No sessions found to resume.")
         return None
     latest = files[0]
+    session_id = os.path.splitext(os.path.basename(latest))[0]
     try:
-        session = Session.from_jsonl(latest)
+        result = Session.from_jsonl(latest)
+        session, skipped = result.session, result.skipped
+        if skipped > 0:
+            total = len(session.messages) + skipped
+            pct = skipped / total if total else 0
+            if pct > _CORRUPT_THRESHOLD:
+                print(f"Warning: session {session_id} has {skipped}/{total} invalid lines ({pct:.0%} corrupt)")
+                backup = latest + ".corrupt"
+                try:
+                    os.replace(latest, backup)
+                    print(f"Renamed to {session_id}.jsonl.corrupt")
+                except OSError:
+                    try:
+                        os.remove(latest)
+                        print(f"Removed corrupt session file {session_id}.jsonl")
+                    except OSError:
+                        print(f"Warning: corrupt session {session_id} could not be removed")
+                return None
+            else:
+                print(f"Warning: {skipped} invalid line(s) skipped in session {session_id}")
         return session
     except ValueError as e:
         # Corrupt data — rename to .corrupt so --continue doesn't loop
-        session_id = os.path.splitext(os.path.basename(latest))[0]
         backup = latest + ".corrupt"
         try:
             os.replace(latest, backup)
@@ -208,13 +227,13 @@ def _pick_session(session_dir: str):
         import datetime
         dt = datetime.datetime.fromtimestamp(mtime)
         name = os.path.splitext(os.path.basename(f))[0]
-        # Count messages
+        # Count non-empty lines as approximate message count
         try:
             with open(f, "r", encoding="utf-8") as fh:
-                msg_count = sum(1 for _ in fh)
+                msg_count = sum(1 for line in fh if line.strip())
         except Exception:
             msg_count = "?"
-        print(f"  [{i+1}] {name} ({msg_count} msgs, {dt.strftime('%Y-%m-%d %H:%M')})")
+        print(f"  [{i+1}] {name} (~{msg_count} msgs, {dt.strftime('%Y-%m-%d %H:%M')})")
     print()
     try:
         choice = input("Pick a session number (or Enter to cancel): ").strip()
@@ -222,7 +241,46 @@ def _pick_session(session_dir: str):
             return None
         idx = int(choice) - 1
         if 0 <= idx < len(files):
-            return Session.from_jsonl(files[idx])
+            session_name = os.path.splitext(os.path.basename(files[idx]))[0]
+            try:
+                result = Session.from_jsonl(files[idx])
+                session, skipped = result.session, result.skipped
+                if skipped > 0:
+                    total = len(session.messages) + skipped
+                    pct = skipped / total if total else 0
+                    if pct > _CORRUPT_THRESHOLD:
+                        print(f"Warning: session {session_name} has {skipped}/{total} invalid lines ({pct:.0%} corrupt)")
+                        backup = files[idx] + ".corrupt"
+                        try:
+                            os.replace(files[idx], backup)
+                            print(f"Renamed to {session_name}.jsonl.corrupt")
+                        except OSError:
+                            try:
+                                os.remove(files[idx])
+                                print(f"Removed corrupt session file {session_name}.jsonl")
+                            except OSError:
+                                print(f"Warning: corrupt session {session_name} could not be removed")
+                        return None
+                    else:
+                        print(f"Warning: {skipped} invalid line(s) skipped in session {session_name}")
+                return session
+            except ValueError as e:
+                # Totally corrupt — no valid messages at all
+                backup = files[idx] + ".corrupt"
+                print(f"Warning: session {session_name} was corrupt ({e})")
+                try:
+                    os.replace(files[idx], backup)
+                    print(f"Renamed to {session_name}.jsonl.corrupt")
+                except OSError:
+                    try:
+                        os.remove(files[idx])
+                        print(f"Removed corrupt session file {session_name}.jsonl")
+                    except OSError:
+                        print(f"Warning: corrupt session {session_name} could not be removed")
+                return None
+            except OSError as e:
+                print(f"Error reading session {session_name}: {e}")
+                return None
         else:
             print("Invalid selection.")
             return None
@@ -230,17 +288,22 @@ def _pick_session(session_dir: str):
         return None
 
 
-def _validate_session_id(session_id: str):
-    """Validate session_id is safe for use as a filename component. Raises ValueError if not."""
-    if not session_id or not session_id.strip():
+def _validate_session_id(session_id: str) -> str:
+    """Validate session_id is safe for use as a filename component.
+
+    Returns the stripped session_id. Raises ValueError if not valid.
+    """
+    session_id = session_id.strip()
+    if not session_id:
         raise ValueError("Session ID must not be empty")
     if len(session_id) > 64:
         raise ValueError("Session ID must be 64 characters or fewer")
-    if not re.fullmatch(r'(?=.*[a-zA-Z0-9])[a-zA-Z0-9_\-]+', session_id):
+    if not re.fullmatch(r'(?=.*[a-zA-Z0-9])[a-zA-Z0-9_-]+', session_id):
         raise ValueError(
-            f"Session ID '{session_id}' contains invalid characters. "
+            f"Session ID {session_id!r} contains invalid characters. "
             "Only alphanumeric, hyphens, and underscores are allowed, and must contain at least one alphanumeric character."
         )
+    return session_id
 
 
 def _resume_by_session_id(session_dir: str, session_id: str):
@@ -249,7 +312,32 @@ def _resume_by_session_id(session_dir: str, session_id: str):
     if not os.path.isfile(path):
         return None
     try:
-        return Session.from_jsonl(path)
+        result = Session.from_jsonl(path)
+        session, skipped = result.session, result.skipped
+        if skipped > 0:
+            total = len(session.messages) + skipped
+            pct = skipped / total if total else 0
+            if pct > _CORRUPT_THRESHOLD:
+                print(f"Warning: session {session_id} has {skipped}/{total} invalid lines ({pct:.0%} corrupt)")
+                backup = path + ".corrupt"
+                try:
+                    os.replace(path, backup)
+                    print(f"Renamed to {session_id}.jsonl.corrupt")
+                except OSError:
+                    try:
+                        os.remove(path)
+                        print(f"Removed corrupt file {session_id}.jsonl")
+                    except OSError:
+                        print(f"Warning: corrupt file {session_id}.jsonl could not be removed, truncating instead")
+                        try:
+                            with open(path, "w", encoding="utf-8"):
+                                pass
+                        except OSError:
+                            print(f"Warning: could not truncate {session_id}.jsonl either")
+                return None
+            else:
+                print(f"Warning: {skipped} invalid line(s) skipped in session {session_id}")
+        return session
     except ValueError as e:
         # Corrupt data: json.JSONDecodeError, UnicodeDecodeError, or invalid message format
         backup = path + ".corrupt"
@@ -263,7 +351,15 @@ def _resume_by_session_id(session_dir: str, session_id: str):
                 os.remove(path)
                 print(f"Removed corrupt file {session_id}.jsonl to prevent repeated failures.")
             except OSError:
-                print(f"Warning: corrupt file {session_id}.jsonl could not be removed either.")
+                # Both rename and remove failed — truncate the file so auto_save
+                # doesn't append valid messages after corrupt data, which would
+                # cause them to be lost on the next load.
+                print(f"Warning: corrupt file {session_id}.jsonl could not be removed, truncating instead")
+                try:
+                    with open(path, "w", encoding="utf-8"):
+                        pass
+                except OSError:
+                    print(f"Warning: could not truncate {session_id}.jsonl either")
         return None
     except OSError as e:
         # Transient I/O error (file lock, permission) — do NOT rename, just report
@@ -394,7 +490,7 @@ def main():
     session = None
     if args.session_id is not None:
         try:
-            _validate_session_id(args.session_id)
+            args.session_id = _validate_session_id(args.session_id)
         except ValueError as e:
             print(f"Error: {e}")
             sys.exit(1)

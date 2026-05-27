@@ -820,6 +820,27 @@ class TestCleanupOldSessions:
         deleted = cleanup_old_sessions(str(tmp_path / "nonexistent"), max_age_days=30)
         assert deleted == 0
 
+    def test_deletes_old_corrupt_files(self, tmp_path):
+        """Old .jsonl.corrupt files should also be cleaned up."""
+        import time
+        old_corrupt = tmp_path / "old_session.jsonl.corrupt"
+        old_corrupt.write_text("bad data\n")
+        old_time = time.time() - (60 * 86400)
+        os.utime(str(old_corrupt), (old_time, old_time))
+
+        deleted = cleanup_old_sessions(str(tmp_path), max_age_days=30)
+        assert deleted == 1
+        assert not old_corrupt.exists()
+
+    def test_keeps_recent_corrupt_files(self, tmp_path):
+        """Recent .jsonl.corrupt files should not be deleted."""
+        recent_corrupt = tmp_path / "recent.jsonl.corrupt"
+        recent_corrupt.write_text("bad data\n")
+
+        deleted = cleanup_old_sessions(str(tmp_path), max_age_days=30)
+        assert deleted == 0
+        assert recent_corrupt.exists()
+
 
 class TestCleanupOldSpillFiles:
     """Tests for spill file auto-cleanup."""
@@ -1019,19 +1040,21 @@ class TestSessionFromJsonl:
         ]
         jsonl_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
-        session = Session.from_jsonl(str(jsonl_file))
+        session, skipped = Session.from_jsonl(str(jsonl_file))
         assert session.session_id == "abc123"
         assert len(session.messages) == 2
         assert session.messages[0]["role"] == "user"
         assert session.messages[1]["role"] == "assistant"
+        assert skipped == 0
 
     def test_from_jsonl_empty_file(self, tmp_path):
         jsonl_file = tmp_path / "empty.jsonl"
         jsonl_file.write_text("", encoding="utf-8")
 
-        session = Session.from_jsonl(str(jsonl_file))
+        session, skipped = Session.from_jsonl(str(jsonl_file))
         assert session.session_id == "empty"
         assert len(session.messages) == 0
+        assert skipped == 0
 
     def test_from_jsonl_session_id_from_filename(self, tmp_path):
         jsonl_file = tmp_path / "my-session-id.jsonl"
@@ -1039,7 +1062,7 @@ class TestSessionFromJsonl:
             json.dumps({"role": "user", "content": "test"}) + "\n",
             encoding="utf-8",
         )
-        session = Session.from_jsonl(str(jsonl_file))
+        session, _ = Session.from_jsonl(str(jsonl_file))
         assert session.session_id == "my-session-id"
 
     def test_from_jsonl_skips_blank_lines(self, tmp_path):
@@ -1050,8 +1073,9 @@ class TestSessionFromJsonl:
             + json.dumps({"role": "assistant", "content": "msg2"}) + "\n"
         )
         jsonl_file.write_text(content, encoding="utf-8")
-        session = Session.from_jsonl(str(jsonl_file))
+        session, skipped = Session.from_jsonl(str(jsonl_file))
         assert len(session.messages) == 2
+        assert skipped == 0
 
     def test_from_jsonl_preserves_created_at(self, tmp_path):
         import os
@@ -1060,7 +1084,7 @@ class TestSessionFromJsonl:
             json.dumps({"role": "user", "content": "test"}) + "\n",
             encoding="utf-8",
         )
-        session = Session.from_jsonl(str(jsonl_file))
+        session, _ = Session.from_jsonl(str(jsonl_file))
         # created_at should be close to the file's mtime
         mtime = os.path.getmtime(str(jsonl_file))
         assert abs(session.created_at - mtime) < 1.0
@@ -1073,7 +1097,7 @@ class TestSessionFromJsonl:
             "tool_calls": [{"id": "tc1", "function": {"name": "read_file", "arguments": "{}"}}],
         }
         jsonl_file.write_text(json.dumps(msg) + "\n", encoding="utf-8")
-        session = Session.from_jsonl(str(jsonl_file))
+        session, _ = Session.from_jsonl(str(jsonl_file))
         assert session.messages[0]["tool_calls"][0]["id"] == "tc1"
 
     def test_from_jsonl_with_custom_session_id(self, tmp_path):
@@ -1081,23 +1105,41 @@ class TestSessionFromJsonl:
         jsonl_file = tmp_path / "my-custom-id.jsonl"
         msg = {"role": "user", "content": "hello"}
         jsonl_file.write_text(json.dumps(msg) + "\n", encoding="utf-8")
-        session = Session.from_jsonl(str(jsonl_file))
+        session, _ = Session.from_jsonl(str(jsonl_file))
         assert session.session_id == "my-custom-id"
         assert len(session.messages) == 1
 
     def test_from_jsonl_rejects_non_dict_message(self, tmp_path):
-        """Valid JSON that is not a message dict should raise ValueError."""
+        """A file with only non-dict JSON should raise ValueError (no valid messages)."""
         jsonl_file = tmp_path / "bad.jsonl"
         jsonl_file.write_text("null\n", encoding="utf-8")
-        with pytest.raises(ValueError, match="not a valid message"):
+        with pytest.raises(ValueError, match="No valid messages found"):
             Session.from_jsonl(str(jsonl_file))
 
     def test_from_jsonl_rejects_dict_without_role(self, tmp_path):
-        """A dict without 'role' key should raise ValueError."""
+        """A file with only dicts missing 'role' should raise ValueError (no valid messages)."""
         jsonl_file = tmp_path / "bad.jsonl"
         jsonl_file.write_text(json.dumps({"content": "hello"}) + "\n", encoding="utf-8")
-        with pytest.raises(ValueError, match="not a valid message"):
+        with pytest.raises(ValueError, match="No valid messages found"):
             Session.from_jsonl(str(jsonl_file))
+
+    def test_from_jsonl_skips_invalid_lines_preserves_valid(self, tmp_path):
+        """Invalid lines are skipped; valid messages before them are preserved."""
+        jsonl_file = tmp_path / "mixed.jsonl"
+        lines = [
+            json.dumps({"role": "user", "content": "hello"}) + "\n",
+            json.dumps({"role": "assistant", "content": "hi"}) + "\n",
+            "not valid json\n",  # corrupt line
+            json.dumps({"role": "user", "content": "bye"}) + "\n",  # after corrupt
+        ]
+        jsonl_file.write_text("".join(lines), encoding="utf-8")
+        session, skipped = Session.from_jsonl(str(jsonl_file))
+        # The 3 valid messages should be preserved (corrupt line skipped)
+        assert len(session.messages) == 3
+        assert session.messages[0]["content"] == "hello"
+        assert session.messages[1]["content"] == "hi"
+        assert session.messages[2]["content"] == "bye"
+        assert skipped == 1
 
 
 class TestCheckpointManagerBatch:
