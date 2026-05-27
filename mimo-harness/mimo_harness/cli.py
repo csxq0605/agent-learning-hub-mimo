@@ -871,6 +871,8 @@ def _handle_command(cmd, harness, session, memory_store, checkpoint_manager=None
         # Update checkpoint_manager to new session
         if checkpoint_manager:
             checkpoint_manager.checkpoint_dir = os.path.join(".mimo", "checkpoints", new_id)
+            checkpoint_manager._seq = 0
+            checkpoint_manager._batch_dir = None
         print(f"Session forked: {old_id} → {new_id}")
     elif cmd[0] == "/save" and len(cmd) > 1:
         try:
@@ -890,6 +892,8 @@ def _handle_command(cmd, harness, session, memory_store, checkpoint_manager=None
             # Update checkpoint_manager to loaded session
             if checkpoint_manager:
                 checkpoint_manager.checkpoint_dir = os.path.join(".mimo", "checkpoints", session.session_id)
+                checkpoint_manager._seq = 0
+                checkpoint_manager._batch_dir = None
             print(f"Session loaded from {cmd[1]}")
         except Exception as e:
             print(f"Error: {e}")

@@ -312,17 +312,17 @@ class PermissionGate:
         """H2: Check for dangerous destructive patterns (circuit breaker for BYPASS mode)."""
         import re
         patterns = [
-            r'\brm\s+.*-[^\s]*[rR][^\s]*[fF][^\s]*\s+/', r'\brm\s+.*-[^\s]*[rR][^\s]*[fF][^\s]*\s+~',
-            r'\brm\s+.*-[^\s]*[rR][^\s]*[fF][^\s]*\s+\*', r'\brm\s+.*-[^\s]*[rR][^\s]*[fF][^\s]*\s+\.',
+            r'\brm\s+.*-[^\s]*r[^\s]*f[^\s]*\s+/', r'\brm\s+.*-[^\s]*r[^\s]*f[^\s]*\s+~',
+            r'\brm\s+.*-[^\s]*r[^\s]*f[^\s]*\s+\*', r'\brm\s+.*-[^\s]*r[^\s]*f[^\s]*\s+\.',
             r'\brm\s+.*--recursive\s+.*--force', r'\brm\s+.*--force\s+.*--recursive',
-            r'\brm\s+.*--recursive\b.*-[^\s]*[fF]', r'\brm\s+.*-[^\s]*[rR]\b.*--force\b',
+            r'\brm\s+.*--recursive\b.*-[^\s]*f', r'\brm\s+.*-[^\s]*r\b.*--force\b',
             r'\bmkfs\b', r'\bdd\s+if=.*of=/dev/',
             r'\bchmod\s+.*-R\s+777\s+/',
             r'(?:^|[;&|]\s*)(?:sudo\s+)?shutdown\b', r'(?:^|[;&|]\s*)(?:sudo\s+)?reboot\b', r'(?:^|[;&|]\s*)(?:sudo\s+)?halt\b',
             r':\(\)\s*\{.*:\|:.*\}',  # fork bomb
         ]
         for pat in patterns:
-            if re.search(pat, action_desc):
+            if re.search(pat, action_desc, re.IGNORECASE):
                 return True
         return False
 

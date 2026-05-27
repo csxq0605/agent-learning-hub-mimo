@@ -202,7 +202,9 @@ def _is_readonly_single(command: str) -> bool:
     cmd = _strip_wrappers(cmd)
     cmd_lower = cmd.lower()
     # find with -exec/-ok/-delete is not readonly (can run arbitrary/delete commands)
-    if cmd_lower.startswith("find ") and re.search(r'-exec\b|-execdir\b|-ok\b|-okdir\b|-delete\b', cmd_lower):
+    # Use lookbehind to require dash not preceded by word char (prevents matching
+    # inside filenames like "my-delete-file" while still catching "find . -delete")
+    if cmd_lower.startswith("find ") and re.search(r'(?<![a-zA-Z0-9_])-exec\b|(?<![a-zA-Z0-9_])-execdir\b|(?<![a-zA-Z0-9_])-ok\b|(?<![a-zA-Z0-9_])-okdir\b|(?<![a-zA-Z0-9_])-delete\b', cmd_lower):
         return False
     # awk with system()/getline from pipe is not readonly
     if cmd_lower.startswith("awk ") and re.search(r'\bsystem\s*\(', cmd_lower):

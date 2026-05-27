@@ -108,25 +108,25 @@ _INJECTION_PATTERNS = [
 
 # Hard deny patterns — always block (circuit breaker, even in bypass mode)
 _HARD_DENY_PATTERNS = [
-    # Case-insensitive rm -rf patterns (handles -Rf, -rF, -RF, etc.)
-    (re.compile(r'\brm\s+.*-[^\s]*[rR][^\s]*[fF][^\s]*\s+/\s*$', re.IGNORECASE), "rm -rf / destroys the filesystem"),
-    (re.compile(r'\brm\s+.*-[^\s]*[rR][^\s]*[fF][^\s]*\s+~', re.IGNORECASE), "rm -rf ~ destroys home directory"),
-    (re.compile(r'\brm\s+.*-[^\s]*[rR][^\s]*[fF][^\s]*\s+\*', re.IGNORECASE), "rm -rf * destroys all files"),
-    (re.compile(r'\brm\s+.*-[^\s]*[rR][^\s]*[fF][^\s]*\s+\.', re.IGNORECASE), "rm -rf . destroys current directory"),
+    # Case-insensitive rm -rf patterns (re.IGNORECASE handles -Rf, -rF, -RF, etc.)
+    (re.compile(r'\brm\s+.*-[^\s]*r[^\s]*f[^\s]*\s+/\s*$', re.IGNORECASE), "rm -rf / destroys the filesystem"),
+    (re.compile(r'\brm\s+.*-[^\s]*r[^\s]*f[^\s]*\s+~', re.IGNORECASE), "rm -rf ~ destroys home directory"),
+    (re.compile(r'\brm\s+.*-[^\s]*r[^\s]*f[^\s]*\s+\*', re.IGNORECASE), "rm -rf * destroys all files"),
+    (re.compile(r'\brm\s+.*-[^\s]*r[^\s]*f[^\s]*\s+\.', re.IGNORECASE), "rm -rf . destroys current directory"),
     # Long flag forms and mixed short/long forms
     (re.compile(r'\brm\s+.*--recursive\s+.*--force\s+', re.IGNORECASE), "rm --recursive --force is dangerous"),
     (re.compile(r'\brm\s+.*--force\s+.*--recursive\s+', re.IGNORECASE), "rm --force --recursive is dangerous"),
-    (re.compile(r'\brm\s+.*--recursive\b.*-[^\s]*[fF]', re.IGNORECASE), "rm --recursive -f is dangerous"),
-    (re.compile(r'\brm\s+.*-[^\s]*[rR]\b.*--force\b', re.IGNORECASE), "rm -r --force is dangerous"),
-    (re.compile(r'\bmkfs\b'), "mkfs formats a filesystem"),
-    (re.compile(r'\bdd\s+if=.*of=/dev/'), "dd to device overwrites disk"),
+    (re.compile(r'\brm\s+.*--recursive\b.*-[^\s]*f', re.IGNORECASE), "rm --recursive -f is dangerous"),
+    (re.compile(r'\brm\s+.*-[^\s]*r\b.*--force\b', re.IGNORECASE), "rm -r --force is dangerous"),
+    (re.compile(r'\bmkfs\b', re.IGNORECASE), "mkfs formats a filesystem"),
+    (re.compile(r'\bdd\s+if=.*of=/dev/', re.IGNORECASE), "dd to device overwrites disk"),
     (re.compile(r':\(\)\s*\{.*:\|:.*\}'), "fork bomb detected"),
-    (re.compile(r'(?:^|[;&|]\s*)(?:sudo\s+)?shutdown\b'), "shutdown command"),
-    (re.compile(r'(?:^|[;&|]\s*)(?:sudo\s+)?reboot\b'), "reboot command"),
-    (re.compile(r'(?:^|[;&|]\s*)(?:sudo\s+)?halt\b'), "halt command"),
-    (re.compile(r'\bchmod\s+.*-R\s+777\s+/(?:\s|$)'), "chmod 777 / is dangerous"),
-    (re.compile(r'\b(curl|wget)\s+.*\|\s*(bash|sh|zsh)\b'), "download-and-execute is dangerous"),
-    (re.compile(r'\b(curl|wget)\s+.*\b(ENV|env|\.env|credentials|\.ssh)\b'), "potential credential exfiltration"),
+    (re.compile(r'(?:^|[;&|]\s*)(?:sudo\s+)?shutdown\b', re.IGNORECASE), "shutdown command"),
+    (re.compile(r'(?:^|[;&|]\s*)(?:sudo\s+)?reboot\b', re.IGNORECASE), "reboot command"),
+    (re.compile(r'(?:^|[;&|]\s*)(?:sudo\s+)?halt\b', re.IGNORECASE), "halt command"),
+    (re.compile(r'\bchmod\s+.*-R\s+777\s+/(?:\s|$)', re.IGNORECASE), "chmod 777 / is dangerous"),
+    (re.compile(r'\b(curl|wget)\s+.*\|\s*(bash|sh|zsh)\b', re.IGNORECASE), "download-and-execute is dangerous"),
+    (re.compile(r'\b(curl|wget)\s+.*\b(ENV|env|\.env|credentials|\.ssh)\b', re.IGNORECASE), "potential credential exfiltration"),
     (re.compile(r'\b(curl|wget)\s+.*-d\s+.*\b(key|token|secret|password)\b', re.IGNORECASE),
      "sending credentials to external endpoint"),
 ]
@@ -256,7 +256,7 @@ def classify_action_regex(
     if tool_name == "run_command":
         cmd = command or tool_args.get("command", "")
     elif tool_name == "execute_python":
-        cmd = f"python: {tool_args.get('code', '')[:200]}"
+        cmd = f"python: {tool_args.get('code', '')[:2000]}"
     else:
         cmd = ""
 
@@ -473,9 +473,12 @@ Is this action safe to execute?"""
                 rule_matched="model_classifier",
                 source="model",
             )
-    except Exception:
-        # Fail closed: if model classifier is unavailable, return HARD_DENY
-        # so the command is blocked rather than silently allowed
+    except Exception as e:
+        # Fail closed: if model response is unparseable or API is unavailable,
+        # return HARD_DENY so the command is blocked rather than silently allowed.
+        # Log the traceback so code bugs are visible, not silently masked.
+        import logging
+        logging.getLogger(__name__).warning("Model classifier exception: %s", e, exc_info=True)
         return ClassificationResult(
             decision=SafetyDecision.HARD_DENY,
             reason="Model classifier unavailable (API error) — blocked for safety",

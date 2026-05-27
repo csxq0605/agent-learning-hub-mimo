@@ -138,14 +138,10 @@ def web_fetch(params: dict) -> str:
             except (socket.gaierror, OSError, ValueError):
                 pass
 
-        # Use pinned IP for actual connection to prevent DNS rebinding TOCTOU
-        if pinned_ip and hostname:
-            import re as _re
-            # Replace hostname in URL with pinned IP, set Host header
-            pinned_url = _re.sub(r'://[^/:]+', f'://{pinned_ip}', url, count=1)
-            resp = requests.get(pinned_url, headers={"User-Agent": "Mozilla/5.0", "Host": hostname}, timeout=15, stream=True, verify=False)
-        else:
-            resp = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=15, stream=True)
+        # DNS rebinding defense: pre-resolve rejects private IPs (above),
+        # post-request re-check detects IP change (below). No need to replace
+        # hostname with IP in the URL (which breaks IPv6, userinfo, ports, and TLS).
+        resp = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=15, stream=True)
         resp.raise_for_status()
 
         # Post-request DNS re-check: verify IP didn't change (DNS rebinding detection)
