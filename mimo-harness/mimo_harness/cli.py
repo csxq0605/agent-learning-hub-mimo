@@ -552,7 +552,10 @@ def main():
         try:
             user_input = input(f"You [{token_str}/{max_str}]: ").strip()
         except (EOFError, KeyboardInterrupt):
-            session.save_meta_to_jsonl()
+            try:
+                session.save_meta_to_jsonl()
+            except OSError:
+                pass
             scheduler.stop()
             print("\nBye!")
             break
@@ -636,7 +639,10 @@ def _handle_command(cmd, harness, session, memory_store, checkpoint_manager=None
     The session may be replaced by /load.
     """
     if cmd[0] in ("/quit", "/exit", "/q"):
-        session.save_meta_to_jsonl()
+        try:
+            session.save_meta_to_jsonl()
+        except OSError:
+            pass
         from .tools.scheduler_tools import get_scheduler
         sched = get_scheduler()
         if sched:
@@ -864,7 +870,7 @@ def _handle_command(cmd, harness, session, memory_store, checkpoint_manager=None
                 print(f"Warning: could not write fork session file: {e}")
         # Update checkpoint_manager to new session
         if checkpoint_manager:
-            checkpoint_manager.session_id = new_id
+            checkpoint_manager.checkpoint_dir = os.path.join(".mimo", "checkpoints", new_id)
         print(f"Session forked: {old_id} → {new_id}")
     elif cmd[0] == "/save" and len(cmd) > 1:
         try:
@@ -874,11 +880,16 @@ def _handle_command(cmd, harness, session, memory_store, checkpoint_manager=None
             print(f"Error: {e}")
     elif cmd[0] == "/load" and len(cmd) > 1:
         try:
+            # Save current session metadata before replacing
+            try:
+                session.save_meta_to_jsonl()
+            except OSError:
+                pass
             session = Session.load(cmd[1])
             session.auto_save_dir = session_dir
             # Update checkpoint_manager to loaded session
             if checkpoint_manager:
-                checkpoint_manager.session_id = session.session_id
+                checkpoint_manager.checkpoint_dir = os.path.join(".mimo", "checkpoints", session.session_id)
             print(f"Session loaded from {cmd[1]}")
         except Exception as e:
             print(f"Error: {e}")

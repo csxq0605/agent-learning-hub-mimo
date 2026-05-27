@@ -503,10 +503,8 @@ def estimate_tokens(messages: list) -> int:
             ratio = 4.2
 
         # Account for JSON structure overhead (keys, brackets, quotes)
-        # which have very low chars/token ratio. Only count structural JSON
-        # braces at the start/end of the serialized string to avoid inflating
-        # estimates for content that happens to contain braces.
-        json_overhead = raw.count('"') * 0.3
+        # which have very low chars/token ratio.
+        json_overhead = raw.count('"') * 0.5 + raw.count('{') * 0.3 + raw.count('}') * 0.3
         total_tokens += int((char_count + json_overhead) / ratio)
 
     return max(total_tokens, 1)

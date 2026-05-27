@@ -201,8 +201,8 @@ def _is_readonly_single(command: str) -> bool:
     # S8: strip wrapper prefixes before checking readonly
     cmd = _strip_wrappers(cmd)
     cmd_lower = cmd.lower()
-    # find with -exec/-ok is not readonly (can run arbitrary commands)
-    if cmd_lower.startswith("find ") and re.search(r'\b-exec\b|\b-ok\b', cmd_lower):
+    # find with -exec/-ok/-delete is not readonly (can run arbitrary/delete commands)
+    if cmd_lower.startswith("find ") and re.search(r'-exec\b|-execdir\b|-ok\b|-okdir\b|-delete\b', cmd_lower):
         return False
     # awk with system()/getline from pipe is not readonly
     if cmd_lower.startswith("awk ") and re.search(r'\bsystem\s*\(', cmd_lower):

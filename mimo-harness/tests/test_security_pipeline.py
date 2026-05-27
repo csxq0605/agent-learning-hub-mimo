@@ -591,9 +591,9 @@ class TestClassifyActionModel:
             "run_command", {"command": "npm test"},
             client=mock_client,
         )
-        # Fail-closed: returns SOFT_DENY on parse failure (not None/default allow)
+        # Fail-closed: returns HARD_DENY on parse failure (blocked, not silently allowed)
         assert result is not None
-        assert result.decision == SafetyDecision.SOFT_DENY
+        assert result.decision == SafetyDecision.HARD_DENY
 
     def test_handles_markdown_json_response(self):
         """Handles JSON wrapped in markdown code blocks."""
