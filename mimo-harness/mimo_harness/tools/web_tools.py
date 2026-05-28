@@ -22,6 +22,14 @@ MAX_RESPONSE_BYTES = 10 * 1024 * 1024
 _fetch_cache: dict[str, tuple[float, str]] = {}
 CACHE_TTL = 900  # 15 minutes
 
+
+def _evict_expired_cache():
+    """Remove expired entries from the fetch cache to prevent unbounded growth."""
+    now = time.time()
+    expired = [k for k, (ts, _) in _fetch_cache.items() if now - ts >= CACHE_TTL]
+    for k in expired:
+        del _fetch_cache[k]
+
 # Blocked internal hostnames
 _BLOCKED_HOSTNAMES = frozenset({
     "localhost", "metadata.google.internal", "metadata.azure.com",
@@ -114,6 +122,8 @@ def web_fetch(params: dict) -> str:
     err = _validate_url(url)
     if err:
         return json.dumps({"error": err})
+    # S14: evict expired cache entries to prevent unbounded growth
+    _evict_expired_cache()
     # S14: check cache first
     cache_key = f"{url}|{max_chars}"
     if cache_key in _fetch_cache:

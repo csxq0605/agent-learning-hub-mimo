@@ -142,7 +142,7 @@ def execute_tool(name: str, params: dict, memory: Memory) -> str:
                 from pathlib import Path as _Path
                 resolved = _Path(params["path"]).resolve()
                 allowed = _Path.cwd().resolve()
-                if not str(resolved).startswith(str(allowed)):
+                if not resolved.is_relative_to(allowed):
                     return json.dumps({"error": "Path outside allowed directory"})
                 with open(params["path"], "r", encoding="utf-8") as f:
                     content = f.read()

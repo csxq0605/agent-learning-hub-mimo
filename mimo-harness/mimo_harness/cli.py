@@ -598,13 +598,18 @@ def main():
             shell_cmd = user_input[1:]
             # Route through permission system for logging and protection
             from .permissions import Permission
+            from .tools.shell import _scrub_env, _is_readonly
+            # Auto-approve readonly commands (consistent with run_command tool)
+            perm = Permission.READ if _is_readonly(shell_cmd) else Permission.WRITE
             action_desc = f"run_command({shell_cmd[:100]})"
-            if not harness.perms.check(Permission.WRITE, action_desc, params={"command": shell_cmd}):
+            if not harness.perms.check(perm, action_desc, params={"command": shell_cmd}):
                 print("[blocked by permission system]")
                 continue
             try:
+                scrubbed_env = _scrub_env()
                 result = subprocess.run(
-                    shell_cmd, shell=True, capture_output=True, text=True, timeout=30
+                    shell_cmd, shell=True, capture_output=True, text=True,
+                    timeout=30, env=scrubbed_env
                 )
                 if result.stdout:
                     print(result.stdout, end="")

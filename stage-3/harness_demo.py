@@ -225,7 +225,7 @@ class AgentHarness:
         try:
             resolved = Path(path).resolve()
             allowed_dir = Path.cwd().resolve()
-            if not str(resolved).startswith(str(allowed_dir)):
+            if not resolved.is_relative_to(allowed_dir):
                 return json.dumps({"error": "Path outside allowed directory"})
             with open(path, "r", encoding="utf-8") as f:
                 return json.dumps({"content": f.read()[:5000]})
@@ -236,7 +236,7 @@ class AgentHarness:
         try:
             resolved = Path(path).resolve()
             allowed_dir = Path.cwd().resolve()
-            if not str(resolved).startswith(str(allowed_dir)):
+            if not resolved.is_relative_to(allowed_dir):
                 return json.dumps({"error": "Path outside allowed directory"})
             with open(path, "w", encoding="utf-8") as f:
                 f.write(content)
