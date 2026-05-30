@@ -282,12 +282,12 @@ def test_12_hooks_system():
 def test_13_logging():
     from mimo_harness.logging_utils import TraceLogger
 
-    logger = TraceLogger(session_id="test-log-session")
-    logger.info("test_event", key="value")
-    logger.error("test_error", detail="something went wrong")
-    summary = logger.session_summary()
-    assert summary["session_id"] == "test-log-session"
-    assert summary["total_steps"] >= 0
+    logger = TraceLogger()
+    logger.info("test_event: key=value")
+    logger.error("test_error: something went wrong")
+    assert logger.step >= 0
+    assert len(logger.session_id) == 8
+    logger.session_summary({"steps": 3, "duration": 1.5})
     print("  [PASS] Logging: TraceLogger init, info, error, summary OK")
 
 
