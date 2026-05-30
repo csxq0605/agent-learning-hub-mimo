@@ -308,6 +308,13 @@ class HookRunner:
         import urllib.request
         import urllib.error
 
+        # SSRF protection: validate hook URL before making the request
+        from .tools.web_tools import _validate_url
+        ssrf_err = _validate_url(config.url)
+        if ssrf_err:
+            _logger.warning("HTTP hook URL blocked by SSRF check: %s — %s", config.url, ssrf_err)
+            return HookResult()
+
         payload = json.dumps({
             "event": config.event.value,
             "tool_name": tool_name,

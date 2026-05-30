@@ -457,7 +457,12 @@ def llm_compress(
 # Orphan tool result filter (prevents sending unmatched tool results)
 # ---------------------------------------------------------------------------
 def _filter_orphan_tool_results(messages: list) -> list:
-    """Remove tool results that don't have matching tool_calls in the window."""
+    """Remove tool results that don't have matching tool_calls in the window.
+
+    Preserves tool results that were already snipped/compressed by context
+    compression — their parent assistant message may have been dropped, but
+    the snipped result is still needed to maintain message chain continuity.
+    """
     # Collect valid tool_call_ids from assistant messages
     valid_ids = set()
     for msg in messages:
@@ -471,9 +476,14 @@ def _filter_orphan_tool_results(messages: list) -> list:
     for msg in messages:
         if isinstance(msg, dict) and msg.get("role") == "tool":
             tc_id = msg.get("tool_call_id")
-            if tc_id in valid_ids:
+            content = msg.get("content", "")
+            # Preserve snipped/compressed tool results — their parent
+            # assistant message may have been dropped by compression
+            if isinstance(content, str) and content == COMPRESS_MARKER:
                 result.append(msg)
-            # else: orphan, skip
+            elif tc_id in valid_ids:
+                result.append(msg)
+            # else: truly orphan, skip
         else:
             result.append(msg)
     return result
