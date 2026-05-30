@@ -13,6 +13,7 @@ import json
 import time
 import hashlib
 import platform
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from enum import Enum
@@ -126,36 +127,42 @@ class GracefulAbort:
     """
 
     def __init__(self):
-        self._abort_requested = False
+        self._event = threading.Event()
 
     def request(self):
         """Request an abort at the next step boundary."""
-        self._abort_requested = True
+        self._event.set()
 
     def is_requested(self) -> bool:
         """Check if abort has been requested."""
-        return self._abort_requested
+        return self._event.is_set()
 
     def reset(self):
         """Clear the abort flag for a new task."""
-        self._abort_requested = False
+        self._event.clear()
 
 
 # ---------------------------------------------------------------------------
 # Token budget tracker (Ch7: buffer zones)
 # ---------------------------------------------------------------------------
 class TokenBudget:
-    """Tracks token usage against context window limits."""
+    """Tracks token usage against context window limits.
 
-    def __init__(self, max_tokens: int = DEFAULT_MAX_CONTEXT_TOKENS):
+    Uses token_counter module for precise counting with tiktoken,
+    falling back to heuristic estimation when tiktoken unavailable.
+    """
+
+    def __init__(self, max_tokens: int = DEFAULT_MAX_CONTEXT_TOKENS, model: str = "gpt-4"):
         self.max_tokens = max_tokens
         self.effective_max = max_tokens - RESERVED_OUTPUT_TOKENS
         self.estimated_tokens = 0
+        self.model = model
+        self._stats = None  # Lazy-initialized TokenStats
 
     def estimate_message_tokens(self, messages: list) -> int:
-        """Estimate token count using weighted heuristic from context module."""
-        from .context import estimate_tokens
-        return estimate_tokens(messages)
+        """Estimate token count using token_counter module."""
+        from .token_counter import count_messages_tokens
+        return count_messages_tokens(messages, model=self.model)
 
     def update(self, messages: list):
         self.estimated_tokens = self.estimate_message_tokens(messages)
@@ -168,6 +175,13 @@ class TokenBudget:
 
     def is_blocked(self) -> bool:
         return self.usage_ratio() >= TOKEN_BLOCK_THRESHOLD
+
+    def get_stats(self):
+        """Get or create TokenStats for this session."""
+        if self._stats is None:
+            from .token_counter import TokenStats
+            self._stats = TokenStats()
+        return self._stats
 
 
 # ---------------------------------------------------------------------------
@@ -269,7 +283,7 @@ You help users with coding, file operations, web research, document creation, an
         )
         self.registry = ToolRegistry()
         self.circuit_breaker = CircuitBreaker()
-        self.token_budget = TokenBudget()
+        self.token_budget = TokenBudget(model=self.model)
         self.graceful_abort = GracefulAbort()
         self.stream = stream
         self.bare = bare
@@ -279,6 +293,7 @@ You help users with coding, file operations, web research, document creation, an
         self._compaction_attempts = 0
         self._compaction_failures = 0
         self._thrashing_detected = False
+        self._thrash_warned = False
         self._register_tools()
 
     def _register_tools(self):
@@ -537,10 +552,15 @@ You help users with coding, file operations, web research, document creation, an
         """Execute LLM call with streaming, printing tokens as they arrive.
 
         Returns a response object compatible with the non-streaming path.
+        Includes real-time token counting via StreamingTokenCounter.
         """
         import sys
+        from .token_counter import StreamingTokenCounter
 
         effort_params = self.EFFORT_PARAMS.get(self.effort, self.EFFORT_PARAMS["medium"])
+
+        # Initialize streaming token counter
+        stream_counter = StreamingTokenCounter(model=self.model)
 
         def _do_stream():
             return client.chat.completions.create(
@@ -575,6 +595,8 @@ You help users with coding, file operations, web research, document creation, an
 
             if delta.content:
                 full_content += delta.content
+                # Track streaming tokens
+                stream_counter.add_text(delta.content)
                 print(delta.content, end="", flush=True)
 
             if delta.tool_calls:
@@ -596,6 +618,16 @@ You help users with coding, file operations, web research, document creation, an
 
         if full_content or tool_calls_data:
             print()  # newline after streaming
+
+        # Log streaming token stats
+        self.logger.trace("stream_tokens", {
+            "output_tokens": stream_counter.total_tokens,
+            "output_chars": stream_counter.total_chars,
+        })
+
+        # Update stats if available
+        stats = self.token_budget.get_stats()
+        stats.output_tokens += stream_counter.total_tokens
 
         # Build synthetic response object for compatibility (using _AttrBag,
         # not MagicMock — production code must not depend on unittest.mock)
@@ -734,7 +766,7 @@ You help users with coding, file operations, web research, document creation, an
             else:
                 # Build messages with context compaction (token-based)
                 conv_tokens = estimate_tokens(session.get_messages())
-                compacted, self._compaction_attempts, self._compaction_failures, thrashing = compact_context(
+                compacted, self._compaction_attempts, self._compaction_failures, thrashing, did_compress = compact_context(
                     session.get_messages(),
                     client=client,
                     model=self.model,
@@ -747,7 +779,7 @@ You help users with coding, file operations, web research, document creation, an
                     self.logger.info("[THRASHING] Compaction not reducing size — thrashing detected")
                 # If compression happened, update session messages so next
                 # iteration uses the compressed context
-                if len(compacted) < len(session.get_messages()):
+                if did_compress:
                     pre_count = len(session.get_messages())
                     session.messages = compacted
                     session.compaction_count += 1
@@ -852,11 +884,15 @@ You help users with coding, file operations, web research, document creation, an
                 hook_runner = getattr(self, '_hook_runner', None)
                 if hook_runner:
                     hook_runner.run_hooks(HookEvent.STOP, tool_result=final[:500])
+                # Update token stats
+                stats = self.token_budget.get_stats()
+                stats.total_tokens = self.token_budget.estimated_tokens
                 self.logger.session_summary({
                     "steps": step + 1,
                     "duration": round(time.time() - start_time, 2),
                     "reason": TerminationReason.COMPLETED.value,
                     "token_usage": round(self.token_budget.usage_ratio(), 2),
+                    "token_stats": stats.to_dict(),
                 })
                 self._last_session = session
                 self._last_steps = step + 1
@@ -874,6 +910,13 @@ You help users with coding, file operations, web research, document creation, an
             session.add_message(msg_dict["role"], msg_dict["content"],
                               tool_calls=msg_dict.get("tool_calls"))
 
+            # Update token stats for assistant message
+            stats = self.token_budget.get_stats()
+            stats.input_tokens += self.token_budget.estimated_tokens
+            stats.message_count += 1
+            if message.tool_calls:
+                stats.tool_call_count += len(message.tool_calls)
+
             # Group tool calls into concurrency-safe and sequential
             safe_calls = []
             sequential_calls = []
@@ -889,17 +932,16 @@ You help users with coding, file operations, web research, document creation, an
                 else:
                     sequential_calls.append((tc, func_name, func_args))
 
-            # Execute concurrency-safe tools in parallel
+            # Execute concurrency-safe tools in parallel (preserving order)
             if safe_calls:
                 with ThreadPoolExecutor(max_workers=min(len(safe_calls), 4)) as executor:
-                    future_to_tc = {
-                        executor.submit(
-                            self._handle_tool_call, fn, fa, tc.id, session
-                        ): tc
+                    # Submit in original order
+                    futures = [
+                        executor.submit(self._handle_tool_call, fn, fa, tc.id, session)
                         for tc, fn, fa in safe_calls
-                    }
-                    for future in as_completed(future_to_tc):
-                        tc = future_to_tc[future]
+                    ]
+                    # Collect results in submission order (not completion order)
+                    for (tc, _, _), future in zip(safe_calls, futures):
                         try:
                             result = future.result()
                         except Exception as e:
@@ -937,10 +979,13 @@ You help users with coding, file operations, web research, document creation, an
                     checkpoint_mgr.end_batch()
 
         # Termination: max steps reached
+        stats = self.token_budget.get_stats()
+        stats.total_tokens = self.token_budget.estimated_tokens
         self.logger.session_summary({
             "steps": self.max_steps,
             "duration": round(time.time() - start_time, 2),
             "reason": TerminationReason.MAX_STEPS.value,
+            "token_stats": stats.to_dict(),
         })
         self._last_session = session
         self._last_steps = self.max_steps

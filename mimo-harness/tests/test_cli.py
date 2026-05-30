@@ -288,7 +288,7 @@ class TestHandleCommand:
         _handle_command(["/tokens"], harness, session, memory_store)
         captured = capsys.readouterr()
         assert "Token Usage" in captured.out
-        assert "Conversation:" in captured.out
+        assert "Messages:" in captured.out
 
     def test_repl_save_error(self, monkeypatch, tmp_path, capsys):
         harness, session = _HarnessFixture.make(monkeypatch)

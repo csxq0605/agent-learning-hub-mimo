@@ -73,7 +73,8 @@ class TestEstimateTokens:
     def test_estimates_multiple_messages(self):
         messages = [{"role": "user", "content": "x" * 400}] * 10
         tokens = estimate_tokens(messages)
-        assert tokens >= 900
+        # With tiktoken, more precise counting; with heuristic, ~900-1000
+        assert tokens >= 400  # At minimum, should count something meaningful
 
 
 class TestCompactContext:
@@ -90,7 +91,7 @@ class TestCompactContext:
         all_msgs = big + messages
         tokens = estimate_tokens(all_msgs)
 
-        result, _, _, _ = compact_context(all_msgs, estimated_tokens=tokens)
+        result, _, _, _, _ = compact_context(all_msgs, estimated_tokens=tokens)
         # Should have system marker + last 2 messages
         contents = [m.get("content", "") for m in result]
         assert any("recent question" in c for c in contents)
@@ -141,7 +142,7 @@ class TestCompactContextWithLLM:
         tokens = estimate_tokens(messages)
         assert tokens > COMPRESS_TRIGGER_TOKENS
 
-        result, attempts, _, _ = compact_context(
+        result, attempts, _, _, _ = compact_context(
             messages, client=client, model=model, estimated_tokens=tokens,
         )
         # LLM compression should have been attempted
@@ -155,7 +156,7 @@ class TestCompactContextWithLLM:
         tokens = estimate_tokens(messages)
         assert tokens > COMPRESS_TRIGGER_TOKENS
 
-        result, _, _, _ = compact_context(messages, estimated_tokens=tokens)
+        result, _, _, _, _ = compact_context(messages, estimated_tokens=tokens)
         # Fallback: system marker + last 2 messages
         assert len(result) <= 4
         assert result[0]["role"] == "system"
@@ -166,7 +167,7 @@ class TestCompactContextWithLLM:
         tokens = estimate_tokens(messages)
         assert tokens < COMPRESS_TRIGGER_TOKENS
 
-        result, attempts, failures, _ = compact_context(messages, estimated_tokens=tokens)
+        result, attempts, failures, _, _ = compact_context(messages, estimated_tokens=tokens)
         # No compression should have been attempted
         assert attempts == 0
         assert failures == 0
@@ -177,7 +178,7 @@ class TestCompactContextWithLLM:
         messages = self._make_big_messages(60)
         tokens = estimate_tokens(messages)
         assert tokens > COMPRESS_TRIGGER_TOKENS
-        result, attempts, failures, _ = compact_context(messages, estimated_tokens=tokens)
+        result, attempts, failures, _, _ = compact_context(messages, estimated_tokens=tokens)
         # Fallback: system marker + last 2 messages
         assert len(result) <= 4
         assert result[0]["role"] == "system"
@@ -190,18 +191,18 @@ class TestCompactContextEdgeCases:
     """Edge cases for compact_context."""
 
     def test_empty_messages(self):
-        result, _, _, _ = compact_context([])
+        result, _, _, _, _ = compact_context([])
         assert result == []
 
     def test_single_message_no_compress(self):
         msg = [{"role": "user", "content": "hi"}]
-        result, _, _, _ = compact_context(msg)
+        result, _, _, _, _ = compact_context(msg)
         assert result == msg
 
     def test_max_messages_legacy_path(self):
         """When max_messages is set and tokens are low, use message count."""
         messages = [{"role": "user", "content": f"msg {i}"} for i in range(100)]
-        result, _, _, _ = compact_context(messages, max_messages=10)
+        result, _, _, _, _ = compact_context(messages, max_messages=10)
         assert len(result) == 10
         assert result[0]["content"] == "msg 90"
         assert result[-1]["content"] == "msg 99"
@@ -213,14 +214,14 @@ class TestCompactContextEdgeCases:
             {"role": "tool", "content": "result", "tool_call_id": "tc1"},
             {"role": "tool", "content": "orphan", "tool_call_id": "tc999"},
         ]
-        result, _, _, _ = compact_context(messages, max_messages=10)
+        result, _, _, _, _ = compact_context(messages, max_messages=10)
         assert len(result) == 2  # orphan filtered
 
     def test_token_compress_with_tool_calls(self):
         """Token-based compression should handle tool_calls messages."""
         messages = []
         for i in range(100):
-            messages.append({"role": "user", "content": f"task {i} " + "x" * 8000})
+            messages.append({"role": "user", "content": f"task {i} " + "x" * 15000})
             messages.append({
                 "role": "assistant",
                 "content": "ok",
@@ -231,7 +232,7 @@ class TestCompactContextEdgeCases:
         tokens = estimate_tokens(messages)
         assert tokens > COMPRESS_TRIGGER_TOKENS
 
-        result, _, _, _ = compact_context(messages, estimated_tokens=tokens)
+        result, _, _, _, _ = compact_context(messages, estimated_tokens=tokens)
         # Fallback: system marker + last 2 messages
         assert len(result) <= 4
         assert result[0]["role"] == "system"
@@ -342,72 +343,77 @@ class TestCheckpointManager:
 
 
 class TestCompactContextTupleReturn:
-    """R2: compact_context returns (messages, attempts, failures, thrashing)."""
+    """R2: compact_context returns (messages, attempts, failures, thrashing, did_compress)."""
 
-    def test_returns_four_element_tuple(self):
+    def test_returns_five_element_tuple(self):
         messages = [{"role": "user", "content": "hi"}] * 5
         result = compact_context(messages)
         assert isinstance(result, tuple)
-        assert len(result) == 4
+        assert len(result) == 5
 
     def test_attempts_and_failures_default_zero(self):
         messages = [{"role": "user", "content": "hi"}] * 5
-        _, attempts, failures, thrashing = compact_context(messages)
+        _, attempts, failures, thrashing, did_compress = compact_context(messages)
         assert attempts == 0
         assert failures == 0
         assert thrashing is False
+        assert did_compress is False
 
     def test_attempts_increments_on_compression(self):
         """When LLM compression succeeds, attempts should increment."""
         client, model = _real_llm_client()
-        big = "x" * 8000
+        big = "x" * 15000
         messages = [{"role": "user", "content": big}] * 100
         tokens = estimate_tokens(messages)
         assert tokens > COMPRESS_TRIGGER_TOKENS
 
-        _, attempts, failures, thrashing = compact_context(
+        _, attempts, failures, thrashing, did_compress = compact_context(
             messages, client=client, model=model, estimated_tokens=tokens,
             compaction_attempts=0, compaction_failures=0,
         )
         assert attempts >= 1
         assert thrashing is False
+        assert did_compress is True
 
     def test_failures_increment_when_no_client(self):
         """Without client, truncation fallback doesn't increment failures."""
-        big = "x" * 8000
+        big = "x" * 15000
         messages = [{"role": "user", "content": big}] * 100
         tokens = estimate_tokens(messages)
         assert tokens > COMPRESS_TRIGGER_TOKENS
 
-        _, attempts, failures, thrashing = compact_context(
+        _, attempts, failures, thrashing, did_compress = compact_context(
             messages, estimated_tokens=tokens,
             compaction_attempts=0, compaction_failures=0,
         )
         # No client = no LLM attempt = no failure increment
         assert failures == 0
+        assert did_compress is True
 
     def test_thrashing_detected_after_three_failures(self):
         """Thrashing flag is True when compaction_failures >= 3."""
-        big = "x" * 8000
+        big = "x" * 15000
         messages = [{"role": "user", "content": big}] * 100
         tokens = estimate_tokens(messages)
         assert tokens > COMPRESS_TRIGGER_TOKENS
 
-        _, _, _, thrashing = compact_context(
+        _, _, _, thrashing, did_compress = compact_context(
             messages, estimated_tokens=tokens,
             compaction_attempts=5, compaction_failures=3,
         )
         assert thrashing is True
+        assert did_compress is False
 
     def test_no_compression_preserves_attempts_failures(self):
         """When no compression needed, attempts/failures are passed through."""
         messages = [{"role": "user", "content": "hi"}]
-        _, attempts, failures, thrashing = compact_context(
+        _, attempts, failures, thrashing, did_compress = compact_context(
             messages, compaction_attempts=2, compaction_failures=1,
         )
         assert attempts == 2
         assert failures == 1
         assert thrashing is False
+        assert did_compress is False
 
 
 class TestLoadPathScopedRulesForFile:
@@ -796,8 +802,9 @@ class TestEstimateTokensEdgeCases:
         messages = [{"role": "tool", "content": "x" * 1000, "tool_call_id": "tc1"}]
         tokens = estimate_tokens(messages)
         assert tokens > 0
-        # Tool content uses ~3.5 chars/token, so 1000 chars ≈ 286 tokens
-        assert 200 < tokens < 400
+        # With tiktoken: more precise counting (~133 tokens for 1000 'x' chars)
+        # With heuristic: ~286 tokens
+        assert 100 < tokens < 400
 
     def test_system_message_estimate(self):
         """System messages should be estimated with system ratio."""

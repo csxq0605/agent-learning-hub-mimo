@@ -14,6 +14,7 @@ setup(
         "openai>=1.0.0",
         "python-dotenv>=1.0.0",
         "requests>=2.28.0",
+        "tiktoken>=0.5.0",
     ],
     extras_require={
         "dev": [

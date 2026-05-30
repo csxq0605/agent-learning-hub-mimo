@@ -678,19 +678,35 @@ def _handle_command(cmd, harness, session, memory_store, checkpoint_manager=None
         print(f"  Approval log: {len(harness.perms.approval_log)} entries")
         if harness.circuit_breaker.consecutive_failures > 0:
             print(f"  Circuit breaker failures: {harness.circuit_breaker.consecutive_failures}")
+        # Show token stats
+        stats = harness.token_budget.get_stats()
+        stats.total_tokens = tokens
+        stats.message_count = len(session.messages)
+        stats.compression_count = session.compaction_count
+        print(f"\n{stats.format_report()}")
         print()
     elif cmd[0] == "/tokens":
         tokens = estimate_tokens(session.messages)
-        pct = tokens / CONTEXT_WINDOW_TOKENS * 100
         print(f"\nToken Usage:")
-        print(f"  Conversation: {_format_tokens(tokens)} / {_format_tokens(CONTEXT_WINDOW_TOKENS)} ({pct:.1f}%)")
+        print(f"  {_format_tokens(tokens)} / {_format_tokens(CONTEXT_WINDOW_TOKENS)}")
         print(f"  Messages: {len(session.messages)}")
         print(f"  Compactions: {session.compaction_count}")
         # Progress bar
+        pct = tokens / CONTEXT_WINDOW_TOKENS * 100
         bar_len = 40
         filled = int(bar_len * tokens / CONTEXT_WINDOW_TOKENS)
-        bar = '#' * min(filled, bar_len) + '-' * max(0, bar_len - filled)
-        print(f"  [{bar}] {pct:.1f}%")
+        bar = '█' * min(filled, bar_len) + '░' * max(0, bar_len - filled)
+        status = "OK"
+        if pct >= 95:
+            status = "BLOCKED"
+        elif pct >= 85:
+            status = "WARNING"
+        print(f"  [{bar}] {pct:.1f}% {status}")
+        # Show token stats if available
+        stats = harness.token_budget.get_stats()
+        if stats.message_count > 0:
+            print(f"\nToken Statistics:")
+            print(stats.format_report())
         print()
     elif cmd[0] == "/compact":
         tokens_before = estimate_tokens(session.messages)
@@ -703,7 +719,7 @@ def _handle_command(cmd, harness, session, memory_store, checkpoint_manager=None
                 api_key = require_api_key()
                 from openai import OpenAI
                 client = OpenAI(api_key=api_key, base_url=MIMO_BASE_URL)
-                compacted, _, _, _ = compact_context(
+                compacted, _, _, _, _ = compact_context(
                     session.messages,
                     client=client,
                     model=harness.model,
@@ -715,7 +731,7 @@ def _handle_command(cmd, harness, session, memory_store, checkpoint_manager=None
                 print(f"Done: {_format_tokens(tokens_before)} -> {_format_tokens(tokens_after)} tokens")
             except Exception as e:
                 # Fallback: no LLM, just truncation
-                compacted, _, _, _ = compact_context(
+                compacted, _, _, _, _ = compact_context(
                     session.messages,
                     estimated_tokens=tokens_before,
                 )

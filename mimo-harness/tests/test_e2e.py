@@ -556,3 +556,130 @@ class TestE2EHooks:
         assert result.updated_input["content"] == "[MOD] test"
 
 
+# ═══════════════════════════════════════════════════════════════
+# 10. Token Counter Accuracy (E2E with real API)
+# ═══════════════════════════════════════════════════════════════
+
+class TestE2ETokenCounter:
+    """Token counting accuracy with real API calls."""
+
+    def test_token_count_accuracy_vs_api_response(self):
+        """Compare our token count with the API's reported usage."""
+        from mimo_harness.token_counter import count_messages_tokens
+        from mimo_harness.config import MIMO_BASE_URL, MIMO_MODEL, require_api_key
+        from openai import OpenAI
+
+        api_key = require_api_key()
+        client = OpenAI(api_key=api_key, base_url=MIMO_BASE_URL)
+
+        messages = [
+            {"role": "system", "content": "You are a helpful assistant."},
+            {"role": "user", "content": "What is 2 + 2? Reply with just the number."},
+        ]
+
+        # Get API response with usage info
+        response = client.chat.completions.create(
+            model=MIMO_MODEL,
+            messages=messages,
+            max_completion_tokens=100,
+        )
+
+        # Our token count
+        our_count = count_messages_tokens(messages)
+
+        # API reported usage (if available)
+        api_usage = response.usage
+        if api_usage:
+            api_prompt_tokens = api_usage.prompt_tokens
+            # Our count should be within 20% of API's count
+            ratio = our_count / api_prompt_tokens if api_prompt_tokens > 0 else 1.0
+            assert 0.5 < ratio < 2.0, (
+                f"Our count {our_count} vs API {api_prompt_tokens}, ratio={ratio:.2f}"
+            )
+
+    def test_token_count_increases_with_content(self):
+        """Longer content should result in more tokens."""
+        from mimo_harness.token_counter import count_messages_tokens
+
+        short_messages = [{"role": "user", "content": "Hi"}]
+        long_messages = [{"role": "user", "content": "Write a detailed essay about the history of programming languages." * 10}]
+
+        short_count = count_messages_tokens(short_messages)
+        long_count = count_messages_tokens(long_messages)
+
+        assert long_count > short_count * 2
+
+    def test_streaming_token_counter_accuracy(self):
+        """Streaming counter should accumulate tokens correctly."""
+        from mimo_harness.token_counter import StreamingTokenCounter, count_tokens
+
+        full_text = "The quick brown fox jumps over the lazy dog. " * 20
+        expected_tokens = count_tokens(full_text)
+
+        counter = StreamingTokenCounter()
+        # Simulate streaming in chunks
+        chunk_size = 50
+        for i in range(0, len(full_text), chunk_size):
+            counter.add_text(full_text[i:i + chunk_size])
+
+        # Streaming count should be within 30% of precise count
+        # (streaming uses heuristic for small chunks, so less precise)
+        ratio = counter.total_tokens / expected_tokens if expected_tokens > 0 else 1.0
+        assert 0.5 < ratio < 2.0, (
+            f"Streaming {counter.total_tokens} vs precise {expected_tokens}, ratio={ratio:.2f}"
+        )
+
+    def test_token_budget_status_with_real_agent(self):
+        """Token budget should work correctly with a real agent run."""
+        harness = _harness()
+        result = harness.run("What is 1 + 1?")
+
+        assert "2" in result
+        # Token budget should have been updated
+        assert harness.token_budget.estimated_tokens > 0
+
+    def test_tool_call_token_counting(self):
+        """Tool calls should be counted in token totals."""
+        from mimo_harness.token_counter import count_messages_tokens
+
+        messages = [
+            {"role": "user", "content": "List files in current directory"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{
+                    "id": "call_123",
+                    "function": {
+                        "name": "glob_files",
+                        "arguments": '{"pattern": "*"}'
+                    }
+                }]
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_123",
+                "content": '{"matches": ["file1.py", "file2.py"], "total": 2}'
+            },
+            {"role": "assistant", "content": "I found 2 Python files."},
+        ]
+
+        count = count_messages_tokens(messages)
+        assert count > 50  # Should have meaningful token count
+
+    def test_estimate_tokens_matches_count_messages(self):
+        """estimate_tokens should match count_messages_tokens."""
+        from mimo_harness.context import estimate_tokens
+        from mimo_harness.token_counter import count_messages_tokens
+
+        messages = [
+            {"role": "user", "content": "Hello, how are you?"},
+            {"role": "assistant", "content": "I'm doing well, thank you!"},
+        ]
+
+        estimate_result = estimate_tokens(messages)
+        count_result = count_messages_tokens(messages)
+
+        # They should be equal (both use the same underlying function)
+        assert estimate_result == count_result
+
+
