@@ -27,7 +27,7 @@ from .permissions import Permission, PermissionGate, PermissionMode
 from .context import Session, compact_context, load_memory, load_memory_for_compaction, estimate_tokens, load_topic_on_demand
 from .tools.registry import ToolRegistry, ToolDef
 from .tools import file_ops, shell, code_exec, web_tools, doc_tools, math_tools, interactive, monitor, notebook_tools, task_tools, plan_tools, lsp_tools, scheduler_tools
-from .security_pipeline import classify_action, filter_tool_output, SafetyDecision, SAFETY_SYSTEM_PROMPT_ADDITION
+from .security_pipeline import filter_tool_output, SAFETY_SYSTEM_PROMPT_ADDITION
 from .hooks import HookRunner, HookEvent, HookResult
 
 
@@ -398,27 +398,8 @@ You help users with coding, file operations, web research, document creation, an
             if pre_result.updated_input:
                 func_args = pre_result.updated_input
 
-        # --- Security Pipeline: Action Classification (Transcript Classifier) ---
-        command = func_args.get("command", "")
-        # Use model-based classifier when available (Claude Code's auto mode approach)
-        llm_client = getattr(self, "_llm_client", None)
-        classification = classify_action(
-            tool_name=func_name,
-            tool_args=func_args,
-            command=command,
-            working_dir=os.getcwd(),
-            client=llm_client if self.perms.auto_approve else None,
-            model=self.model,
-            conversation_context=session.get_messages() if session else None,
-        )
-        if classification.decision == SafetyDecision.HARD_DENY:
-            self.logger.trace("security_hard_deny", {
-                "tool": func_name, "reason": classification.reason,
-            })
-            return json.dumps({
-                "error": f"[SECURITY] Blocked: {classification.reason}",
-                "decision": "hard_deny",
-            })
+        # Security Pipeline: handled by PermissionGate in registry.execute()
+        # (classify_action + review_action are called inside PermissionGate.check())
 
         # S12: Snapshot files before edit/write operations
         checkpoint_mgr = getattr(self, "_checkpoint_manager", None)
@@ -700,6 +681,8 @@ You help users with coding, file operations, web research, document creation, an
             api_key=api_key, base_url=MIMO_BASE_URL
         )
         self._llm_client = client  # Store for security pipeline model classifier
+        # Set LLM client on permission gate for model-driven classification
+        self.perms.set_llm_client(client, self.model)
 
         # Inject LLM client into hook runner for prompt-type hooks
         hook_runner = getattr(self, '_hook_runner', None)

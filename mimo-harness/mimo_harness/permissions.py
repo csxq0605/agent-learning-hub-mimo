@@ -18,7 +18,7 @@ from datetime import datetime
 from dataclasses import dataclass, field
 from typing import Optional
 
-from .security_pipeline import classify_action, SafetyDecision
+from .security_pipeline import classify_action, review_action, SafetyDecision, ReviewResult
 
 
 class Permission(Enum):
@@ -172,6 +172,21 @@ class PermissionGate:
         self.approval_log: list[dict] = []
         self.rules: list[PermissionRule] = rules or []
         self._rejection_count = 0  # Ch4: circuit breaker for rejections
+        self._llm_client = None
+        self._llm_model = None
+        self.review_log: list[dict] = []
+
+    def set_llm_client(self, client, model: str = None):
+        """Set the LLM client for model-driven permission classification."""
+        self._llm_client = client
+        self._llm_model = model
+
+    def set_permission_mode(self, mode: str):
+        """Update the permission mode (used for context-aware classification)."""
+        try:
+            self.mode = PermissionMode(mode)
+        except ValueError:
+            pass
 
     def add_rule(self, rule: PermissionRule):
         self.rules.append(rule)
@@ -234,7 +249,7 @@ class PermissionGate:
                 print(f"  [PROTECTED PATH] Write blocked: {action_desc}")
                 return False
 
-        # Security Pipeline: hard_deny always blocks (even in BYPASS mode)
+        # Security Pipeline: model-driven classification
         command = ""
         if params:
             command = params.get("command", "")
@@ -243,11 +258,39 @@ class PermissionGate:
             tool_args=params or {},
             command=command,
             working_dir=os.getcwd(),
+            client=self._llm_client,
+            model=self._llm_model,
+            permission_mode=self.mode.value,
         )
         if classification.decision == SafetyDecision.HARD_DENY:
-            self._log(permission, action_desc, "denied_security_pipeline")
+            self._log(permission, action_desc, "denied_security_pipeline",
+                      reasoning=classification.reasoning, risk_level=classification.risk_level)
             print(f"  [SECURITY] Blocked: {classification.reason}")
             return False
+
+        # Auto-review for high-risk actions (model-driven self-review)
+        if (self._llm_client and classification.risk_level in ("medium", "high")
+                and classification.decision != SafetyDecision.HARD_DENY):
+            review = review_action(
+                tool_name=tool_name,
+                tool_args=params or {},
+                decision=classification.decision,
+                reasoning=classification.reasoning,
+                client=self._llm_client,
+                model=self._llm_model,
+                working_dir=os.getcwd(),
+            )
+            if review and not review.approved:
+                self._log_review(tool_name, action_desc, classification, review)
+                if review.concerns:
+                    print(f"  [REVIEW] Concerns: {'; '.join(review.concerns[:3])}")
+                if review.suggestion:
+                    print(f"  [REVIEW] Suggestion: {review.suggestion}")
+                # For HIGH risk + reviewer says deny → block
+                if classification.risk_level == "high":
+                    self._log(permission, action_desc, "denied_by_review",
+                              reasoning=classification.reasoning, risk_level=classification.risk_level)
+                    return False
 
         # BYPASS mode: approve everything except dangerous rm -rf patterns
         if self.mode == PermissionMode.BYPASS:
@@ -386,6 +429,10 @@ class PermissionGate:
         )
         return approved
 
+    def get_review_summary(self) -> list[dict]:
+        """Return the review log for inspection."""
+        return self.review_log
+
     @staticmethod
     def _redact(desc: str) -> str:
         """Redact potentially sensitive paths and tokens from log entries."""
@@ -395,13 +442,29 @@ class PermissionGate:
         desc = re.sub(r'(?i)(token|key|secret|password|auth)[=:]\s*\S+', r'\1=[REDACTED]', desc)
         return desc
 
-    def _log(self, perm: Permission, desc: str, result: str):
+    def _log(self, perm: Permission, desc: str, result: str,
+             reasoning: str = "", risk_level: str = "low"):
         self.approval_log.append({
             "timestamp": datetime.now().isoformat(),
             "permission": perm.value,
             "action": self._redact(desc),
             "result": result,
             "mode": self.mode.value,
+            "reasoning": reasoning,
+            "risk_level": risk_level,
+        })
+
+    def _log_review(self, tool_name: str, action_desc: str, classification, review: ReviewResult):
+        self.review_log.append({
+            "timestamp": datetime.now().isoformat(),
+            "tool": tool_name,
+            "action": self._redact(action_desc),
+            "decision": classification.decision.value,
+            "reasoning": classification.reasoning,
+            "risk_level": classification.risk_level,
+            "review_approved": review.approved,
+            "concerns": review.concerns,
+            "suggestion": review.suggestion,
         })
 
     def summary(self) -> list[dict]:

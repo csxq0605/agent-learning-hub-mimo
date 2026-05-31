@@ -1,6 +1,7 @@
 """Tests for security_pipeline module — Claude Code-style safety classifier."""
 
 import os
+import json
 import pytest
 
 from mimo_harness.security_pipeline import (
@@ -8,8 +9,13 @@ from mimo_harness.security_pipeline import (
     detect_sensitive_disclosure,
     detect_prompt_injection,
     classify_action,
+    classify_action_model,
+    classify_action_regex,
+    review_action,
     filter_tool_output,
     SafetyDecision,
+    ClassificationResult,
+    ReviewResult,
 )
 
 
@@ -320,3 +326,469 @@ class TestFilterToolOutput:
     def test_none_input(self):
         result = filter_tool_output(None)
         assert result.text is None
+
+
+# =========================================================================
+# Mock LLM client helper
+# =========================================================================
+
+class _MockCompletions:
+    """Track calls and return canned responses."""
+    def __init__(self, response_text):
+        self.response_text = response_text
+        self.call_count = 0
+        self.last_messages = None
+
+    def create(self, **kwargs):
+        self.call_count += 1
+        self.last_messages = kwargs.get("messages", [])
+        msg = type("Msg", (), {"content": self.response_text})()
+        choice = type("Choice", (), {"message": msg, "finish_reason": "stop"})()
+        return type("Resp", (), {"choices": [choice]})()
+
+
+class _MockClient:
+    """Mock OpenAI client for testing the model classifier."""
+    def __init__(self, response_text):
+        self.chat = type("Chat", (), {"completions": _MockCompletions(response_text)})()
+
+
+# =========================================================================
+# classify_action_model — model-based classification with mock
+# =========================================================================
+
+class TestClassifyActionModel:
+    """Tests for classify_action_model with mock LLM client."""
+
+    def setup_method(self):
+        from mimo_harness import security_pipeline
+        security_pipeline._classifier_cache.clear()
+
+    def test_model_returns_allow(self):
+        client = _MockClient(json.dumps({
+            "decision": "allow", "reason": "safe command",
+            "reasoning": "ls is a standard read-only command", "risk_level": "low"
+        }))
+        result = classify_action_model("run_command", {"command": "ls -la"}, client=client)
+        assert result is not None
+        assert result.decision == SafetyDecision.ALLOW
+        assert result.source == "model"
+        assert "ls" in result.reasoning.lower()
+        assert result.risk_level == "low"
+
+    def test_model_returns_deny(self):
+        client = _MockClient(json.dumps({
+            "decision": "deny", "reason": "dangerous command",
+            "reasoning": "rm -rf destroys files", "risk_level": "high"
+        }))
+        result = classify_action_model("run_command", {"command": "rm -rf /tmp/data"}, client=client)
+        assert result is not None
+        assert result.decision == SafetyDecision.SOFT_DENY
+        assert result.risk_level == "high"
+        assert "rm" in result.reasoning.lower()
+
+    def test_model_returns_medium_risk(self):
+        client = _MockClient(json.dumps({
+            "decision": "allow", "reason": "git force push",
+            "reasoning": "Force push to feature branch is acceptable", "risk_level": "medium"
+        }))
+        result = classify_action_model("run_command", {"command": "git push --force"}, client=client)
+        assert result is not None
+        assert result.risk_level == "medium"
+
+    def test_model_invalid_decision(self):
+        client = _MockClient(json.dumps({
+            "decision": "maybe", "reason": "unsure"
+        }))
+        result = classify_action_model("run_command", {"command": "ls"}, client=client)
+        assert result is not None
+        assert result.decision == SafetyDecision.HARD_DENY
+        assert "invalid" in result.reason.lower()
+
+    def test_model_invalid_json_fails_open(self):
+        client = _MockClient("this is not json at all")
+        result = classify_action_model("run_command", {"command": "ls"}, client=client)
+        assert result is None  # fail-open
+
+    def test_no_client_returns_none(self):
+        result = classify_action_model("run_command", {"command": "ls"}, client=None)
+        assert result is None
+
+    def test_model_unavailable_fails_open(self):
+        class _FailingClient:
+            class chat:
+                class completions:
+                    @staticmethod
+                    def create(**kwargs):
+                        raise ConnectionError("API unavailable")
+        result = classify_action_model("run_command", {"command": "ls"}, client=_FailingClient)
+        assert result is None
+
+    def test_model_empty_response_fails_open(self):
+        client = _MockClient("")
+        result = classify_action_model("run_command", {"command": "ls"}, client=client)
+        assert result is None  # empty JSON → fail-open
+
+    def test_model_none_content_fails_open(self):
+        """Model returning None content should fail open."""
+        class _NoneContentClient:
+            class chat:
+                class completions:
+                    @staticmethod
+                    def create(**kwargs):
+                        msg = type("Msg", (), {"content": None})()
+                        choice = type("Choice", (), {"message": msg})()
+                        return type("Resp", (), {"choices": [choice]})()
+        result = classify_action_model("run_command", {"command": "ls"}, client=_NoneContentClient)
+        assert result is None
+
+    def test_cache_hit(self):
+        # Clear cache first
+        from mimo_harness import security_pipeline
+        security_pipeline._classifier_cache.clear()
+
+        client = _MockClient(json.dumps({
+            "decision": "allow", "reason": "safe",
+            "reasoning": "safe command", "risk_level": "low"
+        }))
+        result1 = classify_action_model("run_command", {"command": "ls"}, client=client)
+        assert client.chat.completions.call_count == 1
+        result2 = classify_action_model("run_command", {"command": "ls"}, client=client)
+        assert client.chat.completions.call_count == 1  # cached, no new call
+        assert result1.decision == result2.decision
+
+    def test_permission_mode_in_prompt(self):
+        client = _MockClient(json.dumps({
+            "decision": "allow", "reason": "safe",
+            "reasoning": "ok", "risk_level": "low"
+        }))
+        classify_action_model("run_command", {"command": "ls"}, client=client, permission_mode="bypass")
+        messages = client.chat.completions.last_messages
+        system_content = messages[0]["content"]
+        assert "bypass" in system_content
+
+    def test_model_returns_markdown_json(self):
+        client = _MockClient('```json\n{"decision": "allow", "reason": "ok", "reasoning": "fine", "risk_level": "low"}\n```')
+        result = classify_action_model("run_command", {"command": "ls"}, client=client)
+        assert result is not None
+        assert result.decision == SafetyDecision.ALLOW
+
+    def test_risk_level_invalid_defaults(self):
+        client = _MockClient(json.dumps({
+            "decision": "allow", "reason": "ok",
+            "reasoning": "fine", "risk_level": "extreme"
+        }))
+        result = classify_action_model("run_command", {"command": "ls"}, client=client)
+        assert result.risk_level == "low"  # invalid defaults to low for allow
+
+    def test_risk_level_invalid_defaults_deny(self):
+        client = _MockClient(json.dumps({
+            "decision": "deny", "reason": "bad",
+            "reasoning": "bad", "risk_level": "extreme"
+        }))
+        result = classify_action_model("run_command", {"command": "rm -rf /"}, client=client)
+        assert result.risk_level == "medium"  # invalid defaults to medium for deny
+
+
+# =========================================================================
+# classify_action — model-driven flow
+# =========================================================================
+
+class TestClassifyActionModelDriven:
+    """Tests for the refactored classify_action model-driven flow."""
+
+    def setup_method(self):
+        from mimo_harness import security_pipeline
+        security_pipeline._classifier_cache.clear()
+
+    def test_regex_hard_deny_still_blocks(self):
+        """HARD_DENY from regex is always enforced regardless of model."""
+        client = _MockClient(json.dumps({
+            "decision": "allow", "reason": "safe",
+            "reasoning": "looks fine", "risk_level": "low"
+        }))
+        result = classify_action("run_command", {"command": "rm -rf /"}, client=client)
+        assert result.decision == SafetyDecision.HARD_DENY
+        assert result.source == "regex"
+
+    def test_model_deny_overrides_default(self):
+        """Model deny takes precedence over default allow."""
+        client = _MockClient(json.dumps({
+            "decision": "deny", "reason": "suspicious command",
+            "reasoning": "could be used for reconnaissance", "risk_level": "medium"
+        }))
+        result = classify_action("run_command", {"command": "cat /etc/shadow"}, client=client)
+        assert result.decision == SafetyDecision.SOFT_DENY
+        assert result.source == "model"
+
+    def test_model_allow_for_ambiguous(self):
+        """Model allow for commands that regex doesn't match."""
+        client = _MockClient(json.dumps({
+            "decision": "allow", "reason": "safe build command",
+            "reasoning": "npm run build is standard", "risk_level": "low"
+        }))
+        result = classify_action("run_command", {"command": "npm run build"}, client=client)
+        assert result.decision == SafetyDecision.ALLOW
+        assert result.source == "model"
+
+    def test_no_model_falls_back_to_regex(self):
+        """Without model, falls back to regex result."""
+        result = classify_action("run_command", {"command": "git push --force origin main"})
+        assert result.decision == SafetyDecision.SOFT_DENY
+        assert result.source == "regex"
+
+    def test_no_model_no_regex_default_allow(self):
+        """Without model or regex match, default allow."""
+        result = classify_action("calculator", {"expression": "2+2"})
+        assert result.decision == SafetyDecision.ALLOW
+        assert result.source == "default"
+
+    def test_read_only_tool_metadata_preserved(self):
+        """Read-only tools get is_read_only=True in the result."""
+        result = classify_action("read_file", {"path": "/tmp/test.txt"})
+        assert result.is_read_only
+
+    def test_read_only_tool_with_model(self):
+        """Read-only tools get is_read_only=True even with model."""
+        client = _MockClient(json.dumps({
+            "decision": "allow", "reason": "safe read",
+            "reasoning": "reading files is safe", "risk_level": "low"
+        }))
+        result = classify_action("read_file", {"path": "/tmp/test.txt"}, client=client)
+        assert result.is_read_only
+        assert result.decision == SafetyDecision.ALLOW
+
+    def test_reasoning_populated(self):
+        """All results have reasoning field populated."""
+        result = classify_action("run_command", {"command": "ls -la"})
+        assert result.reasoning  # not empty
+
+    def test_regex_soft_deny_noted_in_model_reasoning(self):
+        """When model allows but regex flagged soft-deny, reasoning notes it."""
+        client = _MockClient(json.dumps({
+            "decision": "allow", "reason": "acceptable in context",
+            "reasoning": "user explicitly requested force push", "risk_level": "medium"
+        }))
+        result = classify_action(
+            "run_command", {"command": "git push --force origin main"}, client=client
+        )
+        assert result.decision == SafetyDecision.ALLOW
+        assert "regex flagged" in result.reasoning
+
+    def test_permission_mode_passed_through(self):
+        """Permission mode is passed to the model classifier."""
+        client = _MockClient(json.dumps({
+            "decision": "allow", "reason": "ok",
+            "reasoning": "ok", "risk_level": "low"
+        }))
+        classify_action("run_command", {"command": "ls"}, client=client, permission_mode="auto")
+        messages = client.chat.completions.last_messages
+        system_content = messages[0]["content"]
+        assert "auto" in system_content
+
+
+# =========================================================================
+# review_action — self-review mechanism
+# =========================================================================
+
+class TestReviewAction:
+    """Tests for the review_action self-review mechanism."""
+
+    def setup_method(self):
+        from mimo_harness import security_pipeline
+        security_pipeline._review_cache.clear()
+
+    def test_review_approves_safe_action(self):
+        client = _MockClient(json.dumps({
+            "approved": True, "concerns": [], "suggestion": ""
+        }))
+        result = review_action(
+            "run_command", {"command": "ls -la"},
+            SafetyDecision.ALLOW, "safe read-only command",
+            client=client,
+        )
+        assert result is not None
+        assert result.approved is True
+        assert result.concerns == []
+
+    def test_review_flags_concerns(self):
+        client = _MockClient(json.dumps({
+            "approved": False,
+            "concerns": ["command modifies system files", "no user confirmation"],
+            "suggestion": "ask user for confirmation first"
+        }))
+        result = review_action(
+            "run_command", {"command": "chmod -R 777 /var/www"},
+            SafetyDecision.SOFT_DENY, "recursive permission change",
+            client=client,
+        )
+        assert result is not None
+        assert result.approved is False
+        assert len(result.concerns) == 2
+        assert "confirmation" in result.suggestion
+
+    def test_no_client_returns_none(self):
+        result = review_action(
+            "run_command", {"command": "ls"},
+            SafetyDecision.ALLOW, "safe", client=None,
+        )
+        assert result is None
+
+    def test_review_cache(self):
+        client = _MockClient(json.dumps({
+            "approved": True, "concerns": [], "suggestion": ""
+        }))
+        result1 = review_action(
+            "run_command", {"command": "ls"},
+            SafetyDecision.ALLOW, "safe", client=client,
+        )
+        assert client.chat.completions.call_count == 1
+        result2 = review_action(
+            "run_command", {"command": "ls"},
+            SafetyDecision.ALLOW, "safe", client=client,
+        )
+        assert client.chat.completions.call_count == 1  # cached
+        assert result1.approved == result2.approved
+
+    def test_review_handles_invalid_json(self):
+        client = _MockClient("not valid json")
+        result = review_action(
+            "run_command", {"command": "ls"},
+            SafetyDecision.ALLOW, "safe", client=client,
+        )
+        assert result is None  # graceful degradation
+
+    def test_review_handles_markdown_json(self):
+        client = _MockClient('```json\n{"approved": true, "concerns": [], "suggestion": ""}\n```')
+        result = review_action(
+            "run_command", {"command": "ls"},
+            SafetyDecision.ALLOW, "safe", client=client,
+        )
+        assert result is not None
+        assert result.approved is True
+
+
+# =========================================================================
+# ClassificationResult — reasoning and risk_level fields
+# =========================================================================
+
+class TestClassificationResult:
+    def test_has_reasoning_field(self):
+        r = ClassificationResult(decision=SafetyDecision.ALLOW, reasoning="test reasoning")
+        assert r.reasoning == "test reasoning"
+
+    def test_has_risk_level_field(self):
+        r = ClassificationResult(decision=SafetyDecision.ALLOW, risk_level="high")
+        assert r.risk_level == "high"
+
+    def test_default_values(self):
+        r = ClassificationResult(decision=SafetyDecision.ALLOW)
+        assert r.reasoning == ""
+        assert r.risk_level == "low"
+        assert r.source == "regex"
+
+    def test_regex_result_has_reasoning(self):
+        """Regex classification results include reasoning."""
+        result = classify_action("run_command", {"command": "rm -rf /"})
+        assert result.reasoning  # not empty
+        assert result.risk_level == "high"
+
+
+# =========================================================================
+# ReviewResult dataclass
+# =========================================================================
+
+class TestReviewResult:
+    def test_default_values(self):
+        r = ReviewResult()
+        assert r.approved is True
+        assert r.concerns == []
+        assert r.suggestion == ""
+
+    def test_with_values(self):
+        r = ReviewResult(approved=False, concerns=["risk1"], suggestion="fix it")
+        assert r.approved is False
+        assert "risk1" in r.concerns
+
+
+# =========================================================================
+# Cache eviction and edge cases
+# =========================================================================
+
+class TestCacheEviction:
+    def setup_method(self):
+        from mimo_harness import security_pipeline
+        security_pipeline._classifier_cache.clear()
+        security_pipeline._review_cache.clear()
+
+    def test_classifier_cache_eviction(self):
+        """Cache evicts expired entries when max size reached."""
+        from mimo_harness import security_pipeline
+        # Fill cache to max
+        security_pipeline._CLASSIFIER_CACHE_MAX_SIZE = 3
+        client = _MockClient(json.dumps({
+            "decision": "allow", "reason": "ok",
+            "reasoning": "ok", "risk_level": "low"
+        }))
+        classify_action_model("tool1", {"a": 1}, client=client)
+        classify_action_model("tool2", {"a": 2}, client=client)
+        classify_action_model("tool3", {"a": 3}, client=client)
+        assert len(security_pipeline._classifier_cache) == 3
+        # 4th call should trigger eviction attempt (but no expired entries yet)
+        classify_action_model("tool4", {"a": 4}, client=client)
+        assert len(security_pipeline._classifier_cache) == 4  # no eviction since none expired
+        # Reset max size
+        security_pipeline._CLASSIFIER_CACHE_MAX_SIZE = 256
+
+    def test_review_cache_eviction(self):
+        """Review cache evicts expired entries when max size reached."""
+        from mimo_harness import security_pipeline
+        security_pipeline._REVIEW_CACHE_MAX_SIZE = 2
+        client = _MockClient(json.dumps({
+            "approved": True, "concerns": [], "suggestion": ""
+        }))
+        review_action("tool1", {"a": 1}, SafetyDecision.ALLOW, "ok", client=client)
+        review_action("tool2", {"a": 2}, SafetyDecision.ALLOW, "ok", client=client)
+        assert len(security_pipeline._review_cache) == 2
+        # 3rd call triggers eviction attempt
+        review_action("tool3", {"a": 3}, SafetyDecision.ALLOW, "ok", client=client)
+        assert len(security_pipeline._review_cache) == 3
+        security_pipeline._REVIEW_CACHE_MAX_SIZE = 128
+
+
+class TestEdgeCases:
+    def setup_method(self):
+        from mimo_harness import security_pipeline
+        security_pipeline._classifier_cache.clear()
+
+    def test_model_returns_empty_reasoning(self):
+        """Model returning empty reasoning is handled gracefully."""
+        client = _MockClient(json.dumps({
+            "decision": "allow", "reason": "ok",
+            "reasoning": "", "risk_level": "low"
+        }))
+        result = classify_action_model("run_command", {"command": "ls"}, client=client)
+        assert result is not None
+        assert result.decision == SafetyDecision.ALLOW
+        assert result.reasoning == ""
+
+    def test_model_returns_extra_fields(self):
+        """Model returning extra fields doesn't break parsing."""
+        client = _MockClient(json.dumps({
+            "decision": "allow", "reason": "ok",
+            "reasoning": "safe", "risk_level": "low",
+            "extra_field": "ignored", "confidence": 0.95
+        }))
+        result = classify_action_model("run_command", {"command": "ls"}, client=client)
+        assert result is not None
+        assert result.decision == SafetyDecision.ALLOW
+
+    def test_classify_action_with_no_args(self):
+        """classify_action with empty args dict works."""
+        result = classify_action("calculator", {})
+        assert result.decision == SafetyDecision.ALLOW
+
+    def test_classify_action_with_none_working_dir(self):
+        """classify_action with None working_dir falls back to cwd."""
+        result = classify_action("read_file", {"path": "test.txt"}, working_dir="")
+        assert result.decision == SafetyDecision.ALLOW

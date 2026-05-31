@@ -18,10 +18,10 @@ from .hooks import HookRunner, HookConfig, HookEvent, HookResult, HookDecision
 from .memory import MemoryStore, MemoryType, MemoryEntry
 from .logging_utils import TraceLogger
 from .security_pipeline import (
-    SafetyDecision, ClassificationResult, FilteredOutput,
+    SafetyDecision, ClassificationResult, ReviewResult, FilteredOutput,
     sanitize_output, detect_sensitive_disclosure, detect_prompt_injection,
     classify_action, classify_action_regex, classify_action_model,
-    filter_tool_output, SAFETY_SYSTEM_PROMPT_ADDITION,
+    review_action, filter_tool_output, SAFETY_SYSTEM_PROMPT_ADDITION,
 )
 
 __all__ = [
@@ -47,10 +47,12 @@ __all__ = [
     "TraceLogger",
     "SafetyDecision",
     "ClassificationResult",
+    "ReviewResult",
     "FilteredOutput",
     "sanitize_output",
     "detect_sensitive_disclosure",
     "detect_prompt_injection",
     "classify_action",
+    "review_action",
     "filter_tool_output",
 ]

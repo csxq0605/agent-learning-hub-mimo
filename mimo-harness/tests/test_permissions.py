@@ -7,6 +7,7 @@ import os
 from mimo_harness.permissions import (
     Permission, PermissionRule, PermissionGate,
 )
+from mimo_harness.security_pipeline import SafetyDecision, ClassificationResult, ReviewResult
 
 
 class TestPermissionGate:
@@ -190,3 +191,79 @@ class TestPermissionGate:
         assert len(log) == 2
         results = {e["result"] for e in log}
         assert "auto_approved" in results
+
+
+# =========================================================================
+# Model-driven permission features
+# =========================================================================
+
+class _MockChoice:
+    def __init__(self, content):
+        self.message = type("msg", (), {"content": content})()
+        self.finish_reason = "stop"
+
+
+class _MockClient:
+    def __init__(self, response_text):
+        self.chat = type("chat", (), {
+            "completions": type("comp", (), {
+                "call_count": 0,
+                "last_messages": None,
+                "create": lambda self, **kw: type("resp", (), {
+                    "choices": [_MockChoice(response_text)]
+                })()
+            })()
+        })()
+
+
+class TestModelDrivenPermissions:
+    def test_set_llm_client(self):
+        """set_llm_client stores client and model."""
+        gate = PermissionGate()
+        client = _MockClient("{}")
+        gate.set_llm_client(client, "test-model")
+        assert gate._llm_client is client
+        assert gate._llm_model == "test-model"
+
+    def test_set_permission_mode(self):
+        """set_permission_mode updates the mode."""
+        gate = PermissionGate()
+        gate.set_permission_mode("bypass")
+        from mimo_harness.permissions import PermissionMode
+        assert gate.mode == PermissionMode.BYPASS
+
+    def test_set_permission_mode_invalid(self):
+        """Invalid mode is silently ignored."""
+        gate = PermissionGate()
+        original_mode = gate.mode
+        gate.set_permission_mode("nonexistent_mode")
+        assert gate.mode == original_mode
+
+    def test_approval_log_has_reasoning(self):
+        """Approval log entries include reasoning and risk_level."""
+        gate = PermissionGate(auto_approve=True)
+        gate.check(Permission.READ, "read_file(path)")
+        log = gate.summary()
+        assert "reasoning" in log[0]
+        assert "risk_level" in log[0]
+
+    def test_review_log_empty_by_default(self):
+        """Review log is empty when no reviews triggered."""
+        gate = PermissionGate(auto_approve=True)
+        gate.check(Permission.READ, "read_file(path)")
+        assert gate.get_review_summary() == []
+
+    def test_security_hard_deny_logged_with_reasoning(self):
+        """HARD_DENY entries include reasoning in the log."""
+        gate = PermissionGate(auto_approve=True)
+        gate.check(
+            Permission.WRITE,
+            "run_command(rm -rf /)",
+            params={"command": "rm -rf /"},
+        )
+        log = gate.summary()
+        # Find the denied entry
+        denied = [e for e in log if "denied" in e["result"]]
+        assert len(denied) >= 1
+        assert denied[0]["reasoning"]  # not empty
+        assert denied[0]["risk_level"] == "high"

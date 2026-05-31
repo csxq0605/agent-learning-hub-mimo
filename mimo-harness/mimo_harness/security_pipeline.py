@@ -20,9 +20,11 @@ import re
 import os
 import json
 import time
+import hashlib
+import logging
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Optional, Callable
+from typing import Optional
 
 
 # ---------------------------------------------------------------------------
@@ -234,6 +236,14 @@ def get_injection_warning(detection: InjectionDetection) -> str:
 # ---------------------------------------------------------------------------
 
 @dataclass
+class ReviewResult:
+    """Result of action self-review (iteration 2 mechanism)."""
+    approved: bool = True
+    concerns: list[str] = field(default_factory=list)
+    suggestion: str = ""
+
+
+@dataclass
 class ClassificationResult:
     """Result of safety classification."""
     decision: SafetyDecision
@@ -242,6 +252,8 @@ class ClassificationResult:
     is_read_only: bool = False
     is_in_project: bool = True
     source: str = "regex"  # "regex" or "model"
+    reasoning: str = ""    # Model's reasoning for the decision
+    risk_level: str = "low"  # "low", "medium", "high" — from model classifier
 
 
 def classify_action_regex(
@@ -275,6 +287,8 @@ def classify_action_regex(
                 reason=f"Hard deny: {reason}",
                 rule_matched=pattern.pattern,
                 source="regex",
+                reasoning=f"Regex matched dangerous pattern: {reason}",
+                risk_level="high",
             )
 
     # Hard deny: sensitive file access
@@ -288,6 +302,8 @@ def classify_action_regex(
                     reason=f"Hard deny: accessing sensitive file {filename}",
                     rule_matched="sensitive_file_access",
                     source="regex",
+                    reasoning=f"Access to sensitive file {filename} is always blocked",
+                    risk_level="high",
                 )
         for cred_path in _CREDENTIAL_STORE_PATHS:
             if path and os.path.normpath(path) == os.path.normpath(cred_path):
@@ -296,6 +312,8 @@ def classify_action_regex(
                     reason=f"Hard deny: accessing credential store {os.path.basename(cred_path)}",
                     rule_matched="credential_store_access",
                     source="regex",
+                    reasoning=f"Access to credential store {os.path.basename(cred_path)} is always blocked",
+                    risk_level="high",
                 )
             cred_dir = cred_path
             if os.path.splitext(os.path.basename(cred_path))[1]:
@@ -308,6 +326,8 @@ def classify_action_regex(
                     reason=f"Hard deny: accessing credential directory {os.path.basename(cred_dir)}",
                     rule_matched="credential_dir_access",
                     source="regex",
+                    reasoning=f"Access to credential directory {os.path.basename(cred_dir)} is always blocked",
+                    risk_level="high",
                 )
 
     # Soft deny patterns
@@ -318,6 +338,8 @@ def classify_action_regex(
                 reason=f"Soft deny: {reason}",
                 rule_matched=pattern.pattern,
                 source="regex",
+                reasoning=f"Regex matched caution pattern: {reason}",
+                risk_level="medium",
             )
 
     # Soft deny: writing outside project
@@ -334,6 +356,8 @@ def classify_action_regex(
                         rule_matched="outside_project_write",
                         is_in_project=False,
                         source="regex",
+                        reasoning="File write targets a path outside the project working directory",
+                        risk_level="medium",
                     )
             except (ValueError, OSError):
                 pass
@@ -376,20 +400,30 @@ _CLASSIFIER_SYSTEM_PROMPT = """You are a security classifier for an AI coding as
 ## Context
 - Working directory: {working_dir}
 - Platform: {platform}
+- Permission mode: {permission_mode}
 
 ## Rules
 - If ambiguous, err on the side of ALLOWING (the user can always review)
 - Only DENY if there is a clear, concrete risk
 - The user may have explicitly approved this action — check conversation context
 - Do NOT be overly cautious — this is a development tool, not a production system
+- Assess the risk level: "low" (routine/safe), "medium" (caution needed), "high" (dangerous/irreversible)
 
 Respond with ONLY a JSON object:
-{{"decision": "allow" or "deny", "reason": "brief explanation"}}"""
+{{"decision": "allow" or "deny", "reason": "brief explanation", "reasoning": "your analysis of why this is safe or unsafe", "risk_level": "low" or "medium" or "high"}}"""
 
 
 # Cache for model classifier results to reduce API calls
 _classifier_cache: dict[str, tuple[float, ClassificationResult]] = {}
 _CLASSIFIER_CACHE_TTL = 300  # 5 minutes
+_CLASSIFIER_CACHE_MAX_SIZE = 256
+
+
+# Known read-only tools (metadata enrichment, not decision shortcut)
+_READ_ONLY_TOOLS = {
+    "read_file", "glob_files", "grep_files", "web_search", "web_fetch",
+    "calculator", "ask_user_question", "monitor_list", "task_get", "task_list",
+}
 
 
 def classify_action_model(
@@ -399,6 +433,7 @@ def classify_action_model(
     model: str = None,
     conversation_context: list = None,
     working_dir: str = "",
+    permission_mode: str = "default",
 ) -> Optional[ClassificationResult]:
     """Model-based classification (Claude Code's auto mode approach).
 
@@ -414,13 +449,18 @@ def classify_action_model(
         return None
 
     # Check cache to avoid redundant API calls for identical tool invocations
-    import hashlib
     cache_key = f"{tool_name}:{hashlib.md5(json.dumps(tool_args, sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:12]}"
     now = time.time()
     if cache_key in _classifier_cache:
         cached_time, cached_result = _classifier_cache[cache_key]
         if now - cached_time < _CLASSIFIER_CACHE_TTL:
             return cached_result
+
+    # Evict expired entries when cache grows too large
+    if len(_classifier_cache) >= _CLASSIFIER_CACHE_MAX_SIZE:
+        expired = [k for k, (t, _) in _classifier_cache.items() if now - t >= _CLASSIFIER_CACHE_TTL]
+        for k in expired:
+            del _classifier_cache[k]
 
     # Build the action description for the classifier
     # (Claude Code sends transcript + pending action, NOT tool results)
@@ -457,15 +497,16 @@ Is this action safe to execute?"""
         system_prompt = _CLASSIFIER_SYSTEM_PROMPT.format(
             working_dir=working_dir or os.getcwd(),
             platform=f"{plat.system()} {plat.release()}",
+            permission_mode=permission_mode,
         )
 
         response = client.chat.completions.create(
-            model=model or "gpt-4o-mini",  # Use a fast, cheap model for classification
+            model=model or "mimo-v2.5-pro",  # Use MiMo model for classification
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": prompt},
             ],
-            max_completion_tokens=200,
+            max_completion_tokens=800,
             temperature=0.0,  # Deterministic for safety decisions
         )
 
@@ -476,9 +517,11 @@ Is this action safe to execute?"""
             result_text = re.sub(r'^```\w*\n?', '', result_text)
             result_text = re.sub(r'\n?```$', '', result_text)
 
-        result = json.loads(result_text)
-        decision = result.get("decision", "allow")
-        reason = result.get("reason", "Model classifier decision")
+        parsed = json.loads(result_text)
+        decision = parsed.get("decision", "allow")
+        reason = parsed.get("reason", "Model classifier decision")
+        reasoning = parsed.get("reasoning", reason)
+        risk_level = parsed.get("risk_level", "low")
 
         # L7: Strict validation of decision field
         if decision not in ("allow", "deny"):
@@ -487,6 +530,8 @@ Is this action safe to execute?"""
                 reason=f"Model classifier returned invalid decision: {decision!r}",
                 rule_matched="model_classifier",
                 source="model",
+                reasoning=f"Invalid model response: {result_text}",
+                risk_level="high",
             )
 
         if decision == "deny":
@@ -495,6 +540,8 @@ Is this action safe to execute?"""
                 reason=f"Model classifier: {reason}",
                 rule_matched="model_classifier",
                 source="model",
+                reasoning=reasoning,
+                risk_level=risk_level if risk_level in ("low", "medium", "high") else "medium",
             )
         else:
             result = ClassificationResult(
@@ -502,6 +549,8 @@ Is this action safe to execute?"""
                 reason=f"Model classifier: {reason}",
                 rule_matched="model_classifier",
                 source="model",
+                reasoning=reasoning,
+                risk_level=risk_level if risk_level in ("low", "medium", "high") else "low",
             )
         _classifier_cache[cache_key] = (now, result)
         return result
@@ -512,13 +561,118 @@ Is this action safe to execute?"""
         # obviously dangerous commands (rm -rf /, credential access, etc.).
         # Blocking ALL tool calls when the classifier API is down is too
         # aggressive — it makes the agent completely unusable.
-        import logging
         logging.getLogger(__name__).warning("Model classifier exception (falling through to default): %s", e, exc_info=True)
         return None
 
 
 # ---------------------------------------------------------------------------
-# Combined Classifier: Regex pre-filter → Model classifier → Default allow
+# Review Cache and Self-Review Mechanism (Iteration 2)
+# ---------------------------------------------------------------------------
+
+_review_cache: dict[str, tuple[float, ReviewResult]] = {}
+_REVIEW_CACHE_TTL = 300  # 5 minutes
+_REVIEW_CACHE_MAX_SIZE = 128
+
+_REVIEW_SYSTEM_PROMPT = """You are a security reviewer for an AI coding assistant. Your job is to review a proposed action and a preliminary safety decision, and flag any concerns that may have been missed.
+
+## Your Task
+Analyze the proposed action and the preliminary decision. Determine if the decision is appropriate or if there are overlooked risks.
+
+## What to flag as concerns:
+- Actions that seem safe individually but could be part of an attack chain
+- Actions that modify critical infrastructure files
+- Actions with irreversible side effects that the classifier may have underestimated
+- Commands that look benign but have dangerous flags or arguments buried deep
+- Social engineering patterns (e.g., "run this harmless-looking command")
+
+## What NOT to flag:
+- Routine development tasks (reading files, running tests, git operations)
+- Actions that are clearly within the working directory
+- Standard dependency installation
+
+Respond with ONLY a JSON object:
+{{"approved": true/false, "concerns": ["concern1", "concern2"], "suggestion": "brief suggestion if concerns exist"}}"""
+
+
+def review_action(
+    tool_name: str,
+    tool_args: dict,
+    decision: SafetyDecision,
+    reasoning: str,
+    client=None,
+    model: str = None,
+    working_dir: str = "",
+) -> Optional[ReviewResult]:
+    """Self-review mechanism: a second model pass reviews high-risk decisions.
+
+    Only triggered for:
+    - SOFT_DENY decisions (to verify the deny is warranted)
+    - ALLOW decisions with medium/high risk level (to catch missed risks)
+
+    Returns None if no client is available or review is not needed.
+    """
+    if client is None:
+        return None
+
+    # Check cache
+    cache_key = f"{tool_name}:{decision.value}:{hashlib.md5(json.dumps(tool_args, sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:12]}"
+    now = time.time()
+    if cache_key in _review_cache:
+        cached_time, cached_result = _review_cache[cache_key]
+        if now - cached_time < _REVIEW_CACHE_TTL:
+            return cached_result
+
+    # Evict expired entries when cache grows too large
+    if len(_review_cache) >= _REVIEW_CACHE_MAX_SIZE:
+        expired = [k for k, (t, _) in _review_cache.items() if now - t >= _REVIEW_CACHE_TTL]
+        for k in expired:
+            del _review_cache[k]
+
+    action_desc = f"Tool: {tool_name}\nArguments: {json.dumps(tool_args, ensure_ascii=False)}"
+    if tool_name == "run_command":
+        action_desc = f"Shell command: {tool_args.get('command', 'N/A')}"
+
+    prompt = f"""Review this action and its preliminary safety decision:
+
+Action:
+{action_desc}
+
+Preliminary decision: {decision.value}
+Reasoning: {reasoning}
+
+Is this decision appropriate? Are there any overlooked risks?"""
+
+    try:
+        response = client.chat.completions.create(
+            model=model or "gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": _REVIEW_SYSTEM_PROMPT},
+                {"role": "user", "content": prompt},
+            ],
+            max_completion_tokens=800,
+            temperature=0.0,
+        )
+
+        result_text = response.choices[0].message.content.strip()
+        if result_text.startswith("```"):
+            result_text = re.sub(r'^```\w*\n?', '', result_text)
+            result_text = re.sub(r'\n?```$', '', result_text)
+
+        parsed = json.loads(result_text)
+        result = ReviewResult(
+            approved=parsed.get("approved", True),
+            concerns=parsed.get("concerns", []),
+            suggestion=parsed.get("suggestion", ""),
+        )
+        _review_cache[cache_key] = (now, result)
+        return result
+    except Exception as e:
+        logging.getLogger(__name__).warning("Review action exception (skipping review): %s", e, exc_info=True)
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Combined Classifier: Regex safety net → Model classifier (primary) → Default
 # ---------------------------------------------------------------------------
 
 def classify_action(
@@ -529,64 +683,60 @@ def classify_action(
     client=None,
     model: str = None,
     conversation_context: list = None,
+    permission_mode: str = "default",
 ) -> ClassificationResult:
-    """Full two-layer classification matching Claude Code's architecture.
+    """Model-driven classification with regex safety net.
 
-    Decision flow (from Claude Code docs):
-    1. Actions matching allow/deny rules resolve immediately (regex pre-filter)
-    2. Read-only actions and in-project edits auto-approve
-    3. Everything else goes to the classifier model
-    4. Default: allow (falls through to permission gate)
+    Decision flow (model-driven approach):
+    1. Regex HARD_DENY catches obviously dangerous actions (safety net, never bypassed)
+    2. Model classifier is the primary decision-maker for everything else
+    3. If model is unavailable, fall through to default allow (regex already filtered)
+    4. High-risk actions may trigger a self-review pass
 
-    This mirrors Claude Code's:
-    "Each action goes through a fixed decision order. The first matching step wins:
-     1. Actions matching your allow or deny rules resolve immediately
-     2. Read-only actions and file edits in your working directory are auto-approved
-     3. Everything else goes to the classifier
-     4. If the classifier blocks, Claude receives the reason and tries an alternative"
+    This is the model-driven approach where the LLM makes the primary
+    safety judgment, reducing reliance on hardcoded regex rules.
     """
-    # Step 1: Fast regex pre-filter (obvious violations)
+    # Step 1: Regex HARD_DENY safety net (always enforced, never bypassed)
     regex_result = classify_action_regex(tool_name, tool_args, command, working_dir)
-    if regex_result is not None:
+    if regex_result is not None and regex_result.decision == SafetyDecision.HARD_DENY:
         return regex_result
 
-    # Step 2: Read-only tools always allowed
-    _READ_ONLY_TOOLS = {
-        "read_file", "glob_files", "grep_files", "web_search", "web_fetch",
-        "calculator", "ask_user_question", "monitor_list", "task_get", "task_list",
-    }
-    if tool_name in _READ_ONLY_TOOLS:
-        return ClassificationResult(
-            decision=SafetyDecision.ALLOW,
-            reason="Read-only tool",
-            is_read_only=True,
-            source="regex",
-        )
-
-    # Step 3: In-project file writes allowed (reviewable via version control)
-    if tool_name in ("write_file", "edit_file"):
-        return ClassificationResult(
-            decision=SafetyDecision.ALLOW,
-            reason="In-project file operation",
-            source="regex",
-        )
-
-    # Step 4: Model classifier for ambiguous cases
-    # (Claude Code's auto mode: "Everything else goes to the classifier")
+    # Step 2: Model classifier as primary decision-maker
     model_result = classify_action_model(
         tool_name, tool_args,
         client=client, model=model,
         conversation_context=conversation_context,
         working_dir=working_dir,
+        permission_mode=permission_mode,
     )
+
     if model_result is not None:
+        # Model made a decision — use it as primary
+        # Enrich with read-only metadata
+        if tool_name in _READ_ONLY_TOOLS:
+            model_result.is_read_only = True
+        # If model says allow but regex found a soft-deny, note it for transparency
+        if model_result.decision == SafetyDecision.ALLOW and regex_result is not None:
+            model_result.reasoning = (
+                f"{model_result.reasoning} [Note: regex flagged '{regex_result.reason}' "
+                f"but model assessed this action as safe]"
+            )
         return model_result
 
-    # Step 5: Default allow (no classifier available)
+    # Step 3: No model available — fall back to regex result if present
+    if regex_result is not None:
+        if tool_name in _READ_ONLY_TOOLS:
+            regex_result.is_read_only = True
+        return regex_result
+
+    # Step 4: Default allow (no regex match, no model available)
     return ClassificationResult(
         decision=SafetyDecision.ALLOW,
         reason="No safety concerns detected",
         source="default",
+        reasoning="No regex patterns matched and no model classifier available",
+        risk_level="low",
+        is_read_only=(tool_name in _READ_ONLY_TOOLS),
     )
 
 
