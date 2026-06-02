@@ -356,8 +356,9 @@ class TestHandleCommand:
         from mimo_harness.memory import MemoryStore
         from mimo_harness.context import CheckpointManager
         memory_store = MemoryStore(str(tmp_path))
-        cp_dir = str(tmp_path / "checkpoints")
-        checkpoint_manager = CheckpointManager(cp_dir)
+        # Use session_id for CheckpointManager, then override checkpoint_dir to use tmp_path
+        checkpoint_manager = CheckpointManager(session.session_id)
+        checkpoint_manager.checkpoint_dir = str(tmp_path / "checkpoints")
         # Create a test file and snapshot it
         test_file = tmp_path / "test.py"
         test_file.write_text("original")

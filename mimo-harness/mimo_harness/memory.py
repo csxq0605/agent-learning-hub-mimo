@@ -71,16 +71,16 @@ class MemoryStore:
 
     def _validate_path(self, path: str) -> Optional[str]:
         """Ch6: path security validation against directory traversal."""
+        # Reject null bytes first (before Path operations which may fail on Linux)
+        if "\0" in path:
+            return "Path contains null bytes"
+
         resolved = Path(path).resolve()
         memory_resolved = Path(self.memory_dir).resolve()
 
         # Must be under memory directory
         if not resolved.is_relative_to(memory_resolved):
             return f"Path '{path}' is outside memory directory"
-
-        # Reject null bytes
-        if "\0" in path:
-            return "Path contains null bytes"
 
         return None
 
