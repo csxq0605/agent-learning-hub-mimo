@@ -107,7 +107,8 @@ class MemoryStore:
             # Only quote if value contains truly problematic YAML characters
             _NEEDS_QUOTE = set(':#,{}[]&*?|<>!=%@`\'"\n\r\t')
             if any(c in _NEEDS_QUOTE for c in val):
-                return f'"{val.replace(chr(10), " ").replace(chr(13), "").replace('"', '\\"')}"'
+                escaped = val.replace(chr(10), " ").replace(chr(13), "").replace('"', '\\"')
+                return f'"{escaped}"'
             return val
 
         file_content = f"""---
