@@ -201,10 +201,12 @@ class TestE2ECodeExec:
         content = open(target).read()
         assert "fibonacci" in content.lower() or "def " in content or "for " in content, \
             f"File should contain a Fibonacci implementation, got: {content[:200]}"
-        # Verify the agent produced a substantive response
+        # Verify the agent produced a substantive response without errors
         assert len(result) > 20, f"Response too short: {result}"
-        assert "[ERROR]" not in result or "5050" in result or "34" in result, \
-            f"Agent should have reported results, got: {result[:200]}"
+        assert "[ERROR]" not in result, f"Agent reported error: {result[:200]}"
+        # Verify Fibonacci numbers are present in the result (1, 1, 2, 3, 5, 8, 13, 21, 34, 55)
+        assert any(num in result for num in ["34", "55", "1, 1, 2, 3"]), \
+            f"Expected Fibonacci numbers in result, got: {result[:200]}"
 
 
 class TestE2EGlobGrep:
@@ -536,5 +538,122 @@ class TestE2EPermissionModelIntegration:
         assert len(log) >= 1
         assert "reasoning" in log[-1]
         assert "risk_level" in log[-1]
+
+
+# ═══════════════════════════════════════════════════════════════
+# 14. Compact Context with LLM (E2E with real API)
+# ═══════════════════════════════════════════════════════════════
+
+class TestE2ECompactContext:
+    """Compact context with real MiMo API calls."""
+
+    def _get_client(self):
+        from mimo_harness.config import MIMO_BASE_URL, MIMO_MODEL, require_api_key
+        from openai import OpenAI
+        api_key = require_api_key()
+        return OpenAI(api_key=api_key, base_url=MIMO_BASE_URL), MIMO_MODEL
+
+    def test_compact_context_with_llm(self):
+        """LLM compression should reduce message count."""
+        from mimo_harness.context import compact_context, estimate_tokens, COMPRESS_TRIGGER_TOKENS
+
+        client, model = self._get_client()
+        # Create messages large enough to exceed token threshold
+        big = "x" * 15000
+        messages = []
+        for i in range(100):
+            messages.append({"role": "user", "content": f"q{i}" + big})
+        tokens = estimate_tokens(messages)
+        assert tokens > COMPRESS_TRIGGER_TOKENS
+
+        result, attempts, failures, thrashing, did_compress = compact_context(
+            messages, client=client, model=model, estimated_tokens=tokens,
+        )
+        # LLM compression should have been attempted
+        assert attempts >= 1
+        # Result should be shorter than input
+        assert len(result) < len(messages)
+        assert did_compress is True
+
+
+# ═══════════════════════════════════════════════════════════════
+# 15. Hook Prompt with LLM (E2E with real API)
+# ═══════════════════════════════════════════════════════════════
+
+class TestE2EHookPrompt:
+    """Hook prompt mechanism with real MiMo API calls."""
+
+    def test_prompt_hook_with_real_api(self):
+        """Prompt hook with real LLM client verifies end-to-end mechanism."""
+        from mimo_harness.hooks import HookRunner, HookEvent, HookConfig, HookDecision, HookType
+        from mimo_harness.config import MIMO_API_KEY, MIMO_BASE_URL, MIMO_MODEL
+        from openai import OpenAI
+
+        if not MIMO_API_KEY or MIMO_API_KEY == "test-key-for-testing":
+            pytest.skip("Real MIMO_API_KEY not set")
+
+        runner = HookRunner()
+        runner.register(HookConfig(
+            event=HookEvent.PRE_TOOL_USE,
+            matcher="*",
+            hook_type=HookType.PROMPT,
+            prompt=(
+                'Evaluate tool: {tool_name}. '
+                'Respond with JSON: {{"decision": "block", "reason": "X"}} or '
+                '{{"decision": "approve"}}.'
+            ),
+        ))
+        runner._llm_client = OpenAI(api_key=MIMO_API_KEY, base_url=MIMO_BASE_URL)
+        runner._llm_model = MIMO_MODEL
+
+        result = runner.run_hooks(HookEvent.PRE_TOOL_USE, "run_command")
+        # The key assertion: prompt hook mechanism works end-to-end with real API.
+        assert result is not None
+        assert hasattr(result, 'is_blocking')
+        assert hasattr(result, 'reason')
+        assert result.decision in (HookDecision.BLOCK, HookDecision.APPROVE)
+
+
+# ═══════════════════════════════════════════════════════════════
+# 16. SubAgent File Operations (E2E with real API)
+# ═══════════════════════════════════════════════════════════════
+
+class TestE2ESubAgentFileOps:
+    """SubAgent file operations with real MiMo API calls."""
+
+    def test_subagent_read_and_summarize(self, work_dir):
+        """Test SubAgent reading a file and summarizing."""
+        from mimo_harness.subagent import SubAgentManager, SubAgentConfig
+
+        target = os.path.join(work_dir, "data.txt")
+        with open(target, "w") as f:
+            f.write("Python is a programming language.\nJavaScript is for web development.\nRust is for systems programming.")
+
+        manager = SubAgentManager()
+        config = SubAgentConfig(
+            task=f"Read the file {target} and tell me how many topics it covers. Reply with just the number.",
+            allowed_tools=["read_file"],
+            max_steps=5,
+            effort="low",
+        )
+        result = manager.run_single(config)
+
+        assert result.state.value == "completed"
+        assert "3" in result.result
+
+    def test_subagent_calculate_with_python(self):
+        """Test SubAgent using execute_python tool."""
+        from mimo_harness.subagent import SubAgentManager, SubAgentConfig
+
+        manager = SubAgentManager()
+        config = SubAgentConfig(
+            task="What is 2 + 2? Reply with just the number.",
+            max_steps=5,
+            effort="low",
+        )
+        result = manager.run_single(config)
+
+        assert result.state.value == "completed"
+        assert "4" in result.result
 
 

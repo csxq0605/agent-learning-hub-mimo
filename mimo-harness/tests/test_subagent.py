@@ -337,6 +337,12 @@ class TestSubAgent:
         assert msg["sender"].startswith("subagent-")
         assert msg["content"] == "hello from subagent"
 
+        # Verify the message can be received from the channel
+        received = subagent.channel.receive(timeout=1.0)
+        assert received is not None
+        assert received["content"] == "hello from subagent"
+        assert received["id"] == msg["id"]
+
     @patch('mimo_harness.agent.MiMoHarness')
     def test_run_success(self, mock_harness_class):
         # Mock the harness and its run method

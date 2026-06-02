@@ -12,9 +12,14 @@ from mimo_harness.agent import (
 from mimo_harness.context import Session
 from mimo_harness.tools import file_ops
 
-# All tests in this file require a real API key
-pytestmark = pytest.mark.skipif(
-    not os.environ.get("MIMO_API_KEY") or os.environ.get("MIMO_API_KEY") == "test-key-for-testing",
+# Helper to check if real API key is available
+def _has_real_api_key():
+    api_key = os.environ.get("MIMO_API_KEY", "")
+    return api_key and api_key != "test-key-for-testing"
+
+# Decorator for tests that require real API key
+requires_api = pytest.mark.skipif(
+    not _has_real_api_key(),
     reason="Real MIMO_API_KEY not set — agent tests skipped",
 )
 
@@ -76,6 +81,7 @@ class TestRetryWithBackoff:
         assert call_count[0] == 2
 
 
+@requires_api
 class TestRunWithToolCalls:
     """Test agent.run() with real LLM that invokes tools."""
 
@@ -95,6 +101,7 @@ class TestRunWithToolCalls:
         assert len(tool_msgs) >= 1
 
 
+@requires_api
 class TestRunMaxStepsTermination:
     def test_run_max_steps_termination(self):
         """Verify agent stops at max_steps."""
@@ -106,6 +113,7 @@ class TestRunMaxStepsTermination:
         assert len(result) > 0
 
 
+@requires_api
 class TestTerminationPaths:
     """Test termination paths in MiMoHarness.run()."""
 
@@ -156,6 +164,7 @@ class TestBareMode:
         assert "Available Tools" in prompt
 
 
+@requires_api
 class TestRunStreamMode:
     """Test run() with stream=True using real API."""
 
@@ -168,6 +177,7 @@ class TestRunStreamMode:
         assert "42" in result
 
 
+@requires_api
 class TestRunDefaultSession:
     """Test run() creates default session when None."""
 
@@ -177,6 +187,7 @@ class TestRunDefaultSession:
         assert len(result) > 0
 
 
+@requires_api
 class TestRunStopHook:
     """Test run() fires STOP hook on completion."""
 
@@ -205,6 +216,7 @@ class TestRunStopHook:
         assert HookEvent.STOP in hook_calls
 
 
+@requires_api
 class TestRunSequentialToolCalls:
     """Test run() with non-concurrency-safe tool calls (write_file)."""
 

@@ -17,6 +17,7 @@ from mimo_harness.security_pipeline import (
     ClassificationResult,
     ReviewResult,
 )
+from tests.helpers import MockClient as _MockClient
 
 
 # =========================================================================
@@ -326,31 +327,6 @@ class TestFilterToolOutput:
     def test_none_input(self):
         result = filter_tool_output(None)
         assert result.text is None
-
-
-# =========================================================================
-# Mock LLM client helper
-# =========================================================================
-
-class _MockCompletions:
-    """Track calls and return canned responses."""
-    def __init__(self, response_text):
-        self.response_text = response_text
-        self.call_count = 0
-        self.last_messages = None
-
-    def create(self, **kwargs):
-        self.call_count += 1
-        self.last_messages = kwargs.get("messages", [])
-        msg = type("Msg", (), {"content": self.response_text})()
-        choice = type("Choice", (), {"message": msg, "finish_reason": "stop"})()
-        return type("Resp", (), {"choices": [choice]})()
-
-
-class _MockClient:
-    """Mock OpenAI client for testing the model classifier."""
-    def __init__(self, response_text):
-        self.chat = type("Chat", (), {"completions": _MockCompletions(response_text)})()
 
 
 # =========================================================================
