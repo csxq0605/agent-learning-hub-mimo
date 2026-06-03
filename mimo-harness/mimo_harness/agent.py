@@ -27,6 +27,7 @@ from .permissions import Permission, PermissionGate, PermissionMode
 from .context import Session, compact_context, load_memory, load_memory_for_compaction, estimate_tokens, load_topic_on_demand
 from .tools.registry import ToolRegistry, ToolDef
 from .tools import file_ops, shell, code_exec, web_tools, doc_tools, math_tools, interactive, monitor, notebook_tools, task_tools, plan_tools, lsp_tools, scheduler_tools
+from .tools.file_ops import FileOpsState, set_file_ops_state
 from .security_pipeline import filter_tool_output, SAFETY_SYSTEM_PROMPT_ADDITION
 from .hooks import HookRunner, HookEvent, HookResult
 
@@ -415,7 +416,7 @@ You help users with coding, file operations, web research, document creation, an
 
         # Dynamic permission for shell commands (Ch4: context-aware checks)
         if func_name == "run_command":
-            perm = self._check_shell_permission(command)
+            perm = self._check_shell_permission(func_args.get("command", ""))
             tool_def = self.registry.get(func_name)
             if tool_def:
                 # Use per-call permission override instead of mutating shared tool_def
@@ -677,6 +678,11 @@ You help users with coding, file operations, web research, document creation, an
                 session_id=self.deps.uuid_generator(),
                 working_dir=os.getcwd(),
             )
+
+        # DESIGN-3: Set session-scoped file operation state so each
+        # session/SubAgent has isolated read/write tracking
+        self._file_ops_state = FileOpsState()
+        set_file_ops_state(self._file_ops_state)
 
         api_key = require_api_key()
         client = self.deps.llm_client_factory(

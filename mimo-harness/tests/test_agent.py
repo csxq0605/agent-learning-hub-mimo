@@ -88,8 +88,7 @@ class TestRunWithToolCalls:
     def test_run_with_tool_calls(self, monkeypatch, tmp_path):
         """Real LLM returns tool call, verify tool is dispatched and result fed back."""
         monkeypatch.chdir(tmp_path)
-        file_ops._read_files.clear()
-        file_ops._write_allowed_files.clear()
+        file_ops.set_file_ops_state(file_ops.FileOpsState())
 
         harness = MiMoHarness(max_steps=5, auto_approve=True, bare=True)
         session = Session(session_id="test")
@@ -223,8 +222,7 @@ class TestRunSequentialToolCalls:
     def test_run_sequential_tool_calls(self, monkeypatch, tmp_path):
         """Real LLM calls write_file tool, verify tool was dispatched."""
         monkeypatch.chdir(tmp_path)
-        file_ops._read_files.clear()
-        file_ops._write_allowed_files.clear()
+        file_ops.set_file_ops_state(file_ops.FileOpsState())
 
         harness = MiMoHarness(max_steps=5, auto_approve=True, bare=True)
         session = Session(session_id="seq-test")
@@ -237,3 +235,185 @@ class TestRunSequentialToolCalls:
         # Verify the agent used write_file tool (check session messages)
         tool_msgs = [m for m in session.messages if m.get("role") == "tool"]
         assert len(tool_msgs) >= 1
+
+
+class TestHandleToolCallIntegration:
+    """QUALITY-3: Integration tests for _handle_tool_call → registry.execute → handler chain.
+
+    These tests exercise the FULL tool dispatch path without requiring a real API key,
+    ensuring that bugs like the undefined 'command' variable (BUG-1) are caught.
+    """
+
+    def _make_harness(self, tmp_path):
+        """Create a minimal harness with real tool registry for integration testing."""
+        harness = MiMoHarness.__new__(MiMoHarness)
+        harness.model = "test"
+        harness.deps = type("D", (), {"max_retries": 1, "base_retry_delay": 0.01})()
+        harness.logger = type("L", (), {
+            "trace": lambda *a, **k: None,
+            "info": lambda *a, **k: None,
+            "tool_call": lambda *a, **k: None,
+            "error": lambda *a, **k: None,
+            "session_summary": lambda *a, **k: None,
+        })()
+        harness.perms = type("P", (), {
+            "auto_approve": True,
+            "dry_run": False,
+            "mode": "auto",
+            "check": lambda *a, **k: True,
+            "set_llm_client": lambda *a, **k: None,
+        })()
+        harness.graceful_abort = type("G", (), {
+            "is_requested": lambda: False,
+        })()
+        harness._hook_runner = None
+        harness._checkpoint_manager = None
+
+        # Use REAL tool registry with actual handlers
+        from mimo_harness.tools.registry import ToolRegistry
+        from mimo_harness.tools import (
+            file_ops as fo, shell, math_tools, web_tools,
+            code_exec, doc_tools, interactive, monitor,
+            notebook_tools, task_tools, plan_tools, lsp_tools, scheduler_tools,
+        )
+        harness.registry = ToolRegistry()
+        harness.registry.register_many(fo.get_tools())
+        harness.registry.register_many(shell.get_tools())
+        harness.registry.register_many(math_tools.get_tools())
+        harness.registry.register_many(code_exec.get_tools())
+        harness.registry.register_many(web_tools.get_tools())
+        harness.registry.register_many(doc_tools.get_tools())
+        harness.registry.register_many(interactive.get_tools())
+        harness.registry.register_many(monitor.get_tools())
+        harness.registry.register_many(notebook_tools.get_tools())
+        harness.registry.register_many(task_tools.get_tools())
+        harness.registry.register_many(plan_tools.get_tools())
+        harness.registry.register_many(lsp_tools.get_tools())
+        harness.registry.register_many(scheduler_tools.get_tools())
+
+        # Set session-scoped file ops state
+        file_ops._ALLOWED_WRITE_DIR = tmp_path
+        file_ops.set_file_ops_state(file_ops.FileOpsState())
+
+        return harness
+
+    def test_run_command_dispatch(self, tmp_path, monkeypatch):
+        """BUG-1 regression: verify run_command works through _handle_tool_call."""
+        monkeypatch.chdir(tmp_path)
+        harness = self._make_harness(tmp_path)
+        session = Session(session_id="integ-test", working_dir=str(tmp_path))
+
+        result = harness._handle_tool_call(
+            "run_command",
+            {"command": "echo hello"},
+            "tc-1",
+            session,
+        )
+        parsed = json.loads(result)
+        assert "error" not in parsed, f"run_command failed: {parsed}"
+        assert "hello" in parsed.get("output", "")
+
+    def test_read_file_dispatch(self, tmp_path, monkeypatch):
+        """Verify read_file works through _handle_tool_call."""
+        monkeypatch.chdir(tmp_path)
+        harness = self._make_harness(tmp_path)
+        session = Session(session_id="integ-test", working_dir=str(tmp_path))
+
+        # Create a test file
+        test_file = tmp_path / "test.txt"
+        test_file.write_text("line1\nline2\nline3\n")
+
+        result = harness._handle_tool_call(
+            "read_file",
+            {"path": str(test_file)},
+            "tc-2",
+            session,
+        )
+        parsed = json.loads(result)
+        assert "error" not in parsed, f"read_file failed: {parsed}"
+        assert "line1" in parsed["content"]
+
+    def test_write_file_dispatch(self, tmp_path, monkeypatch):
+        """Verify write_file works through _handle_tool_call (requires read first)."""
+        monkeypatch.chdir(tmp_path)
+        harness = self._make_harness(tmp_path)
+        session = Session(session_id="integ-test", working_dir=str(tmp_path))
+
+        test_file = tmp_path / "output.txt"
+
+        # Must read first (even for new files, the check is on existing files)
+        harness._handle_tool_call(
+            "write_file",
+            {"path": str(test_file), "content": "hello world"},
+            "tc-3",
+            session,
+        )
+        assert test_file.read_text() == "hello world"
+
+    def test_edit_file_requires_read(self, tmp_path, monkeypatch):
+        """Verify edit_file enforces read-before-edit through _handle_tool_call."""
+        monkeypatch.chdir(tmp_path)
+        harness = self._make_harness(tmp_path)
+        session = Session(session_id="integ-test", working_dir=str(tmp_path))
+
+        test_file = tmp_path / "edit.txt"
+        test_file.write_text("hello world")
+
+        # Try to edit without reading first — should fail
+        result = harness._handle_tool_call(
+            "edit_file",
+            {"path": str(test_file), "old_text": "world", "new_text": "python"},
+            "tc-4",
+            session,
+        )
+        parsed = json.loads(result)
+        assert "error" in parsed
+        assert "read" in parsed["error"].lower()
+
+    def test_calculator_dispatch(self, tmp_path, monkeypatch):
+        """Verify calculator works through _handle_tool_call."""
+        monkeypatch.chdir(tmp_path)
+        harness = self._make_harness(tmp_path)
+        session = Session(session_id="integ-test", working_dir=str(tmp_path))
+
+        result = harness._handle_tool_call(
+            "calculator",
+            {"expression": "2 + 3 * 4"},
+            "tc-5",
+            session,
+        )
+        parsed = json.loads(result)
+        assert "error" not in parsed, f"calculator failed: {parsed}"
+        assert parsed.get("result") == 14
+
+    def test_unknown_tool_rejected(self, tmp_path, monkeypatch):
+        """Verify unknown tools are rejected (fail-closed)."""
+        monkeypatch.chdir(tmp_path)
+        harness = self._make_harness(tmp_path)
+        session = Session(session_id="integ-test", working_dir=str(tmp_path))
+
+        result = harness._handle_tool_call(
+            "nonexistent_tool",
+            {"arg": "value"},
+            "tc-6",
+            session,
+        )
+        parsed = json.loads(result)
+        assert "error" in parsed
+        assert "unknown" in parsed["error"].lower() or "not found" in parsed["error"].lower()
+
+    def test_malformed_args_handled(self, tmp_path, monkeypatch):
+        """Verify malformed tool arguments are reported back to LLM."""
+        monkeypatch.chdir(tmp_path)
+        harness = self._make_harness(tmp_path)
+        session = Session(session_id="integ-test", working_dir=str(tmp_path))
+
+        result = harness._handle_tool_call(
+            "calculator",
+            {"_parse_error": True, "raw": "bad json"},
+            "tc-7",
+            session,
+        )
+        parsed = json.loads(result)
+        assert "error" in parsed
+        assert "malformed" in parsed["error"].lower() or "parse" in parsed["error"].lower()

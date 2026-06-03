@@ -30,7 +30,7 @@ from .memory import MemoryStore
 def print_banner():
     print("""
 +------------------------------------------+
-|          MiMo Harness v0.2.0             |
+|          MiMo Harness v0.3.0             |
 |  AI Agent powered by Xiaomi MiMo model  |
 |  Claude Code architecture patterns       |
 +------------------------------------------+

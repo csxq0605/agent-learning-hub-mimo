@@ -644,7 +644,7 @@ Is this decision appropriate? Are there any overlooked risks?"""
 
     try:
         response = client.chat.completions.create(
-            model=model or "gpt-4o-mini",
+            model=model or "mimo-v2.5-pro",
             messages=[
                 {"role": "system", "content": _REVIEW_SYSTEM_PROMPT},
                 {"role": "user", "content": prompt},

@@ -3,6 +3,9 @@
 Ch3 markers:
 - read_file, glob_files, grep_files: read-only, concurrency-safe
 - write_file, edit_file: write, NOT concurrency-safe
+
+DESIGN-3 fix: Read/write tracking state is session-scoped via contextvars,
+preventing cross-contamination between parallel SubAgents.
 """
 
 import os
@@ -11,19 +14,63 @@ import glob as glob_mod
 import re
 import threading
 import fnmatch
+import contextvars
+from dataclasses import dataclass, field
 from pathlib import Path
 from .registry import ToolDef
 from ..permissions import Permission
 
 _ALLOWED_WRITE_DIR = None  # Lazily initialized on first use
 
-# Track files that have been read in this session (for read-before-edit check)
-_read_files: set[str] = set()
-_read_files_lock = threading.Lock()
 
-# Track files that have been read (for read-before-write check on existing files)
-_write_allowed_files: set[str] = set()
-_write_allowed_files_lock = threading.Lock()
+# ---------------------------------------------------------------------------
+# DESIGN-3: Session-scoped file operation state (replaces global sets)
+# ---------------------------------------------------------------------------
+@dataclass
+class FileOpsState:
+    """Per-session tracking of read/write file state.
+
+    Each MiMoHarness session (including SubAgents) gets its own isolated
+    state, preventing one SubAgent's reads from being visible to another.
+    """
+    read_files: set = field(default_factory=set)
+    write_allowed_files: set = field(default_factory=set)
+
+    def mark_read(self, abs_path: str):
+        """Record that a file has been read in this session."""
+        self.read_files.add(abs_path)
+        self.write_allowed_files.add(abs_path)
+
+    def is_read(self, abs_path: str) -> bool:
+        """Check if a file has been read in this session."""
+        return abs_path in self.read_files
+
+    def is_write_allowed(self, abs_path: str) -> bool:
+        """Check if a file has been read (and thus write-allowed) in this session."""
+        return abs_path in self.write_allowed_files
+
+    def reset(self):
+        """Clear all tracking state (for new session)."""
+        self.read_files.clear()
+        self.write_allowed_files.clear()
+
+
+# Context variable for session-scoped state; default is a shared global
+# fallback for backward compatibility (direct handler calls outside agent loop).
+_global_state = FileOpsState()
+_file_ops_state_var: contextvars.ContextVar[FileOpsState] = contextvars.ContextVar(
+    "file_ops_state", default=_global_state
+)
+
+
+def get_file_ops_state() -> FileOpsState:
+    """Get the current session's FileOpsState from context."""
+    return _file_ops_state_var.get()
+
+
+def set_file_ops_state(state: FileOpsState) -> contextvars.Token:
+    """Set the session-scoped FileOpsState. Returns a token for reset."""
+    return _file_ops_state_var.set(state)
 
 
 def _get_allowed_write_dir() -> Path:
@@ -64,13 +111,10 @@ def read_file(params: dict) -> str:
         total = len(lines)
         selected = lines[offset:offset + limit]
         numbered = [f"{i+offset+1}\t{l}" for i, l in enumerate(selected)]
-        # Track that this file has been read (for read-before-edit check)
+        # Track that this file has been read (session-scoped)
         abs_path = os.path.abspath(path)
-        with _read_files_lock:
-            _read_files.add(abs_path)
-        # Also allow writing to this file (for read-before-write check)
-        with _write_allowed_files_lock:
-            _write_allowed_files.add(abs_path)
+        state = get_file_ops_state()
+        state.mark_read(abs_path)
         return json.dumps({
             "path": path,
             "total_lines": total,
@@ -87,12 +131,12 @@ def write_file(params: dict) -> str:
     err = _validate_write_path(path)
     if err:
         return json.dumps({"error": err})
-    # Read-before-write check: existing files must be read first
+    # Read-before-write check: existing files must be read first (session-scoped)
     abs_path = os.path.abspath(path)
+    state = get_file_ops_state()
     if os.path.exists(abs_path):
-        with _write_allowed_files_lock:
-            if abs_path not in _write_allowed_files:
-                return json.dumps({"error": f"File '{path}' must be read before writing. Use read_file first."})
+        if not state.is_write_allowed(abs_path):
+            return json.dumps({"error": f"File '{path}' must be read before writing. Use read_file first."})
     try:
         os.makedirs(os.path.dirname(abs_path), exist_ok=True)
         with open(path, "w", encoding="utf-8") as f:
@@ -113,11 +157,11 @@ def edit_file(params: dict) -> str:
     # Reject empty old_text — str.replace("", ...) is character-level and destructive
     if not old_text:
         return json.dumps({"error": "old_text must not be empty"})
-    # Read-before-edit check: verify file was read in this session
+    # Read-before-edit check: verify file was read in this session (session-scoped)
     abs_path = os.path.abspath(path)
-    with _read_files_lock:
-        if abs_path not in _read_files:
-            return json.dumps({"error": f"File '{path}' must be read before editing. Use read_file first."})
+    state = get_file_ops_state()
+    if not state.is_read(abs_path):
+        return json.dumps({"error": f"File '{path}' must be read before editing. Use read_file first."})
     try:
         with open(path, "r", encoding="utf-8") as f:
             content = f.read()

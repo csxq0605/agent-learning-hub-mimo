@@ -260,6 +260,7 @@ class SubAgent:
                     if not SubAgent._imports_cached:
                         from .agent import MiMoHarness, AgentDeps
                         from .context import Session
+                        from .tools.file_ops import FileOpsState, set_file_ops_state
                         SubAgent._MiMoHarness = MiMoHarness
                         SubAgent._AgentDeps = AgentDeps
                         SubAgent._Session = Session

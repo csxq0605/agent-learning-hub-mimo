@@ -120,7 +120,8 @@ class TestFileOps:
 
     def test_edit_file_read_before_edit_required(self, tmp_path, monkeypatch):
         monkeypatch.setattr(file_ops, "_ALLOWED_WRITE_DIR", tmp_path)
-        monkeypatch.setattr(file_ops, "_read_files", set())
+        # DESIGN-3: Reset session-scoped state instead of global
+        file_ops.set_file_ops_state(file_ops.FileOpsState())
         f = tmp_path / "unread.txt"
         f.write_text("hello world")
         result = json.loads(file_ops.edit_file({

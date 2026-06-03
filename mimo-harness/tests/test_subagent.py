@@ -729,8 +729,7 @@ class TestSubAgentE2E:
 
         # Reset file_ops sandbox state so it uses current CWD
         file_ops._ALLOWED_WRITE_DIR = None
-        file_ops._read_files.clear()
-        file_ops._write_allowed_files.clear()
+        file_ops.set_file_ops_state(file_ops.FileOpsState())
 
         # Create a temp file in CWD so security pipeline allows it
         cwd = os.getcwd()
@@ -759,8 +758,7 @@ class TestSubAgentE2E:
             shutil.rmtree(test_dir, ignore_errors=True)
             # Reset file_ops sandbox state
             file_ops._ALLOWED_WRITE_DIR = None
-            file_ops._read_files.clear()
-            file_ops._write_allowed_files.clear()
+            file_ops.set_file_ops_state(file_ops.FileOpsState())
 
 
 if __name__ == "__main__":

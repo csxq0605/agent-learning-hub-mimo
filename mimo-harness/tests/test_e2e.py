@@ -49,8 +49,7 @@ def work_dir(tmp_path):
     we use a subdir approach: create files directly in CWD under .e2e_work/.
     """
     # Reset module-level state
-    file_ops._read_files.clear()
-    file_ops._write_allowed_files.clear()
+    file_ops.set_file_ops_state(file_ops.FileOpsState())
 
     # Create work dir inside CWD
     cwd = os.getcwd()

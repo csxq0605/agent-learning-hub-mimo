@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="mimo-harness",
-    version="0.2.0",
+    version="0.3.0",
     description="A production-grade AI agent harness powered by Xiaomi MiMo model, following Claude Code architecture patterns",
     long_description=open("README.md", encoding="utf-8").read(),
     long_description_content_type="text/markdown",
