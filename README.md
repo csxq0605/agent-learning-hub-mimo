@@ -15,9 +15,9 @@
 | Stage | 主题 | 核心能力 | 交付物 |
 |-------|------|----------|--------|
 | 0 | 理论基础 | Agent 概念、ReAct 模式、Workflow vs Agent | 学习笔记 |
-| 1 | 最小 Agent | 单轮 tool calling、安全数学求值、路径校验 | 120 行 Python agent |
+| 1 | 最小 Agent | 单轮 tool calling、安全数学求值、路径校验 | ~220 行 Python agent |
 | 2 | RAG 研究助手 | 文本分块、关键词检索、三级记忆、代码执行 | 研究助手 agent |
-| 3 | Agent Harness | 工具注册、4 级权限门控、上下文压缩、会话管理 | Harness 演示 |
+| 3 | Agent Harness | 工具注册、权限门控、上下文压缩、会话管理 | Harness 演示 |
 | 4 | 多 Agent 协作 | Supervisor 模式、研究→写作→审阅→修改 pipeline | 多 agent 写作系统 |
 | 5 | Skill 框架 | 可复用 Skill 定义、结构化代码审查、烟雾测试 | Code Review Skill |
 | 6 | 浏览器自动化 | Playwright 异步操作、URL 校验、表单安全守卫 | 浏览器研究 agent |
@@ -46,7 +46,29 @@ mimo-harness   # 进入交互模式
 
 ## MiMo Harness
 
-基于 Stage 0-8 经验构建的完整 Agent Harness，参考 Claude Code 架构。详见 [mimo-harness/README.md](mimo-harness/README.md)。
+基于 Stage 0-8 经验构建的完整 Agent Harness，参考 Claude Code 架构。
+
+**核心特性**：
+- **Agent Loop**: 依赖注入、熔断器、Token 预算、并行工具调度、流式输出
+- **15 个工具模块**: 文件操作、Shell、代码执行、Web、文档、数学、笔记本、任务、LSP、调度器等
+- **权限管线**: 6 种模式（DEFAULT/PLAN/AUTO/ACCEPT_EDITS/DONT_ASK/BYPASS），4 阶段管线
+- **安全管线**: 2 层防御（regex 预过滤 + 模型分类器），敏感数据脱敏，Prompt injection 检测
+- **上下文管理**: 4 级渐进压缩（snip → microcompact → LLM 压缩 → 激进截断），200K token 窗口
+- **记忆系统**: 4 类型（user/feedback/project/reference），分层加载，路径作用域规则
+- **会话管理**: JSONL 自动保存、检查点回滚、会话分叉、命名会话
+- **Hook 系统**: 18 种生命周期事件，命令/HTTP/Prompt 三种 handler
+- **SubAgent**: 并行/Pipeline 执行，资源限制，消息通道
+- **CLI**: 25+ 斜杠命令、管道输入、多输出格式
+
+详见 [mimo-harness/README.md](mimo-harness/README.md)。
+
+## 测试状态
+
+```
+679 passed in 923.58s (0:15:23)
+```
+
+所有单元测试通过，覆盖安全、权限、上下文、工具、CLI、Hook、设置、会话等模块。
 
 ## License
 

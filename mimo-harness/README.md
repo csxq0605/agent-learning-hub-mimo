@@ -6,15 +6,18 @@ A production-grade AI agent harness powered by Xiaomi MiMo model, following Clau
 
 ## Features
 
-- **Agent Loop**: Dependency injection, circuit breaker, token budget, parallel tool dispatch, streaming, effort levels
+- **Agent Loop**: Dependency injection, circuit breaker, token budget, parallel tool dispatch, streaming, effort levels, fallback model, graceful abort
 - **15 Tool Modules**: File ops, shell, code execution, web, docs, math, notebooks, tasks, LSP, scheduler, plan, monitor, interactive
-- **Permission Pipeline**: 6 modes (default/auto_approve/dry_run/plan/hook_blocked/hard_deny), 4-stage pipeline, protected paths
-- **Context Management**: LLM semantic compression, 200K token window, thrashing protection, progressive compression
-- **Memory System**: 4 types (user/feedback/project/reference), @import directives, path-scoped rules, tiered loading
-- **Session Management**: Auto-save (JSONL), resume, named sessions, session ID validation, checkpoints, fork
-- **Settings Hierarchy**: 4-level config (managed → user → project → local)
-- **Hook System**: 18 lifecycle events, command/function hooks, config hot-reload
-- **CLI**: Interactive REPL, pipe input, output formats, `!command`, `/context`, `/rewind`, `/fork`
+- **Permission Pipeline**: 6 modes (DEFAULT/PLAN/AUTO/ACCEPT_EDITS/DONT_ASK/BYPASS), 4-stage pipeline, protected paths, symlink resolution
+- **Security Pipeline**: 2-layer defense (regex pre-filter + model classifier), sensitive data redaction, prompt injection detection, self-review mechanism
+- **Context Management**: 4-level progressive compression (snip → microcompact → LLM semantic → aggressive truncation), 200K token window, thrashing protection
+- **Memory System**: 4 types (user/feedback/project/reference), @import directives, path-scoped rules, tiered loading, CLAUDE.md discovery
+- **Session Management**: Auto-save (JSONL), resume, named sessions, session ID validation, checkpoints with rewind, fork, auto-cleanup
+- **Settings Hierarchy**: 4-level config (managed → user → project → local), config hot-reload via ConfigWatcher
+- **Hook System**: 18 lifecycle events, command/HTTP/prompt hooks, async fire-and-forget, SSRF protection on HTTP hooks
+- **SubAgent System**: Parallel/Pipeline execution, resource limits (tokens/time/count), message channels, priority scheduling
+- **Token Counter**: tiktoken precise counting with heuristic fallback, streaming accumulator, per-session stats
+- **CLI**: Interactive REPL, pipe input, output formats (text/json/stream-json), `!command`, 25+ slash commands
 
 ## Quick Start
 
@@ -91,6 +94,10 @@ mimo-harness
 | `/init` | 扫描项目并生成 AGENTS.md |
 | `/rewind` | 回退到上一个文件检查点（支持批量恢复） |
 | `/fork` | 分叉当前会话（复制为新 session ID） |
+| `/subagents` | 列出活跃的 SubAgent |
+| `/subagent <task>` | 运行单个 SubAgent 任务 |
+| `/parallel <t1> \| <t2>` | 并行运行多个任务 |
+| `/pipeline <t1> \| <t2>` | Pipeline 模式运行多个任务 |
 | `!<cmd>` | 直接执行 shell 命令（如 `!git status`），通过权限系统 |
 
 ### 其他模式
@@ -165,29 +172,31 @@ mimo_harness/
 ├── agent.py              # Core loop, DI, circuit breaker, token budget, streaming
 ├── cli.py                # REPL, pipe input, output formats, session resume, commands
 ├── config.py             # Configuration management, API key validation
-├── context.py            # Compression, session management, checkpoints, memory loading
-├── hooks.py              # 18 lifecycle events, command/function hooks
+├── context.py            # 4-level compression, session management, checkpoints, memory loading
+├── hooks.py              # 18 lifecycle events, command/HTTP/prompt hooks
 ├── logging_utils.py      # Structured logging with trace IDs
-├── memory.py             # 4 typed memories, tiered loading
-├── permissions.py        # 6 modes, 4-stage pipeline, protected paths
+├── memory.py             # 4 typed memories, tiered loading, path-scoped rules
+├── permissions.py        # 6 modes, 4-stage pipeline, protected paths, symlink resolution
 ├── project_scanner.py    # Project analysis, AGENTS.md generation
-├── security_pipeline.py  # 2-layer security (regex + model), action classification
+├── security_pipeline.py  # 2-layer security (regex + model), sensitive data redaction
 ├── settings.py           # 4-level settings hierarchy
+├── subagent.py           # SubAgent lifecycle, parallel/pipeline execution, message channels
+├── token_counter.py      # tiktoken counting, heuristic fallback, streaming accumulator
 └── tools/                # 15 tool modules
-    ├── code_exec.py      # Python code execution
-    ├── doc_tools.py      # Document creation and editing
-    ├── file_ops.py       # File read/write/edit operations
-    ├── interactive.py    # User interaction tools (ask, confirm)
-    ├── lsp_tools.py      # Language Server Protocol integration
-    ├── math_tools.py     # Calculator and math operations
-    ├── monitor.py        # Background monitoring and task management
-    ├── notebook_tools.py # Jupyter notebook operations
-    ├── plan_tools.py     # Plan mode tools
-    ├── registry.py       # Tool registration and dispatch
-    ├── scheduler_tools.py # Cron-like scheduling
-    ├── shell.py          # Shell command execution
-    ├── task_tools.py     # Task creation and management
-    └── web_tools.py      # Web search and fetch
+    ├── code_exec.py      # Python code execution in isolated subprocess
+    ├── doc_tools.py      # Document and CSV creation
+    ├── file_ops.py       # File read/write/edit, session-scoped state via contextvars
+    ├── interactive.py    # User interaction (ask_user_question), memory topic loading
+    ├── lsp_tools.py      # LSP integration (definition, references, diagnostics)
+    ├── math_tools.py     # AST-based safe math evaluator
+    ├── monitor.py        # Background process monitoring
+    ├── notebook_tools.py # Jupyter notebook cell editing
+    ├── plan_tools.py     # Plan mode (enter/exit with user approval)
+    ├── registry.py       # Tool registration, validation, disk spillover
+    ├── scheduler_tools.py # Cron-like session-scoped scheduling
+    ├── shell.py          # Shell execution with read-only auto-detection, env scrubbing
+    ├── task_tools.py     # Task CRUD (create/get/list/update/delete)
+    └── web_tools.py      # Web search (DuckDuckGo/Bing) and fetch with SSRF protection
 ```
 
 ## Testing
@@ -197,15 +206,20 @@ pip install -e ".[dev]"
 python -m pytest tests/ -v
 ```
 
+**测试状态**: 679 passed in 923.58s (0:15:23)
+
 21 test files covering:
-- **Security**: path traversal, SSRF, shell injection, large input, Unicode
-- **Permissions**: 6 modes, 4-stage pipeline, protected paths
-- **Context**: compression, parallel dispatch, streaming, thrashing protection
-- **Tools**: file ops, shell, web, docs, math, notebooks, tasks, LSP, plan, scheduler
-- **CLI**: interactive REPL, pipe input, output formats, session management
-- **Hooks**: 18 lifecycle events, command/function hooks
+- **Security**: path traversal, SSRF, shell injection, large input, Unicode, sensitive data redaction, prompt injection detection
+- **Permissions**: 6 modes, 4-stage pipeline, protected paths, symlink resolution, rule matching
+- **Context**: 4-level compression, parallel dispatch, streaming, thrashing protection, orphan filtering
+- **Tools**: file ops, shell, web, docs, math, notebooks, tasks, LSP, plan, scheduler, code execution
+- **CLI**: interactive REPL, pipe input, output formats, session management, argument parsing
+- **Hooks**: 18 lifecycle events, command/HTTP/prompt hooks, async execution
 - **Settings**: 4-level hierarchy, config hot-reload
-- **Session**: ID validation, checkpoints, fork, resume
+- **Session**: ID validation, checkpoints, fork, resume, JSONL persistence
+- **SubAgent**: lifecycle, parallel execution, pipeline, resource limits, message channels
+- **Token Counter**: tiktoken counting, heuristic fallback, streaming accumulator
+- **Stress/Boundary**: extreme inputs, concurrent access, resource limits
 
 ## License
 

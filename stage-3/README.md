@@ -29,15 +29,17 @@
 
 ### Key Components
 
-| Component | Claude Code | Our Demo |
-|-----------|------------|----------|
-| **Tool Registry** | 20+ tools (Read, Edit, Bash, Glob, Grep, Agent...) | 4 tools (read_file, write_file, list_files, calculator) |
-| **Permission Gate** | Auto/Ask/Deny per tool per mode | 5-level Permission enum (NONE/READ/WRITE/EXECUTE/DESTRUCTIVE) |
-| **Session Store** | JSONL transcripts, cross-surface sessions | In-memory session with message history |
-| **Context Compaction** | Auto-summarize when approaching limits | Keep last N messages with orphan tool result filtering |
-| **Hooks** | Shell commands pre/post tool execution | Not implemented (would be event emitter) |
-| **Sub-agents** | Independent context windows, parallel execution | Not implemented (would be Agent class) |
-| **MCP** | External tool servers via protocol | Not implemented |
+| Component | Claude Code | Stage 3 Demo | MiMo Harness (v0.3.0) |
+|-----------|------------|-------------|----------------------|
+| **Tool Registry** | 20+ tools | 4 tools | 15 tools with fail-closed defaults |
+| **Permission Gate** | Auto/Ask/Deny per tool per mode | 5-level Permission enum | 6 modes, 4-stage pipeline, protected paths |
+| **Session Store** | JSONL transcripts | In-memory session | JSONL auto-save, checkpoints, fork, resume |
+| **Context Compaction** | Auto-summarize when approaching limits | Keep last N messages | 4-level progressive compression (snip → microcompact → LLM → truncation) |
+| **Hooks** | Shell commands pre/post tool execution | Not implemented | 18 events, command/HTTP/prompt hooks |
+| **Sub-agents** | Independent context windows, parallel execution | Not implemented | Parallel/Pipeline execution, resource limits |
+| **MCP** | External tool servers via protocol | Not implemented | Not implemented (future enhancement) |
+
+> **Note**: The Stage 3 demo was a learning exercise. The full MiMo Harness (v0.3.0) implements all components listed above, with 679 unit tests passing.
 
 ### What I Learned
 

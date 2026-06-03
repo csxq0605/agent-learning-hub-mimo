@@ -9,7 +9,7 @@ An eval framework with 15 test cases, keyword+LLM dual-layer judgment, and failu
 |--------|-------|
 | Total test cases | 15 |
 | Categories | 9 (tool_call, knowledge, reasoning, coding, safety, structured, math, logic) |
-| Failure classes | 2 (wrong_tool, hallucination, permission_violation, format_error) |
+| Failure classes | 4 (wrong_tool, hallucination, permission_violation, format_error) |
 | Judgment method | Keyword matching + LLM fallback judge |
 
 ## How to Run
