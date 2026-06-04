@@ -14,6 +14,11 @@ from dotenv import load_dotenv
 
 from tests.e2e_utils import E2E_MAX_RETRIES, _is_retryable
 
+
+def pytest_configure(config):
+    """Register custom markers."""
+    config.addinivalue_line("markers", "slow: marks tests as slow (>30s, multi-step or API-heavy)")
+
 # Load .env BEFORE checking for real API key
 _env_path = Path.cwd() / ".env"
 if not _env_path.exists():

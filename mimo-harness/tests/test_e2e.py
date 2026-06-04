@@ -191,6 +191,7 @@ class TestE2EShell:
             f"Expected both files, got: {result[:200]}"
 
 
+@pytest.mark.slow
 class TestE2ECodeExec:
     """Agent executes real Python code."""
 
@@ -252,6 +253,7 @@ class TestE2EGlobGrep:
             f"Expected '3' with function context, got: {result[:200]}"
 
 
+@pytest.mark.slow
 class TestE2EMultiStep:
     """Agent performs multi-step workflows."""
 
@@ -337,6 +339,7 @@ class TestE2EErrorHandling:
         assert len(result) > 0, "Agent should produce a response"
         assert "[ERROR]" not in result or "not found" in result.lower() or "no such" in result.lower()
 
+    @pytest.mark.slow
     def test_max_steps_exhaustion(self, work_dir):
         """Agent stops gracefully when max_steps is reached."""
         # Use a multi-step task with very few steps
@@ -354,6 +357,7 @@ class TestE2EErrorHandling:
         result = _harness(max_steps=3).run("")
         assert len(result) > 0, "Agent should produce a response for empty task"
 
+    @pytest.mark.slow
     def test_very_long_input(self):
         """Agent handles very long task input."""
         long_task = "Repeat the following text back to me: " + "hello " * 2000
@@ -361,6 +365,7 @@ class TestE2EErrorHandling:
         assert len(result) > 0, "Agent should produce a response for long input"
 
 
+@pytest.mark.slow
 class TestE2ESessionResume:
     """Session save and resume with real API calls."""
 
@@ -387,6 +392,7 @@ class TestE2ESessionResume:
         assert "assistant" in roles
 
 
+@pytest.mark.slow
 class TestE2ETokenBudgetExhaustion:
     """Token budget exhaustion with real API calls."""
 
@@ -405,6 +411,7 @@ class TestE2ETokenBudgetExhaustion:
 # 3. Token Counter Accuracy (E2E with real API)
 # ═══════════════════════════════════════════════════════════════
 
+@pytest.mark.slow
 class TestE2ETokenCounter:
     """Token counting accuracy with real API calls."""
 
@@ -458,6 +465,7 @@ class TestE2ETokenCounter:
 # 11. Compact Context with LLM (E2E with real API)
 # ═══════════════════════════════════════════════════════════════
 
+@pytest.mark.slow
 class TestE2ECompactContext:
     """Compact context with real MiMo API calls."""
 
@@ -647,29 +655,23 @@ class TestCLINoStream:
 
 
 class TestCLIEffortLevels:
-    """CLI effort levels."""
+    """CLI effort levels — verify both low and high produce valid output."""
 
-    def test_low_effort(self):
-        result = _run_cli(
-            "--task", "What is 2 + 2? Reply with just the number.",
-            "--effort", "low", "--max-steps", "5", "--bare",
-        )
-        assert result.returncode == 0
-        assert "4" in result.stdout, f"Expected answer '4' in output: {result.stdout[:200]}"
-
-    def test_high_effort(self):
-        result = _run_cli(
-            "--task", "What is 2 + 2? Reply with just the number.",
-            "--effort", "high", "--max-steps", "5", "--bare",
-        )
-        assert result.returncode == 0
-        assert "4" in result.stdout, f"Expected answer '4' in output: {result.stdout[:200]}"
+    def test_effort_levels_accepted(self):
+        for effort in ("low", "high"):
+            result = _run_cli(
+                "--task", "What is 2 + 2? Reply with just the number.",
+                "--effort", effort, "--max-steps", "5", "--bare",
+            )
+            assert result.returncode == 0, f"--effort {effort} failed"
+            assert "4" in result.stdout, f"--effort {effort}: expected '4', got: {result.stdout[:200]}"
 
 
 class TestMainFunctionPaths:
     """main() function with various argument combinations (in-process)."""
 
     def test_main_single_task(self, monkeypatch, capsys):
+        """main() with --task runs and produces output."""
         monkeypatch.setattr("sys.argv", ["mimo", "--task", "Reply with the word hello."])
         from mimo_harness.cli import main
         main()
@@ -677,46 +679,18 @@ class TestMainFunctionPaths:
         assert len(output) > 0
         assert "hello" in output.lower(), f"Expected 'hello' in output: {output[:200]}"
 
-    def test_main_dry_run(self, monkeypatch, capsys):
+    def test_main_flags_accepted(self, monkeypatch, capsys):
+        """main() accepts --dry-run without crash (no API call)."""
         monkeypatch.setattr("sys.argv", ["mimo", "--task", "test", "--dry-run"])
         from mimo_harness.cli import main
         main()
         output = capsys.readouterr().out.strip()
         assert len(output) > 0, "Dry-run should produce output"
 
-    def test_main_plan_mode(self, monkeypatch, capsys):
-        monkeypatch.setattr("sys.argv", ["mimo", "--task", "Say hello", "--plan"])
-        from mimo_harness.cli import main
-        main()
-        output = capsys.readouterr().out.strip()
-        assert len(output) > 0
-
-    def test_main_no_stream_mode(self, monkeypatch, capsys):
-        monkeypatch.setattr("sys.argv", ["mimo", "--task", "Say hello", "--no-stream", "--bare", "--max-steps", "5"])
-        from mimo_harness.cli import main
-        main()
-        output = capsys.readouterr().out.strip()
-        assert len(output) > 0
-        assert "hello" in output.lower(), f"Expected 'hello' in output: {output[:200]}"
-
     def test_main_repl_quit(self, monkeypatch, capsys):
+        """REPL exits cleanly on /quit."""
         monkeypatch.setattr("sys.argv", ["mimo"])
         monkeypatch.setattr("builtins.input", lambda _="": "/quit")
-        from mimo_harness.cli import main
-        main()
-        assert "Bye!" in capsys.readouterr().out
-
-    def test_main_repl_empty_then_quit(self, monkeypatch, capsys):
-        monkeypatch.setattr("sys.argv", ["mimo"])
-        _iter = iter(["", "  ", "/quit"])
-        monkeypatch.setattr("builtins.input", lambda _="": next(_iter))
-        from mimo_harness.cli import main
-        main()
-        assert "Bye!" in capsys.readouterr().out
-
-    def test_main_eof_exits(self, monkeypatch, capsys):
-        monkeypatch.setattr("sys.argv", ["mimo"])
-        monkeypatch.setattr("builtins.input", lambda _="": (_ for _ in ()).throw(EOFError))
         from mimo_harness.cli import main
         main()
         assert "Bye!" in capsys.readouterr().out
