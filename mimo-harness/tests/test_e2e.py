@@ -51,8 +51,9 @@ def work_dir(tmp_path):
     # Reset module-level state
     file_ops.set_file_ops_state(file_ops.FileOpsState())
 
-    # Create work dir inside CWD
+    # Create work dir inside CWD and ensure allowed_write_dir matches
     cwd = os.getcwd()
+    file_ops.set_allowed_write_dir(cwd)
     work = os.path.join(cwd, ".e2e_work")
     os.makedirs(work, exist_ok=True)
 
@@ -70,6 +71,8 @@ def work_dir(tmp_path):
 
 def _harness(auto_approve=True, max_steps=10):
     """Create a harness with real API."""
+    # Ensure allowed_write_dir is current CWD (may have been changed by previous tests)
+    file_ops.set_allowed_write_dir(os.getcwd())
     return MiMoHarness(auto_approve=auto_approve, bare=True, max_steps=max_steps)
 
 

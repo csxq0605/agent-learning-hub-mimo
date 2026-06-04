@@ -22,6 +22,7 @@ import json
 import time
 import hashlib
 import logging
+import threading
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional
@@ -413,8 +414,9 @@ Respond with ONLY a JSON object:
 {{"decision": "allow" or "deny", "reason": "brief explanation", "reasoning": "your analysis of why this is safe or unsafe", "risk_level": "low" or "medium" or "high"}}"""
 
 
-# Cache for model classifier results to reduce API calls
+# Cache for model classifier results to reduce API calls (thread-safe)
 _classifier_cache: dict[str, tuple[float, ClassificationResult]] = {}
+_classifier_cache_lock = threading.Lock()
 _CLASSIFIER_CACHE_TTL = 300  # 5 minutes
 _CLASSIFIER_CACHE_MAX_SIZE = 256
 
@@ -451,16 +453,17 @@ def classify_action_model(
     # Check cache to avoid redundant API calls for identical tool invocations
     cache_key = f"{tool_name}:{hashlib.md5(json.dumps(tool_args, sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:12]}"
     now = time.time()
-    if cache_key in _classifier_cache:
-        cached_time, cached_result = _classifier_cache[cache_key]
-        if now - cached_time < _CLASSIFIER_CACHE_TTL:
-            return cached_result
+    with _classifier_cache_lock:
+        if cache_key in _classifier_cache:
+            cached_time, cached_result = _classifier_cache[cache_key]
+            if now - cached_time < _CLASSIFIER_CACHE_TTL:
+                return cached_result
 
-    # Evict expired entries when cache grows too large
-    if len(_classifier_cache) >= _CLASSIFIER_CACHE_MAX_SIZE:
-        expired = [k for k, (t, _) in _classifier_cache.items() if now - t >= _CLASSIFIER_CACHE_TTL]
-        for k in expired:
-            del _classifier_cache[k]
+        # Evict expired entries when cache grows too large
+        if len(_classifier_cache) >= _CLASSIFIER_CACHE_MAX_SIZE:
+            expired = [k for k, (t, _) in _classifier_cache.items() if now - t >= _CLASSIFIER_CACHE_TTL]
+            for k in expired:
+                del _classifier_cache[k]
 
     # Build the action description for the classifier
     # (Claude Code sends transcript + pending action, NOT tool results)
@@ -552,7 +555,8 @@ Is this action safe to execute?"""
                 reasoning=reasoning,
                 risk_level=risk_level if risk_level in ("low", "medium", "high") else "low",
             )
-        _classifier_cache[cache_key] = (now, result)
+        with _classifier_cache_lock:
+            _classifier_cache[cache_key] = (now, result)
         return result
     except Exception as e:
         # Fail open: when the model classifier API is unavailable (timeout,
@@ -570,6 +574,7 @@ Is this action safe to execute?"""
 # ---------------------------------------------------------------------------
 
 _review_cache: dict[str, tuple[float, ReviewResult]] = {}
+_review_cache_lock = threading.Lock()
 _REVIEW_CACHE_TTL = 300  # 5 minutes
 _REVIEW_CACHE_MAX_SIZE = 128
 
@@ -617,16 +622,17 @@ def review_action(
     # Check cache
     cache_key = f"{tool_name}:{decision.value}:{hashlib.md5(json.dumps(tool_args, sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:12]}"
     now = time.time()
-    if cache_key in _review_cache:
-        cached_time, cached_result = _review_cache[cache_key]
-        if now - cached_time < _REVIEW_CACHE_TTL:
-            return cached_result
+    with _review_cache_lock:
+        if cache_key in _review_cache:
+            cached_time, cached_result = _review_cache[cache_key]
+            if now - cached_time < _REVIEW_CACHE_TTL:
+                return cached_result
 
-    # Evict expired entries when cache grows too large
-    if len(_review_cache) >= _REVIEW_CACHE_MAX_SIZE:
-        expired = [k for k, (t, _) in _review_cache.items() if now - t >= _REVIEW_CACHE_TTL]
-        for k in expired:
-            del _review_cache[k]
+        # Evict expired entries when cache grows too large
+        if len(_review_cache) >= _REVIEW_CACHE_MAX_SIZE:
+            expired = [k for k, (t, _) in _review_cache.items() if now - t >= _REVIEW_CACHE_TTL]
+            for k in expired:
+                del _review_cache[k]
 
     action_desc = f"Tool: {tool_name}\nArguments: {json.dumps(tool_args, ensure_ascii=False)}"
     if tool_name == "run_command":
@@ -664,7 +670,8 @@ Is this decision appropriate? Are there any overlooked risks?"""
             concerns=parsed.get("concerns", []),
             suggestion=parsed.get("suggestion", ""),
         )
-        _review_cache[cache_key] = (now, result)
+        with _review_cache_lock:
+            _review_cache[cache_key] = (now, result)
         return result
     except Exception as e:
         logging.getLogger(__name__).warning("Review action exception (skipping review): %s", e, exc_info=True)

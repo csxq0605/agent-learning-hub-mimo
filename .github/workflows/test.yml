@@ -5,6 +5,17 @@ on:
     branches: [ main, master, develop ]
   pull_request:
     branches: [ main, master, develop ]
+  # E2E tests only run when manually triggered
+  workflow_dispatch:
+    inputs:
+      run_e2e:
+        description: 'Run E2E tests (requires API secrets)'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
 
 jobs:
   # ─────────────────────────────────────────────────────────────
@@ -67,12 +78,14 @@ jobs:
         fail_ci_if_error: false
 
   # ─────────────────────────────────────────────────────────────
-  # 2. E2E tests (only when API secrets are configured)
+  # 2. E2E tests (opt-in only via workflow_dispatch)
   # ─────────────────────────────────────────────────────────────
   e2e-tests:
     runs-on: ubuntu-latest
-    # Only run when secrets are available (not on fork PRs)
-    if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)
+    # Only run when explicitly requested via workflow_dispatch with run_e2e=true
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      github.event.inputs.run_e2e == 'true'
 
     steps:
     - uses: actions/checkout@v4

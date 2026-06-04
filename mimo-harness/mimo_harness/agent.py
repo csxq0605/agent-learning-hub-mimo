@@ -741,6 +741,8 @@ You help users with coding, file operations, web research, document creation, an
 
         start_time = time.time()
         tools_schema = self.registry.list_tools()
+        # Reset system prompt cache so CWD/tools changes are reflected
+        self._system_prompt_cache = None
         system_msg = {"role": "system", "content": self._build_system_prompt()}
         effort_params = self.EFFORT_PARAMS.get(self.effort, self.EFFORT_PARAMS["medium"])
 

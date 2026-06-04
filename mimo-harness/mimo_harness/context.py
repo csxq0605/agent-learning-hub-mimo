@@ -260,11 +260,9 @@ class CheckpointManager:
                 # Restore to original path if available, else cwd
                 dest = path_lookup.get(filename, os.path.join(os.getcwd(), filename))
                 # Security: validate dest path doesn't contain path traversal components
-                # Note: We allow ".." in safe_name because snapshot() uses relative paths
-                # but we validate the final resolved destination path
+                # Note: normpath + abspath already resolves ".." components, so no
+                # separate ".." check is needed on the normalized path.
                 dest_norm = os.path.normpath(os.path.abspath(dest))
-                if ".." in dest_norm:
-                    continue
                 os.makedirs(os.path.dirname(os.path.abspath(dest)), exist_ok=True)
                 shutil.copy2(src, dest)
                 restored.append(dest)

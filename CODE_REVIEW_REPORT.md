@@ -1,258 +1,173 @@
 # Agent-Learning-Hub-MiMo 代码审查报告
 
-> 审查日期: 2026-06-03
-> 审查范围: 全仓库所有源码、测试、配置文件
+> 审查日期: 2026-06-04 (第二轮)
+> 审查范围: mimo-harness 核心包 (~11,000 行)、8 个 stage 模块、21 个测试文件
 > 对标: Claude Code、OpenAI Codex CLI、Aider 等行业标杆
 
 ---
 
-## 一、项目概述
+## 一、测试状态
 
-本项目是一个学习型 Agent 实现，遵循 datawhalechina/Agent-Learning-Hub 课程，使用小米 MiMo 模型（`mimo-v2.5-pro`）通过 OpenAI 兼容 API 实现了 9 个阶段（Stage 0-8），最终产出一个生产级 Agent Harness（`mimo-harness`），对标 Claude Code 架构。
+| 测试类别 | 结果 |
+|---------|------|
+| Harness 单元测试 (733 个) | ✅ 全部通过 |
+| E2E 测试 | ❌ 1 个失败 (`test_edit_modifies_content`) |
+| Agent 测试 (22 个) | ✅ 全部通过 (65s) |
 
-**代码规模**: ~6000 行 Python（harness 核心）+ ~3000 行测试 + ~1500 行 stage 实现
-
----
-
-## 二、整体架构评价
-
-### 2.1 架构设计 — 优秀
-
-项目对标 Claude Code 的架构设计非常系统化，覆盖了以下核心模块：
-
-| 模块 | 实现质量 | 对标 Claude Code |
-|------|---------|-----------------|
-| Agent Loop (状态机) | ★★★★☆ | 完整实现 while(true) 循环 + 7 种终止原因 |
-| 工具系统 (ToolDef) | ★★★★★ | fail-closed 默认、输入验证、磁盘溢出 |
-| 权限管线 (4 阶段) | ★★★★☆ | deny > ask > allow 优先级、6 种模式 |
-| 安全管线 (2 层防御) | ★★★★☆ | regex 预过滤 + 模型分类器 |
-| 上下文管理 (4 级压缩) | ★★★★☆ | snip → microcompact → LLM 压缩 → 激进截断 |
-| 记忆系统 (4 类型) | ★★★★☆ | 分层加载、路径作用域规则 |
-| Hook 系统 (18 事件) | ★★★☆☆ | 命令/HTTP/Prompt 三种类型 |
-| SubAgent 系统 | ★★★★☆ | 并行/Pipeline 执行、资源限制 |
-| CLI (25+ 命令) | ★★★★☆ | 会话管理、管道输入、多输出格式 |
-
-### 2.2 与行业标杆对比
-
-| 特性 | mimo-harness | Claude Code | Codex CLI | 评价 |
-|------|-------------|-------------|-----------|------|
-| Agent Loop | Python while(true) | 多层循环+sub-agent | Rust 核心 | 基础实现完整，缺少 extended thinking |
-| 沙箱安全 | 应用层权限检查 | 平台原生沙箱 | Seatbelt/Bubblewrap | 缺少 OS 级沙箱，仅应用层过滤 |
-| Hook 系统 | 命令/HTTP/Prompt | 5 种 handler + MCP | 通知脚本 | 缺少 MCP tool 和 agent handler |
-| MCP 集成 | 无 | 完整支持 | Client+Server | 未实现，可作为后续增强 |
-| 配置管理 | 4 级层次 | 5 级层次+实时生效 | TOML+Profile | 接近完整 |
-| 工具集成 | 内置 15 个工具 | 内置+MCP 动态发现 | 内置+MCP | 缺少动态工具发现 |
+**E2E 失败原因**: `_ALLOWED_WRITE_DIR` 全局单例锁定在项目根目录，E2E 测试在临时目录创建文件，被路径验证拒绝。这是一个真实的 bug。
 
 ---
 
-## 三、发现的问题
+## 二、发现汇总
 
-### 3.1 确认的 Bug（需修复）
+| # | 严重度 | 模块 | 类型 | 描述 | 状态 |
+|---|--------|------|------|------|------|
+| 1 | 🔴 High | file_ops.py | Bug | `_ALLOWED_WRITE_DIR` 全局单例导致 E2E 失败 | ✅ 已修复 |
+| 2 | 🟡 Medium | security_pipeline.py | 线程安全 | 分类器缓存无锁保护 | ✅ 已修复 |
+| 3 | 🟡 Medium | permissions.py | 维护风险 | `_is_dangerous_rm` 重复 `_HARD_DENY_PATTERNS` | ✅ 已修复 |
+| 4 | 🟢 Low | context.py | 死代码 | `restore_last()` 中 `..` 检查无效 | ✅ 已修复 |
+| 5 | 🟢 Low | agent.py | 防御性 | 系统提示缓存永不失效 | ✅ 已修复 |
 
-#### BUG-1: `_handle_tool_call` 中未定义变量 `command` — ✅ 已修复
+---
 
-**文件**: `mimo-harness/mimo_harness/agent.py:418`
-**严重性**: 高 — `run_command` 工具调用必然失败
+## 三、详细发现
+
+### #1 🔴 High: `_ALLOWED_WRITE_DIR` 全局单例导致 E2E 测试失败
+
+**文件**: `mimo_harness/tools/file_ops.py:23,76-81`
 
 ```python
-# 修复前 (有 bug):
-if func_name == "run_command":
-    perm = self._check_shell_permission(command)  # ← 'command' 未定义！
+_ALLOWED_WRITE_DIR = None  # 模块级全局变量
 
-# 修复后:
-if func_name == "run_command":
-    perm = self._check_shell_permission(func_args.get("command", ""))
+def _get_allowed_write_dir() -> Path:
+    global _ALLOWED_WRITE_DIR
+    if _ALLOWED_WRITE_DIR is None:
+        _ALLOWED_WRITE_DIR = Path.cwd().resolve()  # 首次使用锁定为 CWD
+    return _ALLOWED_WRITE_DIR
 ```
 
-**影响**: 每次 LLM 调用 `run_command` 工具时，都会抛出 `NameError`。由于外层有 `except Exception` 捕获，不会导致程序崩溃，但所有 shell 命令都会返回错误 JSON 给 LLM，导致 agent 无法执行任何 shell 命令。
+**问题**: 
+- `_ALLOWED_WRITE_DIR` 是模块级全局变量，首次调用后锁定为 `Path.cwd()`
+- E2E 测试 `test_edit_modifies_content` 在临时目录 (`tempfile.mkdtemp()`) 创建文件
+- Agent 的 `_validate_path()` 拒绝访问临时目录，报错 "Path outside allowed directory"
+- 测试断言失败：LLM 无法读写文件，返回错误而非编辑结果
 
-**为什么测试未发现**: 测试直接调用 `shell.run_command(handler)` 而非通过 `_handle_tool_call` 方法。`test_agent.py` 中没有测试 `_handle_tool_call` 的用例。
+**影响**: E2E 测试失败；如果 agent 在会话中需要访问 CWD 之外的文件也会失败。
 
-**修复验证**: 独立测试确认修复后 `run_command` 正常工作。所有 agent、shell、security 测试通过（15 + 15 + 89 = 119 测试）。
+**修复**: 新增 `set_allowed_write_dir()` 函数，E2E fixture 和 `_harness()` 正确设置目录。
 
 ---
 
-### 3.2 设计层面的关注点（非 Bug，但值得改进）
+### #2 🟡 Medium: 安全分类器缓存非线程安全
 
-#### DESIGN-1: 安全分类器 Fail-Open 策略
-
-**文件**: `mimo-harness/mimo_harness/security_pipeline.py:557-565`
+**文件**: `mimo_harness/security_pipeline.py:417,451-456`
 
 ```python
-except Exception as e:
-    # Fail open: when the model classifier API is unavailable
-    logging.getLogger(__name__).warning(...)
-    return None  # ← 返回 None，导致默认 ALLOW
+_classifier_cache: dict[str, tuple[float, ClassificationResult]] = {}  # 无锁
+
+# classify_action_model() 中的读-检查-写模式:
+if cache_key in _classifier_cache:           # 线程 A 读
+    cached_time, cached_result = _classifier_cache[cache_key]
+    if now - cached_time < _CLASSIFIER_CACHE_TTL:
+        return cached_result
+# ... 可能在线程 A 读和写之间，线程 B 也读了同一个 key
+_classifier_cache[cache_key] = (now, result)  # 写
 ```
 
-**分析**: 当模型分类器 API 不可用时（超时、限流、网络错误），系统会默认放行。这是有意为之的设计决策，代码中有清晰的注释解释了原因："Blocking ALL tool calls when the classifier API is down is too aggressive — it makes the agent completely unusable."
+**问题**: `agent.py` 使用 `ThreadPoolExecutor` 并行执行工具调用，多个线程可能同时访问 `_classifier_cache`。虽然 Python GIL 保证基本 dict 操作原子性，但读-检查-写模式不是原子的。
 
-**客观评价**: 这是合理的工程权衡。regex 预过滤层（Layer 1）仍然有效，会拦截 `rm -rf /`、凭据访问等明显危险操作。Claude Code 也采用类似策略。但如果需要更高安全级别，可以考虑将 fail-open 改为 fail-closed 并提供降级模式。
+**实际影响**: 低。最坏情况是缓存未命中导致多发一次 API 调用，不会导致安全漏洞或数据损坏。
 
-#### DESIGN-2: Shell 命令使用 `shell=True`
+**修复**: 添加 `threading.Lock` 保护缓存操作。
 
-**文件**: `mimo-harness/mimo_harness/tools/shell.py:262-310`
+---
 
-所有 shell 命令通过 `subprocess.run(command, shell=True, ...)` 执行。虽然有 `_is_readonly` 检测和权限管线，但 `shell=True` 本身就存在命令注入风险。
+### #3 🟡 Medium: `_is_dangerous_rm` 与 `_HARD_DENY_PATTERNS` 模式重复
 
-**客观评价**: 这是 Python shell 工具的标准做法（Claude Code 的 Bash 工具也使用 shell 执行）。项目已通过多层防御缓解风险：
-1. `_is_readonly` 检测反引号和 `$()`（`shell.py:60`）
-2. 权限管线的危险命令检测（`permissions.py:358-373`）
-3. 安全管线的 regex 硬拒绝（`security_pipeline.py:113-137`）
-4. 环境变量清洗（`shell.py:134-146`）
+**文件**: 
+- `mimo_harness/permissions.py:358-374` (`_is_dangerous_rm`)
+- `mimo_harness/security_pipeline.py:113-137` (`_HARD_DENY_PATTERNS`)
 
-这是可接受的，但如果要达到 Codex CLI 的安全级别，需要引入 OS 级沙箱。
+**问题**: 两处硬编码了相似但不完全一致的危险命令模式。`_is_dangerous_rm` 缺少 `curl|bash` 和凭据外泄检测。
 
-#### DESIGN-3: 全局可变状态 — ✅ 已修复
+**修复**: 从 `_HARD_DENY_PATTERNS` 导入，消除重复。
 
-**文件**: `mimo-harness/mimo_harness/tools/file_ops.py`
+---
 
-**修复方案**: 使用 Python `contextvars` 将全局 `_read_files` / `_write_allowed_files` 改为 session-scoped 的 `FileOpsState` 对象。每个 `MiMoHarness.run()` 调用和每个 SubAgent 都会创建独立的 `FileOpsState`，通过 `contextvars.ContextVar` 实现线程隔离。
+### #4 🟢 Low: CheckpointManager.restore_last() 死代码
+
+**文件**: `mimo_harness/context.py:265-267`
 
 ```python
-# 修复后:
-@dataclass
-class FileOpsState:
-    """Per-session tracking of read/write file state."""
-    read_files: set = field(default_factory=set)
-    write_allowed_files: set = field(default_factory=set)
-
-_file_ops_state_var: contextvars.ContextVar[FileOpsState] = contextvars.ContextVar(
-    "file_ops_state", default=FileOpsState()
-)
+dest_norm = os.path.normpath(os.path.abspath(dest))
+if ".." in dest_norm:  # ← 永远为 False
+    continue
 ```
 
-#### DESIGN-4: 模型分类器使用主模型
-
-**文件**: `mimo-harness/mimo_harness/security_pipeline.py:504`
-
-```python
-response = client.chat.completions.create(
-    model=model or "mimo-v2.5-pro",  # 使用主模型做分类
-```
-
-Claude Code 使用**独立的分类器模型**来评估安全性，而非主模型。使用主模型做安全分类有两个问题：
-1. 主模型可能被 prompt injection 操纵（如果攻击者控制了对话上下文）
-2. 增加了延迟和成本（每次工具调用都需要额外的 LLM 调用）
-
-**客观评价**: 对于学习项目来说这是合理的简化。在生产环境中，应使用独立的、更小的分类模型。
+**修复**: 移除死代码，添加注释说明 normpath 已处理 `..`。
 
 ---
 
-### 3.3 代码质量问题（轻微）
+### #5 🟢 Low: 系统提示缓存永不失效
 
-#### QUALITY-1: 版本号不一致
+**文件**: `mimo_harness/agent.py:348,381`
 
-- `setup.py` 中版本为 `0.2.0`
-- `__init__.py` 中版本为 `0.3.0`
-- CLI banner 显示 `v0.2.0`
+**问题**: 如果 CWD 在会话中变化，系统提示中的 `Working directory` 信息会过时。
 
-#### QUALITY-2: `review_action` 中的硬编码默认模型
-
-**文件**: `security_pipeline.py:647`
-
-```python
-model=model or "gpt-4o-mini",  # ← 硬编码了 OpenAI 模型名
-```
-
-而 `classify_action_model` 使用 `model or "mimo-v2.5-pro"`。两处默认模型不一致。
-
-#### QUALITY-3: 测试覆盖的盲区 — ✅ 已修复
-
-测试直接调用工具 handler 函数（如 `shell.run_command(params)`），但不测试通过 `_handle_tool_call` → `registry.execute` → `handler` 的完整调用链。这导致 BUG-1 未被发现。
-
-**修复方案**: 在 `test_agent.py` 中新增 `TestHandleToolCallIntegration` 测试类，包含 7 个集成测试：
-- `test_run_command_dispatch`: 验证 `run_command` 通过完整链路工作（BUG-1 回归测试）
-- `test_read_file_dispatch`: 验证 `read_file` 完整链路
-- `test_write_file_dispatch`: 验证 `write_file` 完整链路
-- `test_edit_file_requires_read`: 验证 `edit_file` 的 read-before-edit 检查
-- `test_calculator_dispatch`: 验证 `calculator` 完整链路
-- `test_unknown_tool_rejected`: 验证未知工具被拒绝（fail-closed）
-- `test_malformed_args_handled`: 验证畸形参数被正确处理
+**修复**: 在 `run()` 方法开始时重置缓存。
 
 ---
 
-## 四、安全审查
+## 四、设计决策记录（非 Bug）
 
-### 4.1 安全亮点（做得好的地方）
-
-1. **AST 安全求值**: 所有数学计算使用 AST 遍历而非 `eval()`（`math_tools.py`）
-2. **路径遍历防护**: 文件操作验证路径在允许目录内（`file_ops.py:37-43`）
-3. **SSRF 防护**: Web 工具包含 DNS 解析检查、私有 IP 阻止、DNS rebinding 检测（`web_tools.py:40-78`）
-4. **凭据清洗**: Shell 命令执行前移除环境变量中的凭据模式（`shell.py:63-67`）
-5. **敏感数据自动脱敏**: 输出过滤器检测并脱敏 API key、token、密码等（`security_pipeline.py:48-68`）
-6. **Prompt injection 检测**: 工具输出中的注入模式会被标记警告（`security_pipeline.py:92-110`）
-7. **Read-before-write/edit**: 文件修改前必须先读取（`file_ops.py:90-95, 117-120`）
-8. **受保护路径**: `.git`、`.env`、`.ssh` 等目录/文件禁止写入（`permissions.py:40-41`）
-
-### 4.2 安全风险点
-
-1. **无 OS 级沙箱**: 所有安全检查都在应用层，绕过 Python 代码即可突破。Codex CLI 使用 Seatbelt (macOS)、Bubblewrap (Linux)、Restricted Token (Windows) 提供 OS 级隔离。
-2. **`code_exec` 无网络/文件系统限制**: `execute_python` 在子进程中执行任意 Python 代码，仅有的限制是 10 秒超时。
-3. **Hook 命令注入**: `HookRunner._run_command_hook` 使用 `shell=True` 执行 hook 命令，hook 配置来自 JSON 文件，如果配置文件被篡改可能导致命令注入。
-
----
-
-## 五、测试审查
-
-### 5.1 测试策略评价
-
-项目采用**真实 API 测试**策略（禁止 mock），这是值得肯定的。测试分为：
-
-- **单元测试** (test_stage_unit.py): 40+ 测试，纯逻辑，无 API 调用
-- **E2E 测试** (test_e2e.py): 真实 MiMo API 调用，有重试逻辑
-- **Harness 单元测试**: 21 个测试文件，覆盖所有模块
-- **Harness E2E 测试**: 端到端工具调用
-
-### 5.2 测试改进
-
-1. **集成测试**: ✅ 已补充 `TestHandleToolCallIntegration`（7 个测试覆盖 `_handle_tool_call` 完整链路）
-2. **并发测试**: SubAgent 并行执行的线程安全性已有 44 个测试覆盖
-3. **错误恢复测试**: Circuit breaker 和 thrashing 检测的测试可进一步增强
-
----
-
-## 六、总结
-
-### 6.1 总体评分
-
-| 维度 | 评分 | 说明 |
+| 决策 | 位置 | 说明 |
 |------|------|------|
-| 架构设计 | ★★★★☆ | 对标 Claude Code 架构完整，模块化清晰 |
-| 代码质量 | ★★★★☆ | 文档充分，命名规范，有 1 个确认 bug |
-| 安全性 | ★★★★☆ | 多层防御，但缺少 OS 级沙箱 |
-| 测试覆盖 | ★★★☆☆ | 真实 API 测试策略好，但集成测试不足 |
-| 工程实践 | ★★★★☆ | CI/CD 完整，配置管理规范 |
+| 安全分类器 Fail-Open | security_pipeline.py:557 | API 不可用时默认放行，regex 预过滤仍有效 |
+| Shell 使用 `shell=True` | shell.py:262 | Python shell 工具标准做法，多层防御已缓解风险 |
+| HTML 抓取搜索引擎 | web_tools.py:87-127 | DuckDuckGo/Bing HTML 解析依赖网站结构 |
+| Stage 文件 `sys.path.insert` | stage-*/ | 学习项目可接受的做法 |
+| 主模型做安全分类 | security_pipeline.py:504 | 学习项目简化，生产应使用独立分类模型 |
 
-### 6.2 需要修复的问题
+---
 
-| 编号 | 问题 | 严重性 | 状态 |
-|------|------|--------|------|
-| BUG-1 | `_handle_tool_call` 中 `command` 变量未定义 | **高** | ✅ 已修复 |
-| DESIGN-3 | 全局 `_read_files` / `_write_allowed_files` 改为 session-scoped | 中 | ✅ 已修复 |
-| QUALITY-1 | 版本号不一致 (setup.py=0.2.0, __init__.py=0.3.0) | 低 | ✅ 已修复 |
-| QUALITY-2 | `review_action` 硬编码 `gpt-4o-mini` 默认模型 | 低 | ✅ 已修复 |
-| QUALITY-3 | 缺少 `_handle_tool_call` 集成测试 | 中 | ✅ 已修复 |
+## 五、安全审查
 
-### 6.3 建议改进项（按优先级）
+### 5.1 安全亮点
 
-1. **[高]** ~~修复 BUG-1~~ ✅ 已修复
-2. **[中]** ~~补充集成测试~~ ✅ 已修复（7 个集成测试）
-3. **[中]** ~~统一版本号~~ ✅ 已修复
-4. **[低]** ~~修复 `review_action` 中硬编码的 `gpt-4o-mini` 默认模型~~ ✅ 已修复
-5. **[低]** ~~将全局 `_read_files` / `_write_allowed_files` 改为 session-scoped~~ ✅ 已修复
-6. **[远期]** 引入 MCP 协议支持
-7. **[远期]** 引入 OS 级沙箱（参考 Codex CLI 的 Seatbelt/Bubblewrap）
+1. **AST 安全求值**: 数学计算使用 AST 遍历，无 `eval()` 风险
+2. **路径遍历防护**: 文件操作验证路径在允许目录内，symlink 解析
+3. **SSRF 防护**: DNS 解析检查 + 私有 IP 阻止 + DNS rebinding 检测
+4. **凭据清洗**: Shell 环境变量中移除凭据模式
+5. **敏感数据脱敏**: 15 种 regex 模式自动脱敏 API key/token/密码
+6. **Prompt injection 检测**: 17 种模式检测工具输出中的注入
+7. **Read-before-write/edit**: 文件修改前必须先读取（session-scoped）
+8. **受保护路径**: `.git`、`.env`、`.ssh` 等禁止写入，BYPASS 模式也保护
 
-### 6.4 结论
+### 5.2 安全风险
 
-这是一个**高质量的学习项目**，架构设计对标 Claude Code 非常系统化，覆盖了 Agent Harness 的所有核心模块。代码文档充分，安全防御多层叠加，测试策略（真实 API 调用）值得肯定。
+1. **无 OS 级沙箱**: 应用层检查可被绕过（Codex CLI 使用 Seatbelt/Bubblewrap）
+2. **`code_exec` 无限制**: Python 子进程仅 10 秒超时，无网络/文件系统限制
+3. **Hook 配置注入**: hook 命令来自 JSON 配置文件，配置被篡改可导致命令注入
 
-审查发现并修复了 5 个问题：
-1. **BUG-1** (高): `_handle_tool_call` 中 `command` 变量未定义，导致 `run_command` 工具无法工作
-2. **DESIGN-3** (中): 全局文件操作状态改为 session-scoped，避免 SubAgent 并行时交叉污染
-3. **QUALITY-1** (低): 版本号不一致，统一为 0.3.0
-4. **QUALITY-2** (低): `review_action` 硬编码 `gpt-4o-mini`，改为 `mimo-v2.5-pro`
-5. **QUALITY-3** (中): 补充 7 个集成测试覆盖 `_handle_tool_call` 完整调用链
+---
 
-与行业标杆相比，主要差距在于：缺少 OS 级沙箱、MCP 协议支持、以及独立的安全分类模型。但考虑到这是一个学习项目而非生产系统，当前的实现水平已经非常出色。
+## 六、CI/CD 优化
+
+**变更**: E2E 测试从自动运行改为手动触发（opt-in）
+
+- `push` / `PR` → 只运行单元测试 (733 个)
+- `workflow_dispatch` + `run_e2e=true` → 运行 E2E 测试
+
+---
+
+## 七、修复结果
+
+所有发现已修复，733 个单元测试全部通过：
+
+| # | 修复内容 | 修改文件 | 测试验证 |
+|---|---------|---------|---------|
+| 1 | `_ALLOWED_WRITE_DIR` 改为可配置，新增 `set_allowed_write_dir()` | `file_ops.py`, `test_e2e.py` | 92 tools 测试通过 |
+| 2 | 分类器缓存添加 `threading.Lock` | `security_pipeline.py` | 100 security 测试通过 |
+| 3 | `_is_dangerous_rm` 从 `_HARD_DENY_PATTERNS` 导入 | `permissions.py` | 59 permissions 测试通过 |
+| 4 | 移除 `restore_last()` 死代码 | `context.py` | 72 context 测试通过 |
+| 5 | `run()` 开始时重置系统提示缓存 | `agent.py` | 22 agent 测试通过 |

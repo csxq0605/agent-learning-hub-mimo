@@ -20,7 +20,13 @@ from pathlib import Path
 from .registry import ToolDef
 from ..permissions import Permission
 
-_ALLOWED_WRITE_DIR = None  # Lazily initialized on first use
+_ALLOWED_WRITE_DIR = None  # Lazily initialized on first use; set_allowed_write_dir() overrides
+
+
+def set_allowed_write_dir(path: str):
+    """Override the allowed write directory (e.g. for testing or sandboxing)."""
+    global _ALLOWED_WRITE_DIR
+    _ALLOWED_WRITE_DIR = Path(path).resolve()
 
 
 # ---------------------------------------------------------------------------
