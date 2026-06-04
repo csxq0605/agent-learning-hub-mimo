@@ -13,8 +13,86 @@ import sys
 import time
 import json
 import threading
+import locale
 from typing import Optional
 from dataclasses import dataclass
+
+
+def _console_supports_unicode() -> bool:
+    """Check if the console encoding supports Unicode characters.
+
+    On Windows with GBK/cp936 encoding, many Unicode symbols (emoji, box-drawing)
+    cause UnicodeEncodeError. This detects that and enables ASCII fallbacks.
+    """
+    try:
+        encoding = sys.stdout.encoding or locale.getpreferredencoding()
+        # Test a representative Unicode character
+        "💭".encode(encoding)
+        return True
+    except (UnicodeEncodeError, LookupError):
+        return False
+
+
+# Detect Unicode support at module load time
+_SUPPORTS_UNICODE = _console_supports_unicode()
+
+
+# Unicode / ASCII fallback characters
+if _SUPPORTS_UNICODE:
+    THINK_ICON = "💭"
+    TOOL_ICON = "⚡"
+    CHECK_ICON = "✓"
+    CROSS_ICON = "✗"
+    WARN_ICON = "⚠"
+    INFO_ICON = "ℹ"
+    DOT_ICON = "•"
+    ARROW_ICON = "→"
+    SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+    BOX_TL = "╭"
+    BOX_TR = "╮"
+    BOX_BL = "╰"
+    BOX_BR = "╯"
+    BOX_H = "─"
+    BOX_V = "│"
+    BAR_FILL = "█"
+    BAR_EMPTY = "░"
+    STEP_H = "━"
+else:
+    THINK_ICON = "*"
+    TOOL_ICON = ">"
+    CHECK_ICON = "[ok]"
+    CROSS_ICON = "[x]"
+    WARN_ICON = "[!]"
+    INFO_ICON = "[i]"
+    DOT_ICON = "-"
+    ARROW_ICON = "->"
+    SPINNER_FRAMES = ["|", "/", "-", "\\"]
+    BOX_TL = "+"
+    BOX_TR = "+"
+    BOX_BL = "+"
+    BOX_BR = "+"
+    BOX_H = "-"
+    BOX_V = "|"
+    BAR_FILL = "#"
+    BAR_EMPTY = "."
+    STEP_H = "-"
+
+
+def _safe_print(*args, **kwargs):
+    """Print with UnicodeEncodeError fallback to ASCII-safe output."""
+    try:
+        print(*args, **kwargs)
+    except UnicodeEncodeError:
+        # Replace problematic characters and retry
+        safe_args = []
+        for a in args:
+            s = str(a)
+            try:
+                s.encode(sys.stdout.encoding or "ascii")
+                safe_args.append(s)
+            except (UnicodeEncodeError, LookupError):
+                safe_args.append(s.encode("ascii", errors="replace").decode("ascii"))
+        print(*safe_args, **kwargs)
 
 
 # ANSI color codes
@@ -101,8 +179,7 @@ def _blue(text: str) -> str:
     return _c(Colors.BLUE, text)
 
 
-# Spinner frames for animation
-SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+# Spinner frames — defined above based on Unicode support
 
 
 class Spinner:
@@ -166,21 +243,22 @@ class StepInfo:
 
 def print_banner(version: str = "0.3.0"):
     """Print the application banner with structured formatting."""
+    h = BOX_H * 48
     banner = f"""
-{_cyan("╭────────────────────────────────────────────────╮")}
-{_cyan("│")}  {_bold("MiMo Harness")} {_dim(f"v{version}")}                          {_cyan("│")}
-{_cyan("│")}  {_dim("AI Agent powered by Xiaomi MiMo model")}       {_cyan("│")}
-{_cyan("│")}  {_dim("Claude Code architecture patterns")}             {_cyan("│")}
-{_cyan("╰────────────────────────────────────────────────╯")}"""
-    print(banner)
+{_cyan(f"{BOX_TL}{h}{BOX_TR}")}
+{_cyan(BOX_V)}  {_bold("MiMo Harness")} {_dim(f"v{version}")}                          {_cyan(BOX_V)}
+{_cyan(BOX_V)}  {_dim("AI Agent powered by Xiaomi MiMo model")}       {_cyan(BOX_V)}
+{_cyan(BOX_V)}  {_dim("Claude Code architecture patterns")}             {_cyan(BOX_V)}
+{_cyan(f"{BOX_BL}{h}{BOX_BR}")}"""
+    _safe_print(banner)
 
 
 def print_session_info(model: str, mode: str, api_key_set: bool):
     """Print session configuration info."""
     print()
-    print(f"  {_dim("Model:")}    {model}")
-    print(f"  {_dim("API Key:")}  {"*" * 12 if api_key_set else _red("NOT SET")}")
-    print(f"  {_dim("Mode:")}     {mode}")
+    _safe_print(f"  {_dim('Model:')}    {model}")
+    _safe_print(f"  {_dim('API Key:')}  {'*' * 12 if api_key_set else _red('NOT SET')}")
+    _safe_print(f"  {_dim('Mode:')}     {mode}")
     print()
 
 
@@ -189,15 +267,16 @@ def print_step_header(step_info: StepInfo):
     step_str = f"Step {step_info.current}/{step_info.max_steps}"
     model_str = _dim(f"[{step_info.model}]") if step_info.model else ""
     effort_str = _dim(f"({step_info.effort})") if step_info.effort else ""
+    h = STEP_H * 2
 
     print()
-    print(f"  {_blue("━━")} {_bold(step_str)} {model_str} {effort_str} {_blue("━━")}")
+    print(f"  {_blue(h)} {_bold(step_str)} {model_str} {effort_str} {_blue(h)}")
     print()
 
 
 def print_thinking_indicator():
     """Print a thinking indicator before model response."""
-    print(f"  {_dim("💭 Thinking...")}", flush=True)
+    _safe_print(f"  {_dim(f'{THINK_ICON} Thinking...')}", flush=True)
 
 
 def print_tool_call_start(tool_name: str, args: dict, call_index: int = 0, total: int = 1):
@@ -206,11 +285,11 @@ def print_tool_call_start(tool_name: str, args: dict, call_index: int = 0, total
     args_str = _format_tool_args(tool_name, args)
 
     if total > 1:
-        prefix = f"  {_yellow("⚡")} [{call_index + 1}/{total}]"
+        prefix = f"  {_yellow(TOOL_ICON)} [{call_index + 1}/{total}]"
     else:
-        prefix = f"  {_yellow("⚡")}"
+        prefix = f"  {_yellow(TOOL_ICON)}"
 
-    print(f"{prefix} {_bold(tool_name)}{args_str}", flush=True)
+    _safe_print(f"{prefix} {_bold(tool_name)}{args_str}", flush=True)
 
 
 def print_tool_call_result(
@@ -222,23 +301,23 @@ def print_tool_call_result(
 ):
     """Print tool call result."""
     if success:
-        status = _green("✓")
+        status = _green(CHECK_ICON)
         time_str = _dim(f"({duration:.1f}s)")
-        print(f"  {status} {tool_name} {time_str}")
+        _safe_print(f"  {status} {tool_name} {time_str}")
 
         if result_preview:
             # Show a preview of the result (truncated)
             preview = result_preview[:200].replace("\n", " ")
             if len(result_preview) > 200:
                 preview += "..."
-            print(f"    {_dim(preview)}")
+            _safe_print(f"    {_dim(preview)}")
     else:
-        status = _red("✗")
+        status = _red(CROSS_ICON)
         time_str = _dim(f"({duration:.1f}s)")
-        print(f"  {status} {tool_name} {time_str}")
+        _safe_print(f"  {status} {tool_name} {time_str}")
         if error:
             error_preview = error[:200].replace("\n", " ")
-            print(f"    {_red(error_preview)}")
+            _safe_print(f"    {_red(error_preview)}")
 
 
 def print_streaming_token(token: str):
@@ -254,22 +333,22 @@ def print_streaming_end():
 
 def print_error(message: str):
     """Print an error message."""
-    print(f"\n  {_red("✗")} {_red(message)}\n")
+    _safe_print(f"\n  {_red(CROSS_ICON)} {_red(message)}\n")
 
 
 def print_warning(message: str):
     """Print a warning message."""
-    print(f"  {_yellow("⚠")} {message}")
+    _safe_print(f"  {_yellow(WARN_ICON)} {message}")
 
 
 def print_info(message: str):
     """Print an info message."""
-    print(f"  {_dim("ℹ")} {message}")
+    _safe_print(f"  {_dim(INFO_ICON)} {message}")
 
 
 def print_success(message: str):
     """Print a success message."""
-    print(f"  {_green("✓")} {message}")
+    _safe_print(f"  {_green(CHECK_ICON)} {message}")
 
 
 def print_token_usage(current: int, max_tokens: int):
@@ -288,17 +367,17 @@ def print_token_usage(current: int, max_tokens: int):
         bar_color = Colors.GREEN
         status = "OK"
 
-    bar = "█" * min(filled, bar_len) + "░" * max(0, bar_len - filled)
+    bar = BAR_FILL * min(filled, bar_len) + BAR_EMPTY * max(0, bar_len - filled)
     current_str = _format_tokens(current)
     max_str = _format_tokens(max_tokens)
 
-    print(f"\n  {_dim("Tokens:")} {_c(bar_color, bar)} {current_str}/{max_str} {_dim(status)}")
+    _safe_print(f"\n  {_dim('Tokens:')} {_c(bar_color, bar)} {current_str}/{max_str} {_dim(status)}")
 
 
 def print_tool_list(tools: list):
     """Print available tools in a structured format."""
-    print(f"\n  {_bold("Available Tools")}")
-    print(f"  {_dim("─" * 40)}")
+    _safe_print(f"\n  {_bold('Available Tools')}")
+    _safe_print(f"  {_dim(BOX_H * 40)}")
     for tool in tools:
         markers = []
         if tool.get("is_read_only"):
@@ -308,19 +387,21 @@ def print_tool_list(tools: list):
         if tool.get("is_destructive"):
             markers.append(_red("DST"))
         marker_str = f" [{' '.join(markers)}]" if markers else ""
-        print(f"  {_yellow("•")} {tool['name']}{marker_str}")
+        _safe_print(f"  {_yellow(DOT_ICON)} {tool['name']}{marker_str}")
         if tool.get("description"):
             desc = tool["description"][:60]
-            print(f"    {_dim(desc)}")
+            _safe_print(f"    {_dim(desc)}")
     print()
 
 
 def print_context_breakdown(messages: list, max_display: int = 15):
     """Print context breakdown in a structured format."""
-    print(f"\n  {_bold("Context Breakdown")} {_dim(f"({len(messages)} messages)")}")
-    print(f"  {_dim("─" * 60)}")
-    print(f"  {_dim(f"{'#':<4} {'Role':<12} {'Tokens':>8}  Content preview")}")
-    print(f"  {_dim("─" * 60)}")
+    sep = BOX_H * 60
+    _safe_print(f"\n  {_bold('Context Breakdown')} {_dim(f'({len(messages)} messages)')}")
+    _safe_print(f"  {_dim(sep)}")
+    header = f"{'#':<4} {'Role':<12} {'Tokens':>8}  Content preview"
+    _safe_print(f"  {_dim(header)}")
+    _safe_print(f"  {_dim(sep)}")
 
     for i, msg in enumerate(messages[:max_display]):
         role = msg.get("role", "?")
@@ -329,20 +410,20 @@ def print_context_breakdown(messages: list, max_display: int = 15):
             content = str(content) if content else ""
         tokens = max(1, len(content) // 4)
         preview = content[:50].replace("\n", " ")
-        print(f"  {i:<4} {role:<12} {_format_tokens(tokens):>8}  {_dim(preview)}")
+        _safe_print(f"  {i:<4} {role:<12} {_format_tokens(tokens):>8}  {_dim(preview)}")
 
     if len(messages) > max_display:
-        print(f"  {_dim(f'... and {len(messages) - max_display} more messages')}")
+        _safe_print(f"  {_dim(f'... and {len(messages) - max_display} more messages')}")
 
-    print(f"  {_dim("─" * 60)}")
+    _safe_print(f"  {_dim(sep)}")
 
 
 def print_session_stats(stats: dict):
     """Print session statistics."""
-    print(f"\n  {_bold("Session Statistics")}")
-    print(f"  {_dim("─" * 30)}")
+    _safe_print(f"\n  {_bold('Session Statistics')}")
+    _safe_print(f"  {_dim(BOX_H * 30)}")
     for key, value in stats.items():
-        print(f"  {_dim(f"{key}:")} {value}")
+        _safe_print(f"  {_dim(f'{key}:')} {value}")
     print()
 
 
@@ -355,7 +436,7 @@ def _format_tool_args(tool_name: str, args: dict) -> str:
     if tool_name in ("read_file", "write_file", "edit_file"):
         path = args.get("path") or args.get("file_path", "")
         if path:
-            return f" {_dim('→')} {_cyan(path)}"
+            return f" {_dim(ARROW_ICON)} {_cyan(path)}"
 
     if tool_name == "run_command":
         cmd = args.get("command", "")
@@ -363,22 +444,22 @@ def _format_tool_args(tool_name: str, args: dict) -> str:
             # Truncate long commands
             if len(cmd) > 60:
                 cmd = cmd[:57] + "..."
-            return f" {_dim('→')} {_dim('$')} {cmd}"
+            return f" {_dim(ARROW_ICON)} {_dim('$')} {cmd}"
 
     if tool_name == "search_files":
         pattern = args.get("pattern", "")
         if pattern:
-            return f" {_dim('→')} {_cyan(pattern)}"
+            return f" {_dim(ARROW_ICON)} {_cyan(pattern)}"
 
     if tool_name == "list_directory":
         path = args.get("path", ".")
-        return f" {_dim('→')} {_cyan(path)}"
+        return f" {_dim(ARROW_ICON)} {_cyan(path)}"
 
     # Generic format
     args_preview = json.dumps(args, ensure_ascii=False)
     if len(args_preview) > 80:
         args_preview = args_preview[:77] + "..."
-    return f" {_dim('→')} {_dim(args_preview)}"
+    return f" {_dim(ARROW_ICON)} {_dim(args_preview)}"
 
 
 def _format_tokens(tokens: int) -> str:
@@ -417,13 +498,13 @@ def print_help():
         ("/pipeline <t1> | <t2>", "Run tasks in pipeline"),
     ]
 
-    print(f"\n  {_bold("Commands")}")
-    print(f"  {_dim("─" * 50)}")
+    _safe_print(f"\n  {_bold('Commands')}")
+    _safe_print(f"  {_dim(BOX_H * 50)}")
     for cmd, desc in commands:
-        print(f"  {_yellow(cmd):<25} {_dim(desc)}")
+        _safe_print(f"  {_yellow(cmd):<25} {_dim(desc)}")
     print()
-    print(f"  {_dim("Prefix with ! to run shell commands (e.g. !ls -la)")}")
-    print(f"  {_dim("Press Ctrl+C during execution to stop current task")}")
+    _safe_print(f"  {_dim('Prefix with ! to run shell commands (e.g. !ls -la)')}")
+    _safe_print(f"  {_dim('Press Ctrl+C during execution to stop current task')}")
     print()
 
 

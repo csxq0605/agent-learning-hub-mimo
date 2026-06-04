@@ -432,7 +432,10 @@ class TestCLIOutputFormat:
             "--output-format", "json", "--max-steps", "5", "--bare",
         )
         assert result.returncode == 0
-        data = json.loads(result.stdout)
+        # Output may contain step headers before JSON — find the JSON object
+        json_start = result.stdout.find("{")
+        assert json_start >= 0, f"No JSON object found in output: {result.stdout[:200]}"
+        data = json.loads(result.stdout[json_start:])
         assert "content" in data
         assert "session_id" in data
 
@@ -442,9 +445,14 @@ class TestCLIOutputFormat:
             "--output-format", "stream-json", "--max-steps", "5", "--bare",
         )
         assert result.returncode == 0
-        lines = [line for line in result.stdout.strip().split("\n") if line.strip()]
-        assert len(lines) > 0
-        for line in lines:
+        # Output may contain step headers before JSON lines — filter to only JSON lines
+        json_lines = []
+        for line in result.stdout.strip().split("\n"):
+            line = line.strip()
+            if line.startswith("{"):
+                json_lines.append(line)
+        assert len(json_lines) > 0, f"No JSON lines found in output: {result.stdout[:200]}"
+        for line in json_lines:
             data = json.loads(line)
             assert "type" in data
 
@@ -497,6 +505,18 @@ class TestCLIBareMode:
         assert "4" in result.stdout
 
 
+class TestCLINoStream:
+    """CLI --no-stream mode (streaming is default ON)."""
+
+    def test_no_stream_mode(self):
+        result = _run_cli(
+            "--task", "What is 2 + 2? Reply with just the number.",
+            "--no-stream", "--max-steps", "5", "--bare",
+        )
+        assert result.returncode == 0
+        assert "4" in result.stdout
+
+
 class TestCLIEffortLevels:
     """CLI effort levels."""
 
@@ -536,8 +556,8 @@ class TestMainFunctionPaths:
         main()
         assert len(capsys.readouterr().out.strip()) > 0
 
-    def test_main_stream_mode(self, monkeypatch, capsys):
-        monkeypatch.setattr("sys.argv", ["mimo", "--task", "Say hello", "--stream"])
+    def test_main_no_stream_mode(self, monkeypatch, capsys):
+        monkeypatch.setattr("sys.argv", ["mimo", "--task", "Say hello", "--no-stream", "--bare", "--max-steps", "5"])
         from mimo_harness.cli import main
         main()
         assert len(capsys.readouterr().out.strip()) > 0

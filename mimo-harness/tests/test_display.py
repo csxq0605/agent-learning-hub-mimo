@@ -1,9 +1,12 @@
-"""Tests for display.py - Structured CLI display module."""
+"""Tests for display.py - Structured CLI display module.
+
+No mocking — uses real function calls and monkeypatch for env/config overrides.
+"""
 
 import os
 import sys
 import pytest
-from unittest.mock import patch, MagicMock
+import mimo_harness.display
 from mimo_harness.display import (
     _supports_color,
     _c,
@@ -39,30 +42,31 @@ from mimo_harness.display import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _restore_use_color():
+    """Restore USE_COLOR after each test."""
+    original = mimo_harness.display.USE_COLOR
+    yield
+    mimo_harness.display.USE_COLOR = original
+
+
 class TestSupportsColor:
     """Test _supports_color function."""
 
-    def test_returns_false_when_no_color_env(self):
+    def test_returns_false_when_no_color_env(self, monkeypatch):
         """Should return False when NO_COLOR is set."""
-        with patch.dict(os.environ, {"NO_COLOR": "1"}):
-            assert _supports_color() is False
+        monkeypatch.setenv("NO_COLOR", "1")
+        assert _supports_color() is False
 
-    def test_returns_false_when_term_dumb(self):
+    def test_returns_false_when_term_dumb(self, monkeypatch):
         """Should return False when TERM=dumb."""
-        with patch.dict(os.environ, {"TERM": "dumb"}):
-            assert _supports_color() is False
+        monkeypatch.setenv("TERM", "dumb")
+        assert _supports_color() is False
 
-    def test_returns_false_when_not_tty(self):
+    def test_returns_false_when_not_tty(self, monkeypatch):
         """Should return False when stdout is not a tty."""
-        with patch("sys.stdout") as mock_stdout:
-            mock_stdout.isatty.return_value = False
-            # Need to re-evaluate _supports_color with mocked stdout
-            import importlib
-            import mimo_harness.display
-            with patch.object(mimo_harness.display, "sys") as mock_sys:
-                mock_sys.stdout = mock_stdout
-                mock_sys.platform = "linux"
-                assert _supports_color() is False
+        # In pytest capsys / subprocess context, stdout is not a tty
+        assert _supports_color() is False
 
 
 class TestColorFunctions:
@@ -70,50 +74,50 @@ class TestColorFunctions:
 
     def test_c_with_color_disabled(self):
         """_c should return plain text when USE_COLOR is False."""
-        with patch("mimo_harness.display.USE_COLOR", False):
-            result = _c("\033[31m", "hello")
-            assert result == "hello"
+        mimo_harness.display.USE_COLOR = False
+        result = _c("\033[31m", "hello")
+        assert result == "hello"
 
     def test_c_with_color_enabled(self):
         """_c should wrap text with color codes when USE_COLOR is True."""
-        with patch("mimo_harness.display.USE_COLOR", True):
-            result = _c("\033[31m", "hello")
-            assert result == "\033[31mhello\033[0m"
+        mimo_harness.display.USE_COLOR = True
+        result = _c("\033[31m", "hello")
+        assert result == "\033[31mhello\033[0m"
 
     def test_dim_returns_dim_text(self):
         """_dim should apply DIM formatting."""
-        with patch("mimo_harness.display.USE_COLOR", False):
-            assert _dim("test") == "test"
+        mimo_harness.display.USE_COLOR = False
+        assert _dim("test") == "test"
 
     def test_bold_returns_bold_text(self):
         """_bold should apply BOLD formatting."""
-        with patch("mimo_harness.display.USE_COLOR", False):
-            assert _bold("test") == "test"
+        mimo_harness.display.USE_COLOR = False
+        assert _bold("test") == "test"
 
     def test_green_returns_green_text(self):
         """_green should apply GREEN formatting."""
-        with patch("mimo_harness.display.USE_COLOR", False):
-            assert _green("test") == "test"
+        mimo_harness.display.USE_COLOR = False
+        assert _green("test") == "test"
 
     def test_yellow_returns_yellow_text(self):
         """_yellow should apply YELLOW formatting."""
-        with patch("mimo_harness.display.USE_COLOR", False):
-            assert _yellow("test") == "test"
+        mimo_harness.display.USE_COLOR = False
+        assert _yellow("test") == "test"
 
     def test_red_returns_red_text(self):
         """_red should apply RED formatting."""
-        with patch("mimo_harness.display.USE_COLOR", False):
-            assert _red("test") == "test"
+        mimo_harness.display.USE_COLOR = False
+        assert _red("test") == "test"
 
     def test_cyan_returns_cyan_text(self):
         """_cyan should apply CYAN formatting."""
-        with patch("mimo_harness.display.USE_COLOR", False):
-            assert _cyan("test") == "test"
+        mimo_harness.display.USE_COLOR = False
+        assert _cyan("test") == "test"
 
     def test_blue_returns_blue_text(self):
         """_blue should apply BLUE formatting."""
-        with patch("mimo_harness.display.USE_COLOR", False):
-            assert _blue("test") == "test"
+        mimo_harness.display.USE_COLOR = False
+        assert _blue("test") == "test"
 
 
 class TestFormatTokens:
@@ -334,9 +338,84 @@ class TestSpinner:
 
     def test_start_stop_without_color(self, capsys):
         """Should print message directly when color is disabled."""
-        with patch("mimo_harness.display.USE_COLOR", False):
-            spinner = Spinner("Testing")
-            spinner.start()
-            spinner.stop()
-            captured = capsys.readouterr()
-            assert "Testing..." in captured.out
+        mimo_harness.display.USE_COLOR = False
+        spinner = Spinner("Testing")
+        spinner.start()
+        spinner.stop()
+        captured = capsys.readouterr()
+        assert "Testing..." in captured.out
+
+
+class TestUnicodeFallback:
+    """Test that display functions work correctly with ASCII fallbacks."""
+
+    def test_safe_print_handles_unicode_error(self, capsys, monkeypatch):
+        """_safe_print should fall back to ASCII when encoding fails."""
+        from mimo_harness.display import _safe_print
+        # _safe_print should not raise even with Unicode chars
+        _safe_print("test message with unicode: ✓")
+        captured = capsys.readouterr()
+        assert "test message" in captured.out
+
+    def test_print_thinking_indicator_no_unicode_error(self, capsys):
+        """print_thinking_indicator should never raise UnicodeEncodeError."""
+        # Should work regardless of _SUPPORTS_UNICODE state
+        print_thinking_indicator()
+        captured = capsys.readouterr()
+        assert "Thinking" in captured.out
+
+    def test_print_tool_call_start_no_unicode_error(self, capsys):
+        """print_tool_call_start should never raise UnicodeEncodeError."""
+        print_tool_call_start("test_tool", {"arg": "val"})
+        captured = capsys.readouterr()
+        assert "test_tool" in captured.out
+
+    def test_print_tool_call_result_no_unicode_error(self, capsys):
+        """print_tool_call_result should never raise UnicodeEncodeError."""
+        print_tool_call_result("test_tool", True, 0.5)
+        captured = capsys.readouterr()
+        assert "test_tool" in captured.out
+
+    def test_print_banner_no_unicode_error(self, capsys):
+        """print_banner should never raise UnicodeEncodeError."""
+        print_banner("1.0.0")
+        captured = capsys.readouterr()
+        assert "MiMo Harness" in captured.out
+
+    def test_print_error_no_unicode_error(self, capsys):
+        """print_error should never raise UnicodeEncodeError."""
+        print_error("test error")
+        captured = capsys.readouterr()
+        assert "test error" in captured.out
+
+    def test_print_warning_no_unicode_error(self, capsys):
+        """print_warning should never raise UnicodeEncodeError."""
+        print_warning("test warning")
+        captured = capsys.readouterr()
+        assert "test warning" in captured.out
+
+    def test_print_success_no_unicode_error(self, capsys):
+        """print_success should never raise UnicodeEncodeError."""
+        print_success("test success")
+        captured = capsys.readouterr()
+        assert "test success" in captured.out
+
+    def test_print_token_usage_no_unicode_error(self, capsys):
+        """print_token_usage should never raise UnicodeEncodeError."""
+        print_token_usage(50000, 200000)
+        captured = capsys.readouterr()
+        assert "Tokens:" in captured.out
+
+    def test_unicode_constants_defined(self):
+        """All Unicode/ASCII fallback constants should be defined."""
+        from mimo_harness.display import (
+            THINK_ICON, TOOL_ICON, CHECK_ICON, CROSS_ICON,
+            WARN_ICON, INFO_ICON, DOT_ICON, ARROW_ICON,
+            SPINNER_FRAMES, BOX_TL, BOX_TR, BOX_BL, BOX_BR,
+            BOX_H, BOX_V, BAR_FILL, BAR_EMPTY, STEP_H,
+        )
+        # All should be non-empty strings or lists
+        assert isinstance(THINK_ICON, str) and len(THINK_ICON) > 0
+        assert isinstance(TOOL_ICON, str) and len(TOOL_ICON) > 0
+        assert isinstance(CHECK_ICON, str) and len(CHECK_ICON) > 0
+        assert isinstance(SPINNER_FRAMES, list) and len(SPINNER_FRAMES) > 0
