@@ -435,9 +435,11 @@ class TestCLIOutputFormat:
             "--output-format", "json", "--max-steps", "5", "--bare",
         )
         assert result.returncode == 0
-        # Output may contain step headers before/after JSON — use raw_decode
-        json_start = result.stdout.find("{")
-        assert json_start >= 0, f"No JSON object found in output: {result.stdout[:200]}"
+        # The CLI wrapper JSON is always last — the LLM's response may itself
+        # be valid JSON (e.g. {"expression": "2+2"}), so use rfind to get the
+        # final JSON object which is the CLI's {"type": "result", ...} wrapper.
+        json_start = result.stdout.rfind('{"type": "result"')
+        assert json_start >= 0, f"No CLI result JSON found in output: {result.stdout[:500]}"
         decoder = json.JSONDecoder()
         data, _ = decoder.raw_decode(result.stdout, json_start)
         assert "content" in data
@@ -449,15 +451,22 @@ class TestCLIOutputFormat:
             "--output-format", "stream-json", "--max-steps", "5", "--bare",
         )
         assert result.returncode == 0
-        # Output may contain step headers before JSON lines — filter to only JSON lines
+        # Filter to only lines that are CLI stream-json events (have "type" key).
+        # The LLM's response may also be valid JSON, so parse each line and
+        # only keep those with the "type" field that stream-json events use.
         json_lines = []
         for line in result.stdout.strip().split("\n"):
             line = line.strip()
-            if line.startswith("{"):
-                json_lines.append(line)
-        assert len(json_lines) > 0, f"No JSON lines found in output: {result.stdout[:200]}"
-        for line in json_lines:
-            data = json.loads(line)
+            if not line.startswith("{"):
+                continue
+            try:
+                data = json.loads(line)
+                if "type" in data:
+                    json_lines.append(data)
+            except json.JSONDecodeError:
+                continue
+        assert len(json_lines) > 0, f"No stream-json event lines found in output: {result.stdout[:500]}"
+        for data in json_lines:
             assert "type" in data
 
 
