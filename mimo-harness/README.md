@@ -206,9 +206,9 @@ pip install -e ".[dev]"
 python -m pytest tests/ -v
 ```
 
-**测试状态**: 679 passed in 923.58s (0:15:23)
+**测试状态**: 760 unit + 46 E2E = 806 tests passed
 
-21 test files covering:
+23 test files covering:
 - **Security**: path traversal, SSRF, shell injection, large input, Unicode, sensitive data redaction, prompt injection detection
 - **Permissions**: 6 modes, 4-stage pipeline, protected paths, symlink resolution, rule matching
 - **Context**: 4-level compression, parallel dispatch, streaming, thrashing protection, orphan filtering

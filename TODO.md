@@ -286,13 +286,44 @@ def test_classify_action_safe_command():
   - get_performance_stats 性能统计
   - CLI 命令（/subagents, /subagent, /parallel, /pipeline）
 
-### 全项目最终状态（2026-06-04）
+### 全项目最终状态（2026-06-05）
 
-- **总测试数**: 679+ 个单元测试全部通过
-- **测试文件**: 21 个测试文件覆盖所有模块
+- **总测试数**: 760 单元 + 46 E2E = 806 个测试全部通过
+- **测试文件**: 23 个测试文件覆盖所有模块
 - **代码规模**: ~6500 行 Python（harness 核心）+ ~3000 行测试 + ~1500 行 stage 实现
 - **新增模块**: `display.py`（结构化 CLI 显示）
+- **CI/CD**: GitHub Actions — unit-tests (4 Python 版本矩阵) + e2e-fast (自动) + e2e-full (手动)
 - **当前状态**: 无已知 bug，代码质量稳定，CLI 体验显著提升
+
+### 测试复盘结果（2026-06-05）
+
+对全部测试进行全面复盘，发现并修复以下问题：
+
+**重复消除（10 处）**：
+- 跨文件重复 5 处：SSRF 测试、TokenBudget 测试、会话兼容性测试等
+- E2E 重复 5 处：effort 测试合并、main() 测试合并、repl 测试精简
+
+**弱断言加固（13 处）**：
+- `assert result is not None` → 具体值/类型检查
+- `assert len(x) > 0` → 精确长度或内容验证
+- `assert x or y` → 单一明确条件
+- OR 链断言 → 单一确定值
+
+**缺失补充（8 处）**：
+- 文件不存在错误处理
+- 最大步数耗尽
+- 空任务处理
+- 超长输入处理
+- 会话保存/恢复
+- Token 预算耗尽
+- CLI 无效参数
+- CLI 冲突参数
+
+**E2E 优化**：
+- 51 → 46 个测试（合并冗余）
+- 34 个 fast + 12 个 slow 分组
+- fast 测试 push/PR 自动运行（~10min）
+- slow 测试仅手动触发（~20min）
 
 ### 任务 4 最终成果（2026-06-04）
 

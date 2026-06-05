@@ -64,11 +64,24 @@ mimo-harness   # 进入交互模式
 
 ## 测试状态
 
-```
-679 passed in 923.58s (0:15:23)
-```
+| 测试类型 | 数量 | 耗时 |
+|---------|------|------|
+| 单元测试 | 760 | ~9min |
+| E2E fast | 34 | ~10min |
+| E2E slow | 12 | ~6.5min |
+| Stage 测试 | 67 (50 unit + 17 E2E) | ~3min |
+| **总计** | **806+** | **~29min** |
 
-所有单元测试通过，覆盖安全、权限、上下文、工具、CLI、Hook、设置、会话等模块。
+所有测试通过，覆盖安全、权限、上下文、工具、CLI、Hook、设置、会话等模块。
+
+## CI/CD
+
+GitHub Actions 自动化测试：
+
+- **unit-tests**: push/PR 自动运行，Python 3.10-3.13 矩阵
+- **e2e-fast**: push/PR 自动运行，34 个快速 E2E 测试（~10min）
+- **e2e-full**: 仅手动触发，12 个慢速 E2E 测试（~20min）
+- **workflow_dispatch**: 支持 `none` / `fast` / `all` 选项
 
 ## License
 
