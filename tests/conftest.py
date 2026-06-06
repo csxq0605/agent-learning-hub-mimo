@@ -49,9 +49,10 @@ def pytest_runtest_protocol(item, nextitem):
     if not is_e2e:
         return None  # use default protocol
 
+    from _pytest.runner import runtestprotocol
+
     for attempt in range(E2E_MAX_RETRIES):
-        # Run the test using the default protocol
-        reports = pytest.runner.runtestprotocol(item, nextitem=nextitem, log=False)
+        reports = runtestprotocol(item, nextitem=nextitem, log=False)
         failed = any(r.failed and r.when == "call" for r in reports)
         if not failed:
             # Test passed — emit reports normally
