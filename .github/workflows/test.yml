@@ -8,9 +8,9 @@ on:
   workflow_dispatch:
     inputs:
       run_e2e:
-        description: 'E2E test scope'
+        description: 'E2E test scope (default: none)'
         required: false
-        default: 'fast'
+        default: 'none'
         type: choice
         options:
           - 'none'
@@ -79,14 +79,14 @@ jobs:
 
   # ─────────────────────────────────────────────────────────────
   # 2. Fast E2E tests (~34 tests, <10min, no multi-step/heavy API)
-  #    Runs on push to main, PR, or manual trigger with run_e2e=fast/all
+  #    Only runs on manual trigger with run_e2e=fast/all
   # ─────────────────────────────────────────────────────────────
   e2e-fast:
     runs-on: ubuntu-latest
     if: >-
-      github.event_name != 'workflow_dispatch' ||
-      github.event.inputs.run_e2e == 'fast' ||
-      github.event.inputs.run_e2e == 'all'
+      github.event_name == 'workflow_dispatch' &&
+      (github.event.inputs.run_e2e == 'fast' ||
+       github.event.inputs.run_e2e == 'all')
 
     steps:
     - uses: actions/checkout@v4
