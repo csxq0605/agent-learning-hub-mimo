@@ -291,9 +291,33 @@ def test_classify_action_safe_command():
 - **总测试数**: 760 单元 + 46 E2E = 806 个测试全部通过
 - **测试文件**: 23 个测试文件覆盖所有模块
 - **代码规模**: ~6500 行 Python（harness 核心）+ ~3000 行测试 + ~1500 行 stage 实现
-- **新增模块**: `display.py`（结构化 CLI 显示）
-- **CI/CD**: GitHub Actions — unit-tests (4 Python 版本矩阵) + e2e-fast (自动) + e2e-full (手动)
+- **新增模块**: `display.py`（结构化 CLI 显示，830 行）
+- **CI/CD**: GitHub Actions — unit-tests (4 Python 版本矩阵，push/PR 自动) + e2e-fast (仅手动触发) + e2e-full (仅手动触发)
 - **当前状态**: 无已知 bug，代码质量稳定，CLI 体验显著提升
+
+### 任务 5 最终成果（2026-06-05）
+
+- **迭代次数**: 1 轮（含 3 轮 Code Review）
+- **Code Review 轮次**: 3 轮（全面扫描，连续 2 轮无重大漏洞后收敛）
+- **测试结果**: 806 个测试全部通过（760 unit + 46 E2E）
+- **修复的问题**: 12 个（0 critical, 6 warning, 6 info）
+  - `_wrap_text` 硬断行缺失（长单词溢出边框）
+  - `_safe_print` 未集成到 `print_streaming_token`
+  - Unicode 常量重复定义（两处 fallback 块冲突）
+  - `threading.Lock()` 缺失（`_scheduled_prompts` 线程不安全）
+  - 硬编码 Unicode 字符未替换为 fallback 常量
+  - `/load` 命令缺少 `session_dir` 空值守卫
+  - E2E retry `hookwrapper` 机制失效（yield 只执行一次）
+  - `pytest.runner` 导入路径错误（应为 `_pytest.runner`）
+  - CI 配置 E2E 测试在 push/PR 时不应自动运行
+- **新增功能**:
+  - 对话气泡（用户/模型输出视觉区分）
+  - 代码块语法高亮（pygments）
+  - 工具调用可折叠展示
+  - 状态栏（线程安全，4 状态）
+  - Unicode/ASCII 自动降级
+  - 硬断行防止长单词溢出
+  - CI 默认不跑 E2E，仅手动触发
 
 ### 测试复盘结果（2026-06-05）
 
@@ -388,11 +412,25 @@ def test_classify_action_safe_command():
 - 错误信息的醒目展示
 
 **验收标准**：
-- [ ] 用户输入和模型输出有明确的视觉区分
-- [ ] 工具调用以结构化方式展示（名称、参数、结果）
-- [ ] 代码块有语法高亮
-- [ ] 有状态栏显示当前状态（思考中、执行中、空闲等）
-- [ ] 整体视觉效果接近 claude-code 的专业程度
+- [x] 用户输入和模型输出有明确的视觉区分（对话气泡 `╭─ You ─╮` / `╭─ MiMo ─╮`）
+- [x] 工具调用以结构化方式展示（名称、参数、结果，可折叠）
+- [x] 代码块有语法高亮（pygments，自动语言检测）
+- [x] 有状态栏显示当前状态（思考中、执行中、空闲、错误）
+- [x] 整体视觉效果接近 claude-code 的专业程度
+
+**实现详情**（2026-06-05）：
+- 新增 `display.py` 模块（830 行）：结构化 CLI 显示
+- 对话气泡（用户/模型输出视觉区分）
+- 代码块语法高亮（pygments，自动语言检测）
+- 工具调用可折叠展示（`⚡ tool_name → args`，`✓/✗ 结果`）
+- 状态栏（线程安全，idle/thinking/executing/error 四状态）
+- Unicode/ASCII 自动降级（Windows GBK 终端兼容）
+- `_safe_print()` 包装器防止 UnicodeEncodeError
+- `_visible_len()` 剥离 ANSI 转义码计算真实宽度
+- `_hard_wrap()` 硬断行防止长单词溢出边框
+- 线程安全：`threading.Lock()` 保护共享可变状态
+- 测试结果：806 个测试全部通过（760 unit + 46 E2E）
+- 3 轮 Code Review，修复 12 个问题（0 critical remaining）
 
 ---
 

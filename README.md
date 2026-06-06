@@ -78,10 +78,11 @@ mimo-harness   # 进入交互模式
 
 GitHub Actions 自动化测试：
 
-- **unit-tests**: push/PR 自动运行，Python 3.10-3.13 矩阵
-- **e2e-fast**: push/PR 自动运行，34 个快速 E2E 测试（~10min）
-- **e2e-full**: 仅手动触发，12 个慢速 E2E 测试（~20min）
-- **workflow_dispatch**: 支持 `none` / `fast` / `all` 选项
+- **unit-tests**: push/PR 自动运行，Python 3.10-3.13 矩阵，覆盖全部单元测试
+- **e2e-fast**: 仅手动触发（`workflow_dispatch` + `run_e2e=fast/all`），34 个快速 E2E 测试（~10min）
+- **e2e-full**: 仅手动触发（`workflow_dispatch` + `run_e2e=all`），12 个慢速 E2E 测试（~20min）
+
+默认 push/PR 只运行单元测试，E2E 测试需手动触发以避免 API 消耗。
 
 ## License
 

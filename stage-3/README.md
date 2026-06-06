@@ -59,7 +59,7 @@
 
 A working harness demo (`harness_demo.py`) with:
 - Pluggable tool registry
-- Permission gate with 4 levels
+- Permission gate with 5 levels
 - Session store
 - Context compaction
 - Agent loop with max steps

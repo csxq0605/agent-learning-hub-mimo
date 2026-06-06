@@ -17,7 +17,8 @@ A production-grade AI agent harness powered by Xiaomi MiMo model, following Clau
 - **Hook System**: 18 lifecycle events, command/HTTP/prompt hooks, async fire-and-forget, SSRF protection on HTTP hooks
 - **SubAgent System**: Parallel/Pipeline execution, resource limits (tokens/time/count), message channels, priority scheduling
 - **Token Counter**: tiktoken precise counting with heuristic fallback, streaming accumulator, per-session stats
-- **CLI**: Interactive REPL, pipe input, output formats (text/json/stream-json), `!command`, 25+ slash commands
+- **Display**: Structured CLI with Unicode/ASCII fallback, conversation bubbles, code syntax highlighting, spinner, status bar, collapsible tool calls
+- **CLI**: Interactive REPL, pipe input, output formats (text/json/stream-json), streaming default ON, `!command`, 25+ slash commands
 
 ## Quick Start
 
@@ -110,7 +111,7 @@ mimo-harness --resume                      # 从列表中选择会话恢复
 mimo-harness --session-id my-project       # 按指定 ID 恢复或创建会话
 mimo-harness --name "weekly-report"        # 命名当前会话
 mimo-harness --auto-approve --effort high  # 自动审批 + 高努力
-mimo-harness --stream                      # 流式输出 LLM 响应
+mimo-harness --no-stream                    # 禁用流式输出（默认启用）
 mimo-harness --bare                        # 裸模式（跳过记忆加载）
 mimo-harness --fallback-model gpt-4o       # 设置备用模型
 ```
@@ -152,7 +153,7 @@ mimo-harness --fallback-model gpt-4o       # 设置备用模型
 | `--log-file` | 日志文件路径 |
 | `--config`, `-c` | 配置文件路径 |
 | `--rules`, `-r` | 权限规则文件路径 |
-| `--stream`, `-s` | 流式输出 LLM 响应 |
+| `--no-stream` | 禁用流式输出（默认启用） |
 | `--bare` | 裸模式：跳过记忆加载，使用最小系统提示 |
 | `--effort` | 努力级别：low / medium（默认） / high |
 | `--output-format` | 输出格式：text（默认） / json / stream-json |
@@ -180,6 +181,7 @@ mimo_harness/
 ├── project_scanner.py    # Project analysis, AGENTS.md generation
 ├── security_pipeline.py  # 2-layer security (regex + model), sensitive data redaction
 ├── settings.py           # 4-level settings hierarchy
+├── display.py            # Structured CLI display (banners, spinners, status bar, syntax highlighting)
 ├── subagent.py           # SubAgent lifecycle, parallel/pipeline execution, message channels
 ├── token_counter.py      # tiktoken counting, heuristic fallback, streaming accumulator
 └── tools/                # 15 tool modules
@@ -213,7 +215,8 @@ python -m pytest tests/ -v
 - **Permissions**: 6 modes, 4-stage pipeline, protected paths, symlink resolution, rule matching
 - **Context**: 4-level compression, parallel dispatch, streaming, thrashing protection, orphan filtering
 - **Tools**: file ops, shell, web, docs, math, notebooks, tasks, LSP, plan, scheduler, code execution
-- **CLI**: interactive REPL, pipe input, output formats, session management, argument parsing
+- **Display**: banner, step header, tool call display, spinner, status bar, Unicode fallback, conversation bubbles, code blocks, hard-wrap
+- **CLI**: interactive REPL, pipe input, output formats, session management, argument parsing, streaming output
 - **Hooks**: 18 lifecycle events, command/HTTP/prompt hooks, async execution
 - **Settings**: 4-level hierarchy, config hot-reload
 - **Session**: ID validation, checkpoints, fork, resume, JSONL persistence
