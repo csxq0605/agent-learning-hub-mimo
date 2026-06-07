@@ -141,6 +141,14 @@ def create_tools(logger: TraceLogger, perms: PermissionGate) -> tuple:
         path = params.get("path", "")
         if not perms.check(Permission.READ, f"Read log file: {path}"):
             return json.dumps({"error": "Permission denied"})
+        # Path traversal protection: restrict to CWD and subdirectories
+        try:
+            resolved = Path(path).resolve()
+            cwd = Path.cwd().resolve()
+            if not resolved.is_relative_to(cwd):
+                return json.dumps({"error": "Access denied: path must be within current working directory"})
+        except Exception:
+            return json.dumps({"error": "Invalid path"})
         try:
             with open(path, "r", encoding="utf-8", errors="replace") as f:
                 lines = f.readlines()[-100:]

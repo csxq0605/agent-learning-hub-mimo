@@ -264,6 +264,10 @@ class TestStage8E2E:
         assert len(result) > 0, "Got empty result"
         assert "[ERROR]" not in result, f"Got error: {result}"
         assert "[LIMIT]" not in result, f"Got limit: {result}"
+        # Verify result contains health-related content
+        result_lower = result.lower()
+        assert any(keyword in result_lower for keyword in ["hostname", "platform", "cpu", "system", "health"]), \
+            f"Expected health check info, got: {result[:200]}"
 
     def test_devops_list_services(self):
         DevOpsAgent = self.s8.DevOpsAgent
@@ -272,3 +276,7 @@ class TestStage8E2E:
         assert len(result) > 0, "Got empty result"
         assert "[ERROR]" not in result, f"Got error: {result}"
         assert "[LIMIT]" not in result, f"Got limit: {result}"
+        # Verify result contains process-related content
+        result_lower = result.lower()
+        assert any(keyword in result_lower for keyword in ["process", "service", "running", "pid", "cpu"]), \
+            f"Expected process list info, got: {result[:200]}"

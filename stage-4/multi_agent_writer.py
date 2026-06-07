@@ -129,27 +129,37 @@ def call_agent(role: str, user_prompt: str, max_retries: int = 3) -> dict:
 
     last_error = None
     for attempt in range(max_retries):
-        response = client.chat.completions.create(
-            model=MIMO_MODEL,
-            messages=[
-                {"role": "system", "content": agent["system"]},
-                {"role": "user", "content": user_prompt}
-            ],
-            max_completion_tokens=2048,
-            temperature=0.7,
-            top_p=0.9
-        )
+        try:
+            response = client.chat.completions.create(
+                model=MIMO_MODEL,
+                messages=[
+                    {"role": "system", "content": agent["system"]},
+                    {"role": "user", "content": user_prompt}
+                ],
+                max_completion_tokens=2048,
+                temperature=0.7,
+                top_p=0.9
+            )
 
-        text = response.choices[0].message.content
-        if not text or not text.strip():
-            last_error = {"raw_text": "", "parse_error": "Empty response from LLM"}
-            continue
+            if not response.choices:
+                last_error = {"raw_text": "", "parse_error": "API returned empty choices"}
+                continue
 
-        result = extract_json(text)
-        # If parse succeeded or raw_text is substantial, return it
-        if "parse_error" not in result or len(result.get("raw_text", "")) > 50:
-            return result
-        last_error = result
+            text = response.choices[0].message.content
+            if not text or not text.strip():
+                last_error = {"raw_text": "", "parse_error": "Empty response from LLM"}
+                continue
+
+            result = extract_json(text)
+            # If parse succeeded or raw_text is substantial, return it
+            if "parse_error" not in result or len(result.get("raw_text", "")) > 50:
+                return result
+            last_error = result
+        except Exception as e:
+            last_error = {"raw_text": "", "parse_error": f"API call failed: {type(e).__name__}: {e}"}
+            if attempt < max_retries - 1:
+                import time
+                time.sleep(1 * (2 ** attempt))
 
     return last_error or {"raw_text": "", "parse_error": "All retries failed"}
 

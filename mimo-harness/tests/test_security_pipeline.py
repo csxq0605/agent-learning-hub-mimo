@@ -364,21 +364,21 @@ class TestClassifyActionModel:
         security_pipeline._classifier_cache.clear()
 
     def test_model_returns_result_or_none(self):
-        """Model classifier either returns a valid result or None (fail-open)."""
+        """Model classifier should return a valid result with valid decision."""
         client, model = _get_client()
         result = classify_action_model("run_command", {"command": "ls -la"}, client=client, model=model)
-        if result is not None:
-            assert result.decision in (SafetyDecision.ALLOW, SafetyDecision.SOFT_DENY, SafetyDecision.HARD_DENY)
-            assert result.source == "model"
-            assert result.reasoning
+        assert result is not None, "LLM should return valid classification JSON"
+        assert result.decision in (SafetyDecision.ALLOW, SafetyDecision.SOFT_DENY, SafetyDecision.HARD_DENY)
+        assert result.source == "model"
+        assert result.reasoning
 
     def test_model_classifies_safe_command(self):
         """Safe command should be classified as allow."""
         client, model = _get_client()
         result = classify_action_model("run_command", {"command": "git status"}, client=client, model=model)
-        if result is not None:
-            assert result.decision == SafetyDecision.ALLOW
-            assert result.risk_level in ("low", "medium")
+        assert result is not None, "LLM should return valid classification JSON"
+        assert result.decision == SafetyDecision.ALLOW
+        assert result.risk_level in ("low", "medium")
 
     def test_no_client_returns_none(self):
         """Without client, returns None (fail-open to default)."""
@@ -392,9 +392,7 @@ class TestClassifyActionModel:
 
         client, model = _get_client()
         result1 = classify_action_model("run_command", {"command": "ls"}, client=client, model=model)
-        # LLM may return invalid JSON (fail-open returns None, no caching)
-        if result1 is None:
-            pytest.skip("LLM returned invalid JSON — cache not populated (transient)")
+        assert result1 is not None, "LLM should return valid classification JSON for cache test"
 
         # Verify cache was populated
         cache_key = "run_command:" + hashlib.md5(json.dumps({"command": "ls"}, sort_keys=True).encode()).hexdigest()[:12]
@@ -412,9 +410,8 @@ class TestClassifyActionModel:
         result = classify_action_model(
             "run_command", {"command": "ls"}, client=client, model=model, permission_mode="bypass"
         )
-        # Should still return a valid result
-        if result is not None:
-            assert result.decision in (SafetyDecision.ALLOW, SafetyDecision.SOFT_DENY, SafetyDecision.HARD_DENY)
+        assert result is not None, "LLM should return valid classification JSON"
+        assert result.decision in (SafetyDecision.ALLOW, SafetyDecision.SOFT_DENY, SafetyDecision.HARD_DENY)
 
     def test_model_unavailable_fails_open(self):
         """When API is unavailable, fails open (returns None)."""

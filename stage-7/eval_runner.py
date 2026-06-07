@@ -64,18 +64,23 @@ EVAL_CASES = [
 
 def ask_agent(question: str) -> str:
     """Send a question to MiMo and return the response."""
-    client = OpenAI(api_key=MIMO_API_KEY, base_url=MIMO_BASE_URL)
-    response = client.chat.completions.create(
-        model=MIMO_MODEL,
-        messages=[
-            {"role": "system", "content": "You are MiMo, an AI assistant. Answer concisely."},
-            {"role": "user", "content": question}
-        ],
-        max_completion_tokens=4096,
-        temperature=0.7,
-        top_p=0.9
-    )
-    return (response.choices[0].message.content or "").strip()
+    try:
+        client = OpenAI(api_key=MIMO_API_KEY, base_url=MIMO_BASE_URL)
+        response = client.chat.completions.create(
+            model=MIMO_MODEL,
+            messages=[
+                {"role": "system", "content": "You are MiMo, an AI assistant. Answer concisely."},
+                {"role": "user", "content": question}
+            ],
+            max_completion_tokens=4096,
+            temperature=0.7,
+            top_p=0.9
+        )
+        if not response.choices:
+            return "[ERROR] API returned empty choices"
+        return (response.choices[0].message.content or "").strip()
+    except Exception as e:
+        return f"[ERROR] API call failed: {type(e).__name__}: {e}"
 
 
 # ============================================================
@@ -139,6 +144,8 @@ Does the actual answer correctly address the question and contain the expected i
             max_completion_tokens=100,
             temperature=0.0
         )
+        if not response.choices:
+            return False
         return "YES" in (response.choices[0].message.content or "").upper()
     except Exception:
         return False

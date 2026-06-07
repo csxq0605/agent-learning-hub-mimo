@@ -67,7 +67,7 @@ def pytest_runtest_protocol(item, nextitem):
                 item.ihook.pytest_runtest_logreport(report=rep)
             return True
 
-        exc = call_report.excinfo[1] if call_report.excinfo else None
+        exc = call_report.excinfo[1] if hasattr(call_report, 'excinfo') and call_report.excinfo else None
         if exc is None or not _is_retryable(exc):
             # Non-retryable — emit as-is
             for rep in reports:

@@ -102,7 +102,7 @@ class TestStage2Unit:
         r = json.loads(execute_tool("execute_code", {"code": "raise ValueError('test')"}, m))
         assert "error" in r
 
-    def test_save_recall联动(self):
+    def test_save_recall_integration(self):
         Memory = self.s2.Memory
         execute_tool = self.s2.execute_tool
         m = Memory()
@@ -146,7 +146,7 @@ class TestStage3Unit:
         r = json.loads(reg.execute("add", {"a": 3, "b": 4}, gate))
         assert r["result"] == 7
 
-    def test_permission_gate分级(self):
+    def test_permission_gate_levels(self):
         Permission = self.s3.Permission
         PermissionGate = self.s3.PermissionGate
 

@@ -164,6 +164,21 @@ def execute_tool(name: str, params: dict, memory: Memory) -> str:
             return json.dumps({"results": [r["text"][:200] for r in results], "sources": [r["source"] for r in results]})
         elif name == "execute_code":
             code = params["code"]
+            # Security: block dangerous module imports
+            _DANGEROUS_MODULES = {"os", "subprocess", "shutil", "socket", "http", "ftplib", "smtplib", "ctypes", "importlib", "sys"}
+            import ast as _ast
+            try:
+                tree = _ast.parse(code)
+                for node in _ast.walk(tree):
+                    if isinstance(node, _ast.Import):
+                        for alias in node.names:
+                            if alias.name.split(".")[0] in _DANGEROUS_MODULES:
+                                return json.dumps({"error": f"Blocked: importing '{alias.name}' is not allowed"})
+                    elif isinstance(node, _ast.ImportFrom):
+                        if node.module and node.module.split(".")[0] in _DANGEROUS_MODULES:
+                            return json.dumps({"error": f"Blocked: importing from '{node.module}' is not allowed"})
+            except SyntaxError:
+                return json.dumps({"error": "Syntax error in code"})
             with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False, encoding="utf-8") as f:
                 f.write(code)
                 f.flush()

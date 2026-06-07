@@ -7,6 +7,7 @@ Uses Playwright for browser automation with safety guards.
 import asyncio
 import json
 import sys
+from urllib.parse import quote_plus
 
 try:
     from playwright.async_api import async_playwright
@@ -28,6 +29,7 @@ class BrowserAgent:
         self.headless = headless
         self.timeout = timeout
         self.action_log: list[dict] = []
+        self.pw = None
         self._browser = None
         self._context = None
         self._page = None
@@ -143,7 +145,7 @@ async def research_topic(topic: str) -> dict:
         await agent.start()
 
         # Navigate to a search page
-        search_url = f"https://www.google.com/search?q={topic.replace(' ', '+')}"
+        search_url = f"https://www.google.com/search?q={quote_plus(topic)}"
         nav_result = await agent.navigate(search_url)
 
         if "error" in nav_result:

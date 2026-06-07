@@ -16,6 +16,7 @@ import logging
 import time
 import shutil
 import platform
+import threading
 
 _logger = logging.getLogger("mimo-harness.context")
 from dataclasses import dataclass, field
@@ -61,19 +62,22 @@ class Session:
     compaction_count: int = 0
     auto_save_dir: str = ""
     name: str = ""
+    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     def add_message(self, role: str, content, **kwargs):
         msg = {"role": role, "content": content}
         msg.update(kwargs)
-        self.messages.append(msg)
-        if self.auto_save_dir:
-            self.auto_save()
+        with self._lock:
+            self.messages.append(msg)
+            if self.auto_save_dir:
+                self._auto_save_unlocked()
 
     def get_messages(self) -> list:
-        return self.messages
+        with self._lock:
+            return list(self.messages)
 
-    def auto_save(self):
-        """Append the latest message as a JSONL line to the session file."""
+    def _auto_save_unlocked(self):
+        """Append the latest message as a JSONL line (must hold lock)."""
         if not self.auto_save_dir or not self.messages:
             return
         os.makedirs(self.auto_save_dir, exist_ok=True)
@@ -81,16 +85,22 @@ class Session:
         with open(path, "a", encoding="utf-8") as f:
             f.write(json.dumps(self.messages[-1], ensure_ascii=False) + "\n")
 
+    def auto_save(self):
+        """Append the latest message as a JSONL line to the session file."""
+        with self._lock:
+            self._auto_save_unlocked()
+
     def save(self, path: str):
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump({
-                "session_id": self.session_id,
-                "messages": self.messages,
-                "created_at": self.created_at,
-                "working_dir": self.working_dir,
-                "compaction_count": self.compaction_count,
-                "name": self.name,
-            }, f, ensure_ascii=False, indent=2)
+        with self._lock:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump({
+                    "session_id": self.session_id,
+                    "messages": self.messages,
+                    "created_at": self.created_at,
+                    "working_dir": self.working_dir,
+                    "compaction_count": self.compaction_count,
+                    "name": self.name,
+                }, f, ensure_ascii=False, indent=2)
 
     @classmethod
     def load(cls, path: str) -> "Session":
