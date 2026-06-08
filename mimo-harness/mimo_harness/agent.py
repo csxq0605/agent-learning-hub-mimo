@@ -13,6 +13,8 @@ import json
 import time
 import secrets
 import platform
+import queue
+import threading
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
@@ -589,10 +591,42 @@ You help users with coding, file operations, web research, document creation, an
         # Initialize streaming token counter
         stream_counter = StreamingTokenCounter(model=self.model)
 
-        def _consume_stream():
-            """Create stream and consume ALL chunks — entire function is
-            wrapped in retry_with_backoff so network hangs mid-stream
-            trigger a full retry (re-create the stream from scratch)."""
+        _SENTINEL = object()  # Marks end of stream
+        _CHUNK_TIMEOUT = 120  # seconds to wait for next chunk before retrying
+
+        class _StreamReader:
+            """Reads stream chunks in a background thread, yielding via queue.
+
+            This allows a per-chunk timeout so the agent thread never blocks
+            indefinitely on a hung API connection.
+            """
+            def __init__(self, stream_iter):
+                self._queue = queue.Queue()
+                self._error = None
+                def _read():
+                    try:
+                        for chunk in stream_iter:
+                            self._queue.put(chunk)
+                    except Exception as e:
+                        self._error = e
+                    finally:
+                        self._queue.put(_SENTINEL)
+                self._thread = threading.Thread(target=_read, daemon=True)
+                self._thread.start()
+
+            def __iter__(self):
+                return self
+
+            def __next__(self):
+                item = self._queue.get(timeout=_CHUNK_TIMEOUT)
+                if item is _SENTINEL:
+                    if self._error:
+                        raise self._error
+                    raise StopIteration
+                return item
+
+        def _create_and_consume_stream():
+            """Create stream, wrap in _StreamReader for per-chunk timeout."""
             response_stream = client.chat.completions.create(
                 model=self.model,
                 messages=messages,
@@ -602,18 +636,31 @@ You help users with coding, file operations, web research, document creation, an
                 top_p=0.9,
                 stream=True,
             )
+            return _StreamReader(response_stream)
 
-            content = ""
-            reasoning = ""
-            tc_data = {}
-            finish = None
-            first_token = True
+        # Retry stream creation (handles connection failures)
+        response_stream = retry_with_backoff(
+            _create_and_consume_stream,
+            max_retries=self.deps.max_retries,
+            base_delay=self.deps.base_retry_delay,
+        )
 
+        full_content = ""
+        full_reasoning_content = ""
+        tool_calls_data = {}
+        finish_reason = None
+        is_first_token = True
+
+        try:
             for chunk in response_stream:
+                # Check abort between chunks
+                if self.graceful_abort.is_requested():
+                    break
+
                 if not chunk.choices:
                     continue
                 delta = chunk.choices[0].delta
-                finish = chunk.choices[0].finish_reason or finish
+                finish_reason = chunk.choices[0].finish_reason or finish_reason
 
                 if delta is None:
                     continue
@@ -622,14 +669,14 @@ You help users with coding, file operations, web research, document creation, an
                 # MiMo API requires this to be passed back in subsequent
                 # requests when tool_calls are present.
                 if hasattr(delta, 'reasoning_content') and delta.reasoning_content:
-                    reasoning += delta.reasoning_content
+                    full_reasoning_content += delta.reasoning_content
 
                 if delta.content:
-                    if first_token:
+                    if is_first_token:
                         # First token received - print newline to separate from thinking indicator
                         print()  # Move past the "Thinking..." line
-                        first_token = False
-                    content += delta.content
+                        is_first_token = False
+                    full_content += delta.content
                     # Track streaming tokens
                     stream_counter.add_text(delta.content)
                     print_streaming_token(delta.content)
@@ -637,27 +684,23 @@ You help users with coding, file operations, web research, document creation, an
                 if delta.tool_calls:
                     for tc_chunk in delta.tool_calls:
                         idx = tc_chunk.index
-                        if idx not in tc_data:
-                            tc_data[idx] = {
+                        if idx not in tool_calls_data:
+                            tool_calls_data[idx] = {
                                 "id": "",
                                 "name": "",
                                 "arguments": "",
                             }
                         if tc_chunk.id:
-                            tc_data[idx]["id"] = tc_chunk.id
+                            tool_calls_data[idx]["id"] = tc_chunk.id
                         if tc_chunk.function:
                             if tc_chunk.function.name:
-                                tc_data[idx]["name"] = tc_chunk.function.name
+                                tool_calls_data[idx]["name"] = tc_chunk.function.name
                             if tc_chunk.function.arguments:
-                                tc_data[idx]["arguments"] += tc_chunk.function.arguments
-
-            return content, reasoning, tc_data, finish
-
-        full_content, full_reasoning_content, tool_calls_data, finish_reason = retry_with_backoff(
-            _consume_stream,
-            max_retries=self.deps.max_retries,
-            base_delay=self.deps.base_retry_delay,
-        )
+                                tool_calls_data[idx]["arguments"] += tc_chunk.function.arguments
+        except (queue.Empty, TimeoutError):
+            # Per-chunk timeout — API hung mid-stream
+            print_streaming_end()
+            raise TimeoutError("API stream timeout — no data received within 120s")
 
         if full_content or tool_calls_data:
             print_streaming_end()
@@ -753,7 +796,6 @@ You help users with coding, file operations, web research, document creation, an
         api_key = require_api_key()
         client = self.deps.llm_client_factory(
             api_key=api_key, base_url=MIMO_BASE_URL,
-            timeout=300.0,  # 5min HTTP transport timeout — prevents infinite hang on network issues
         )
         self._llm_client = client  # Store for security pipeline model classifier
         # Set LLM client on permission gate for model-driven classification

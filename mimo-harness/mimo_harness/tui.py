@@ -9,6 +9,7 @@ Falls back to normal REPL when:
 """
 
 import io
+import queue
 import sys
 import threading
 from contextlib import redirect_stdout
@@ -24,9 +25,11 @@ from textual.widgets import RichLog, Input, Static
 from textual.binding import Binding
 from textual.suggester import Suggester
 
-# Streaming token buffer — written by agent, flushed to TUI periodically
-_stream_buffer: list[str] = []
-_stream_buffer_lock = threading.Lock()
+# ── Output queue: worker thread → main thread (non-blocking) ──
+# Worker thread puts items here; main thread drains via timer.
+# Items: ("stream", text), ("write", content), ("end_stream", None),
+#        ("start_stream", None), ("done", None), ("permission", (desc, value))
+_output_queue: queue.Queue = queue.Queue()
 
 
 def _get_tui_app():
@@ -37,25 +40,6 @@ def _get_tui_app():
 def _set_tui_app(app):
     """Set the current TUI app instance."""
     _get_tui_app._instance = app
-
-
-def flush_stream_buffer():
-    """Flush accumulated streaming tokens to the TUI streaming widget.
-
-    Thread-safe — can be called from the agent worker thread.
-    """
-    app = _get_tui_app()
-    if not app:
-        return
-    with _stream_buffer_lock:
-        if not _stream_buffer:
-            return
-        text = ''.join(_stream_buffer)
-        _stream_buffer.clear()
-    try:
-        app.call_from_thread(app._append_streaming, text)
-    except Exception:
-        pass
 
 
 class CommandSuggester(Suggester):
@@ -86,6 +70,11 @@ class MiMoTUI(App):
     - Static (#streaming): current streaming text (hidden when idle)
     - Static (#status-bar): session/token info
     - Input (#input-area): user input, fixed at bottom
+
+    Thread safety: all output from the agent worker thread goes through
+    _output_queue (non-blocking put). A 50ms timer on the main thread
+    drains the queue and updates widgets. This avoids call_from_thread
+    deadlocks entirely.
     """
 
     CSS = """
@@ -186,27 +175,60 @@ class MiMoTUI(App):
         self._show_banner()
         self._update_status_bar()
         self.query_one("#input-area", Input).focus()
+        # Start output queue drain timer (50ms interval)
+        self.set_interval(0.05, self._drain_output_queue)
 
     def on_unmount(self) -> None:
         _set_tui_app(None)
 
+    # ── Output Queue Drain (main thread timer) ─────────────────
+
+    def _drain_output_queue(self) -> None:
+        """Drain items from _output_queue and update widgets.
+
+        Called every 50ms by Textual timer on the main thread.
+        This is the ONLY place widgets are touched from.
+        """
+        try:
+            for _ in range(100):  # max 100 items per tick to avoid blocking UI
+                kind, data = _output_queue.get_nowait()
+                if kind == "stream":
+                    # Append streaming tokens to the streaming widget
+                    self._streaming_text += data
+                    stream = self.query_one("#streaming", Static)
+                    stream.update(self._streaming_text)
+                elif kind == "write":
+                    # Write completed content to RichLog
+                    self._end_streaming_internal()
+                    log = self.query_one("#output", RichLog)
+                    log.write(data)
+                    self._start_streaming_internal()
+                elif kind == "start_stream":
+                    self._start_streaming_internal()
+                elif kind == "end_stream":
+                    self._end_streaming_internal()
+                elif kind == "done":
+                    self._on_agent_done()
+                elif kind == "permission":
+                    desc, value = data
+                    self._show_permission_prompt(desc, value)
+                    self._enable_permission_input()
+                elif kind == "permission_enable":
+                    self._enable_permission_input()
+        except queue.Empty:
+            pass
+
     # ── Streaming Support ──────────────────────────────────────
 
-    def _start_streaming(self) -> None:
-        """Show the streaming widget for real-time token display."""
+    def _start_streaming_internal(self) -> None:
+        """Show the streaming widget for real-time token display (main thread only)."""
         self._streaming_text = ""
         stream = self.query_one("#streaming", Static)
         stream.add_class("visible")
         stream.update("")
 
-    def _append_streaming(self, text: str) -> None:
-        """Append tokens to the streaming widget (called from worker thread)."""
-        self._streaming_text += text
-        stream = self.query_one("#streaming", Static)
-        stream.update(self._streaming_text)
-
-    def _end_streaming(self) -> None:
-        """Move streaming content to RichLog and hide streaming widget."""
+    def _end_streaming_internal(self) -> None:
+        """Move streaming content to RichLog and hide streaming widget (main thread only)."""
         stream = self.query_one("#streaming", Static)
         stream.remove_class("visible")
         if self._streaming_text.strip():
@@ -220,10 +242,9 @@ class MiMoTUI(App):
         """Write content to the output log.
 
         Accepts Rich renderables (Panel, Table, Text, Syntax)
-        or plain strings.
+        or plain strings. Safe to call from any thread.
         """
-        log = self.query_one("#output", RichLog)
-        log.write(content)
+        _output_queue.put(("write", content))
 
     # ── Banner & Status ─────────────────────────────────────────
 
@@ -301,7 +322,7 @@ class MiMoTUI(App):
         self._tab_matches = []
         self._tab_idx = -1
         if not text:
-            # Check scheduled prompts
+            # Check for scheduled prompts even when user provides no input
             with self.scheduled_lock:
                 scheduled = self.scheduled_prompts.pop(0) if self.scheduled_prompts else None
             if scheduled:
@@ -370,7 +391,9 @@ class MiMoTUI(App):
     def _run_agent(self, task: str) -> None:
         self._agent_running = True
         self._disable_input()
-        self._start_streaming()
+
+        # Start streaming via queue
+        _output_queue.put(("start_stream", None))
 
         import mimo_harness.display as _display_mod
 
@@ -379,53 +402,37 @@ class MiMoTUI(App):
         orig_safe_print = _display_mod._safe_print
         orig_print_token = _display_mod.print_streaming_token
 
-        def _flush_and_write(text: str):
-            """Single call_from_thread target: flush stream, write output, restart stream."""
-            self._end_streaming()
-            self.write_output(text)
-            self._start_streaming()
-
         def tui_console_print(*args, **kwargs):
-            """Intercept _console.print — route ALL display output to TUI."""
+            """Intercept _console.print — route ALL display output to queue."""
             end = kwargs.get('end', '\n')
             sep = kwargs.get('sep', ' ')
             text = sep.join(str(a) for a in args)
             if not text and end == '\n':
                 return
             full = text + end
-            # Streaming tokens use end="" — buffer them
+            # Streaming tokens use end="" — buffer in queue
             if end == '':
-                with _stream_buffer_lock:
-                    _stream_buffer.append(full)
-                    if len(_stream_buffer) >= 20:
-                        flush_stream_buffer()
+                _output_queue.put(("stream", full))
             else:
-                # Non-streaming: single call_from_thread to avoid event loop congestion
-                flush_stream_buffer()
-                try:
-                    self.call_from_thread(_flush_and_write, full.rstrip('\n'))
-                except Exception:
-                    pass
+                # Non-streaming: end current stream, write content, restart stream
+                _output_queue.put(("end_stream", None))
+                _output_queue.put(("write", full.rstrip('\n')))
+                _output_queue.put(("start_stream", None))
 
         def tui_safe_print(*args, **kwargs):
-            """Route _safe_print calls to TUI output."""
+            """Route _safe_print calls to queue."""
             sep = kwargs.get('sep', ' ')
             end = kwargs.get('end', '\n')
             text = sep.join(str(a) for a in args)
             full = text + end
             if text:
-                flush_stream_buffer()
-                try:
-                    self.call_from_thread(_flush_and_write, full.rstrip('\n'))
-                except Exception:
-                    pass
+                _output_queue.put(("end_stream", None))
+                _output_queue.put(("write", full.rstrip('\n')))
+                _output_queue.put(("start_stream", None))
 
         def tui_print_streaming_token(token: str, **kwargs):
-            """Buffer streaming tokens for periodic flush."""
-            with _stream_buffer_lock:
-                _stream_buffer.append(token)
-                if len(_stream_buffer) >= 20:
-                    flush_stream_buffer()
+            """Route streaming tokens to queue."""
+            _output_queue.put(("stream", token))
 
         # Monkey-patch ALL output paths
         _display_mod._console.print = tui_console_print
@@ -435,7 +442,7 @@ class MiMoTUI(App):
         # Monkey-patch permission input to route through TUI
         import mimo_harness.permissions as _perm_mod
         orig_perm_request = _perm_mod._tui_permission_request
-        _perm_mod._tui_permission_request = self.request_permission
+        _perm_mod._tui_permission_request = self._queue_permission_request
 
         self.run_worker(
             self._agent_worker(task, _display_mod, orig_console_print,
@@ -453,20 +460,12 @@ class MiMoTUI(App):
             self._worker_thread = threading.current_thread()
             try:
                 result = self.harness.run(task, self.session)
-                # Flush remaining streaming tokens
-                flush_stream_buffer()
                 if result:
-                    try:
-                        self.call_from_thread(self._end_streaming)
-                        self.call_from_thread(self.write_output, result)
-                    except Exception:
-                        pass
+                    _output_queue.put(("end_stream", None))
+                    _output_queue.put(("write", result))
             except Exception as e:
-                try:
-                    self.call_from_thread(self._end_streaming)
-                    self.call_from_thread(self.write_output, f"[red]Error: {e}[/red]")
-                except Exception:
-                    pass
+                _output_queue.put(("end_stream", None))
+                _output_queue.put(("write", f"[red]Error: {e}[/red]"))
             finally:
                 # Restore ALL display functions
                 display_mod._console.print = orig_console_print
@@ -476,36 +475,31 @@ class MiMoTUI(App):
                 if perm_mod is not None:
                     perm_mod._tui_permission_request = orig_perm_request
                 self._worker_thread = None
-                try:
-                    self.call_from_thread(self._on_agent_done)
-                except Exception:
-                    pass
+                _output_queue.put(("done", None))
         return worker
 
     def _on_agent_done(self) -> None:
-        self._end_streaming()
+        """Called on main thread when agent finishes."""
+        self._end_streaming_internal()
         self._agent_running = False
         self._permission_mode = False
         self._enable_input()
         self._update_status_bar()
 
-    # ── Permission Request ─────────────────────────────────────
+    # ── Permission Request (queue-based, non-blocking) ──────────
 
-    def request_permission(self, action_desc: str, permission_value: str) -> bool:
-        """Show permission prompt in TUI and wait for user Y/n input.
+    def _queue_permission_request(self, action_desc: str, permission_value: str) -> bool:
+        """Show permission prompt via queue and wait for user Y/n input.
 
-        Called from the agent worker thread via _tui_permission_request callback.
-        Uses call_from_thread to enable input, then waits on an Event.
+        Called from the agent worker thread. Puts prompt in queue (non-blocking),
+        then blocks on Event until user responds in the TUI.
         """
         self._permission_event = Event()
         self._permission_result = None
         self._permission_mode = True
 
-        # Show prompt in output
-        self.call_from_thread(self._show_permission_prompt, action_desc, permission_value)
-
-        # Enable input so user can type Y/n
-        self.call_from_thread(self._enable_permission_input)
+        # Show prompt and enable input via queue (non-blocking)
+        _output_queue.put(("permission", (action_desc, permission_value)))
 
         # Block until user responds
         self._permission_event.wait()
@@ -514,7 +508,7 @@ class MiMoTUI(App):
         return self._permission_result
 
     def _show_permission_prompt(self, action_desc: str, permission_value: str) -> None:
-        """Display permission prompt in the output log."""
+        """Display permission prompt in the output log (main thread only)."""
         prompt_text = Text()
         prompt_text.append("  Allow? (", style="bold")
         prompt_text.append("Y", style="bold green")
@@ -522,7 +516,7 @@ class MiMoTUI(App):
         self.write_output(prompt_text)
 
     def _enable_permission_input(self) -> None:
-        """Temporarily enable input for permission response."""
+        """Temporarily enable input for permission response (main thread only)."""
         inp = self.query_one("#input-area", Input)
         inp.disabled = False
         inp.placeholder = "Type Y or n..."
@@ -568,6 +562,12 @@ class MiMoTUI(App):
             except Exception:
                 pass
         # Force-restore state even if thread doesn't die cleanly
+        # Clear the output queue to avoid stale items
+        while not _output_queue.empty():
+            try:
+                _output_queue.get_nowait()
+            except queue.Empty:
+                break
         self._on_agent_done()
         # Restore display functions
         import mimo_harness.display as _display_mod
@@ -619,18 +619,16 @@ class MiMoTUI(App):
         inp = self.query_one("#input-area", Input)
         value = inp.value
 
-        # Only complete slash commands
-        if not value.startswith("/"):
-            return
-
-        # If we're already cycling with the same prefix, show next match
         if self._tab_matches and self._tab_prefix == value:
+            # Cycle to next match
             self._tab_idx = (self._tab_idx + 1) % len(self._tab_matches)
             inp.value = self._tab_matches[self._tab_idx]
             inp.cursor_position = len(inp.value)
             return
 
-        # Find all matching commands
+        # Find matches
+        if not value.startswith("/"):
+            return
         matches = [cmd for cmd in self.COMMANDS if cmd.startswith(value)]
         if not matches:
             return

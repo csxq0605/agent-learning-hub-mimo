@@ -51,16 +51,25 @@ class TestCommandSuggester:
 
 
 class TestStreamBuffer:
-    """Test the streaming token buffer mechanism."""
+    """Test the output queue mechanism."""
 
-    def test_flush_empty_buffer(self):
-        from mimo_harness.tui import flush_stream_buffer
-        # Should not crash when buffer is empty
-        flush_stream_buffer()
+    def test_output_queue_exists(self):
+        from mimo_harness.tui import _output_queue
+        import queue
+        assert isinstance(_output_queue, queue.Queue)
 
-    def test_stream_buffer_lock_exists(self):
-        from mimo_harness.tui import _stream_buffer_lock
-        assert isinstance(_stream_buffer_lock, type(threading.Lock()))
+    def test_queue_put_get(self):
+        from mimo_harness.tui import _output_queue
+        # Drain any existing items
+        while not _output_queue.empty():
+            try:
+                _output_queue.get_nowait()
+            except Exception:
+                break
+        _output_queue.put(("stream", "test"))
+        kind, data = _output_queue.get_nowait()
+        assert kind == "stream"
+        assert data == "test"
 
 
 class TestTUIImports:
@@ -74,9 +83,10 @@ class TestTUIImports:
         from mimo_harness.tui import run_tui
         assert callable(run_tui)
 
-    def test_import_flush(self):
-        from mimo_harness.tui import flush_stream_buffer
-        assert callable(flush_stream_buffer)
+    def test_import_output_queue(self):
+        from mimo_harness.tui import _output_queue
+        import queue
+        assert isinstance(_output_queue, queue.Queue)
 
     def test_import_set_get_app(self):
         from mimo_harness.tui import _get_tui_app, _set_tui_app
@@ -125,10 +135,11 @@ class TestTUIClass:
             'write_output', '_show_banner', '_update_status_bar',
             'on_input_submitted', 'on_input_changed',
             '_handle_command', '_run_agent',
-            'action_abort', 'action_quit',
+            'action_abort', 'action_quit', 'action_force_kill',
             'action_history_up', 'action_history_down',
             'action_tab_complete',
-            '_start_streaming', '_append_streaming', '_end_streaming',
+            '_start_streaming_internal', '_end_streaming_internal',
+            '_drain_output_queue',
         ]
         for method in expected_methods:
             assert hasattr(MiMoTUI, method), f"Missing method: {method}"
