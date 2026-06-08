@@ -79,8 +79,8 @@ def _validate_url(url: str) -> str | None:
 
 
 _SEARCH_BACKENDS = [
-    ("https://html.duckduckgo.com/html/", "duckduckgo"),
     ("https://www.bing.com/search", "bing"),
+    ("https://html.duckduckgo.com/html/", "duckduckgo"),
 ]
 
 
@@ -110,8 +110,24 @@ def _parse_ddg_html(html: str, max_results: int = 10) -> list[dict]:
 
 
 def _parse_bing_html(html: str, max_results: int = 10) -> list[dict]:
-    """Parse Bing HTML search results."""
+    """Parse Bing search results (HTML or RSS format)."""
     results = []
+    # Try RSS format first (requested with format=rss)
+    items = re.findall(r'<item>(.*?)</item>', html, re.DOTALL)
+    if items:
+        for item in items:
+            title_m = re.search(r'<title>(.*?)</title>', item)
+            link_m = re.search(r'<link/>(.*?)</link>', item) or re.search(r'<link>(.*?)</link>', item)
+            desc_m = re.search(r'<description>(.*?)</description>', item, re.DOTALL)
+            title = re.sub(r'<[^>]+>', '', title_m.group(1)).strip() if title_m else ""
+            url = link_m.group(1).strip() if link_m else ""
+            snippet = re.sub(r'<[^>]+>', '', desc_m.group(1)).strip() if desc_m else ""
+            if title and url:
+                results.append({"title": title, "url": url, "snippet": snippet})
+            if len(results) >= max_results:
+                break
+        return results
+    # Fallback: HTML format
     for match in re.finditer(
         r'<li class="b_algo"[^>]*>.*?<a[^>]+href="(https?://[^"]+)"[^>]*>(.*?)</a>.*?<p[^>]*>(.*?)</p>',
         html, re.DOTALL
