@@ -190,7 +190,7 @@ class HookRunner:
             "event": config.event.value,
             "tool_name": tool_name,
             "tool_input": tool_input or {},
-            "tool_result": tool_result[:500],  # Truncate for hook input
+            "tool_result": tool_result[:2000],  # Truncate for hook input
         }, ensure_ascii=False)
 
         try:
@@ -266,7 +266,7 @@ class HookRunner:
             "event": config.event.value,
             "tool_name": tool_name,
             "tool_input": tool_input or {},
-            "tool_result": tool_result[:500],
+            "tool_result": tool_result[:2000],
         }, ensure_ascii=False)
 
         try:
@@ -319,7 +319,7 @@ class HookRunner:
             "event": config.event.value,
             "tool_name": tool_name,
             "tool_input": tool_input or {},
-            "tool_result": tool_result[:500],
+            "tool_result": tool_result[:2000],
         }, ensure_ascii=False)
 
         headers = {"Content-Type": "application/json"}
@@ -371,8 +371,8 @@ class HookRunner:
         # Build the prompt with context
         prompt_text = config.prompt.format(
             tool_name=tool_name,
-            tool_input=json.dumps(tool_input or {}, ensure_ascii=False)[:500],
-            tool_result=tool_result[:500],
+            tool_input=json.dumps(tool_input or {}, ensure_ascii=False)[:2000],
+            tool_result=tool_result[:2000],
             event=config.event.value,
         )
 

@@ -822,14 +822,14 @@ class TestShellDeep:
         assert "hello_from_test" in result["output"]
 
     def test_run_command_large_output(self):
-        """Verify output >30000 chars is truncated."""
+        """Verify output >50000 chars is truncated."""
         result = json.loads(shell.run_command({
-            "command": f'{sys.executable} -c "print(\'A\' * 50000)"',
+            "command": f'{sys.executable} -c "print(\'A\' * 70000)"',
         }))
         assert result["exit_code"] == 0
         assert "... [truncated]" in result["output"]
-        # Total output should be around 30000 + truncation marker
-        assert len(result["output"]) <= 31000
+        # Total output should be around 50000 + truncation marker
+        assert len(result["output"]) <= 51000
 
     def test_run_command_unicode_output(self):
         """Verify Unicode in command output is handled."""

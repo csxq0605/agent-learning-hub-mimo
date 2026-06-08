@@ -516,7 +516,7 @@ def main():
                 scrubbed_env = _scrub_env()
                 result = subprocess.run(
                     shell_cmd, shell=True, capture_output=True, text=True,
-                    timeout=30, env=scrubbed_env
+                    timeout=120, env=scrubbed_env
                 )
                 if result.stdout:
                     print(result.stdout, end="")

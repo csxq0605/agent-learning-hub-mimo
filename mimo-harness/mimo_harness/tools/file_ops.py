@@ -140,7 +140,7 @@ def read_files(params: dict) -> str:
     """Read multiple files in a single tool call (batch read)."""
     paths = params.get("paths", [])
     offset = params.get("offset", 0)
-    limit = params.get("limit", 200)
+    limit = params.get("limit", 500)
     if not paths:
         return json.dumps({"error": "paths must be a non-empty list"})
     results = []
@@ -249,7 +249,7 @@ def _matches_gitignore(rel_path: str, patterns: list[str]) -> bool:
 def glob_files(params: dict) -> str:
     pattern = params.get("pattern", "")
     respect_gitignore = params.get("respect_gitignore", False)
-    max_results = params.get("max_results", 100)
+    max_results = params.get("max_results", 250)
     # Support explicit path parameter: prepend to pattern if provided
     search_path = params.get("path", "")
     if search_path:
@@ -349,9 +349,9 @@ def grep_files(params: dict) -> str:
                                 continue
                             # content mode (or default legacy behavior)
                             if only_matching:
-                                match_text = m.group(0)[:200]
+                                match_text = m.group(0)[:500]
                             else:
-                                match_text = lines[line_num - 1].rstrip()[:200]
+                                match_text = lines[line_num - 1].rstrip()[:500]
                             entry: dict = {"file": fpath}
                             if show_line_numbers:
                                 entry["line"] = line_num
@@ -359,8 +359,8 @@ def grep_files(params: dict) -> str:
                             if ctx_before > 0 or ctx_after > 0:
                                 start = max(0, line_num - 1 - ctx_before)
                                 end = min(len(lines), line_num + ctx_after)
-                                entry["before_context"] = [l.rstrip()[:200] for l in lines[start:line_num - 1]]
-                                entry["after_context"] = [l.rstrip()[:200] for l in lines[line_num:end]]
+                                entry["before_context"] = [l.rstrip()[:500] for l in lines[start:line_num - 1]]
+                                entry["after_context"] = [l.rstrip()[:500] for l in lines[line_num:end]]
                             results.append(entry)
                     else:
                         for i, line in enumerate(lines, 1):
@@ -378,18 +378,18 @@ def grep_files(params: dict) -> str:
                                     continue
                                 # content mode
                                 if only_matching:
-                                    content_match = m.group(0) if (m := regex.search(line)) else line.rstrip()[:200]
+                                    content_match = m.group(0) if (m := regex.search(line)) else line.rstrip()[:500]
                                 else:
-                                    content_match = line.rstrip()[:200]
+                                    content_match = line.rstrip()[:500]
                                 entry = {"file": fpath}
                                 if show_line_numbers:
                                     entry["line"] = i
-                                entry["content"] = content_match[:200]
+                                entry["content"] = content_match[:500]
                                 if ctx_before > 0 or ctx_after > 0:
                                     start = max(0, i - 1 - ctx_before)
                                     end = min(len(lines), i + ctx_after)
-                                    entry["before_context"] = [l.rstrip()[:200] for l in lines[start:i - 1]]
-                                    entry["after_context"] = [l.rstrip()[:200] for l in lines[i:end]]
+                                    entry["before_context"] = [l.rstrip()[:500] for l in lines[start:i - 1]]
+                                    entry["after_context"] = [l.rstrip()[:500] for l in lines[i:end]]
                                 results.append(entry)
                     # S10: accumulate count
                     if output_mode == "count" and file_match_count > 0:
@@ -511,7 +511,7 @@ def get_tools() -> list[ToolDef]:
                     "pattern": {"type": "string", "description": "Glob pattern"},
                     "path": {"type": "string", "description": "Directory to search in (default: current directory)"},
                     "respect_gitignore": {"type": "boolean", "description": "Filter out paths matching .gitignore rules (default false)"},
-                    "max_results": {"type": "integer", "description": "Max results to return (default 100, 0=unlimited)"},
+                    "max_results": {"type": "integer", "description": "Max results to return (default 250, 0=unlimited)"},
                 },
                 "required": ["pattern"]
             },

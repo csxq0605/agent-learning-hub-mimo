@@ -439,8 +439,8 @@ def llm_compress(
         if not isinstance(content, str):
             content = str(content) if content else ""
         # Truncate individual long messages (e.g. large tool results)
-        if len(content) > 3000:
-            content = content[:3000] + "... [truncated]"
+        if len(content) > 8000:
+            content = content[:8000] + "... [truncated]"
         line = f"[{role}]: {content}"
         if total_chars + len(line) > max_chars:
             parts.append(f"[{role}]: ... [remaining messages omitted]")
@@ -601,14 +601,14 @@ def compact_context(
             if isinstance(msg, dict) and msg.get("role") == "system":
                 result.append(msg)
                 break  # Only keep the first system message
-        # Keep last 8 non-system messages for reasonable context continuity
-        KEEP_RECENT = 8
+        # Keep last 15 non-system messages for reasonable context continuity
+        KEEP_RECENT = 15
         recent_msgs = [m for m in messages if isinstance(m, dict) and m.get("role") != "system"]
         for msg in recent_msgs[-KEEP_RECENT:]:
             content = msg.get("content", "")
-            if isinstance(content, str) and len(content) > 2000:
+            if isinstance(content, str) and len(content) > 4000:
                 msg = dict(msg)
-                msg["content"] = content[:2000] + "... [truncated]"
+                msg["content"] = content[:4000] + "... [truncated]"
             result.append(msg)
         return _filter_orphan_tool_results(result), compaction_attempts, compaction_failures, False, True
 
@@ -874,8 +874,8 @@ def _discover_instruction_files(start_dir: str = None) -> list[tuple[str, str]]:
                 try:
                     with open(path, "r", encoding="utf-8") as f:
                         lines = f.readlines()
-                    if len(lines) > 200:
-                        lines = lines[:200] + ["... [truncated to 200 lines]\n"]
+                    if len(lines) > 500:
+                        lines = lines[:500] + ["... [truncated to 500 lines]\n"]
                     content = "".join(lines).strip()
                     if content:
                         # Strip HTML comments to save tokens
@@ -891,7 +891,7 @@ def load_memory(project_dir: str) -> str:
     """Load project memory with tiered loading (Claude Code style).
 
     Tiered loading pattern (Ch6):
-    - MEMORY.md index is ALWAYS loaded (first 200 lines / 25KB)
+    - MEMORY.md index is ALWAYS loaded (first 500 lines / 25KB)
     - Topic files (e.g. debugging.md) are NOT loaded at startup
     - Topic files are read on-demand via load_topic_on_demand()
     - CLAUDE.md files are loaded in full (they are instructions, not data)

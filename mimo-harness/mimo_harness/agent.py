@@ -477,7 +477,7 @@ You help users with coding, file operations, web research, document creation, an
                 HookEvent.POST_TOOL_USE,
                 tool_name=func_name,
                 tool_input=func_args,
-                tool_result=result[:500],
+                tool_result=result[:2000],
             )
             # PostToolUse hooks can inject additional context but cannot block
             if post_result.additional_context:
@@ -947,7 +947,7 @@ You help users with coding, file operations, web research, document creation, an
                 # Ch8: Fire Stop hook
                 hook_runner = getattr(self, '_hook_runner', None)
                 if hook_runner:
-                    hook_runner.run_hooks(HookEvent.STOP, tool_result=final[:500])
+                    hook_runner.run_hooks(HookEvent.STOP, tool_result=final[:2000])
                 # Update token stats
                 stats = self.token_budget.get_stats()
                 stats.total_tokens = self.token_budget.estimated_tokens
@@ -1043,7 +1043,7 @@ You help users with coding, file operations, web research, document creation, an
 
             # Execute concurrency-safe tools in parallel (preserving order)
             if safe_calls:
-                with ThreadPoolExecutor(max_workers=min(len(safe_calls), 4)) as executor:
+                with ThreadPoolExecutor(max_workers=min(len(safe_calls), 8)) as executor:
                     # Submit in original order
                     futures = [
                         executor.submit(self._handle_tool_call, fn, fa, tc.id, session)
@@ -1129,7 +1129,7 @@ You help users with coding, file operations, web research, document creation, an
         self,
         task: str,
         description: str = "",
-        max_steps: int = 10,
+        max_steps: int = 0,
         allowed_tools: list[str] = None,
         effort: str = "medium",
     ):

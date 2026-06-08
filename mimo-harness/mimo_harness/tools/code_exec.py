@@ -15,7 +15,7 @@ from ..permissions import Permission
 
 def execute_python(params: dict) -> str:
     code = params.get("code", "")
-    timeout = params.get("timeout", 30)
+    timeout = params.get("timeout", 60)
     try:
         with tempfile.NamedTemporaryFile(
             mode="w", suffix=".py", delete=False, encoding="utf-8"

@@ -161,7 +161,7 @@ def web_search(params: dict) -> str:
 
 def web_fetch(params: dict) -> str:
     url = params.get("url", "")
-    max_chars = params.get("max_chars", 20000)
+    max_chars = params.get("max_chars", 50000)
     err = _validate_url(url)
     if err:
         return json.dumps({"error": err})

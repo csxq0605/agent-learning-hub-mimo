@@ -109,7 +109,7 @@ class TestLoadMemory:
 
     def test_respects_line_limit(self, tmp_path):
         claude_md = tmp_path / "CLAUDE.md"
-        claude_md.write_text("\n".join([f"line {i}" for i in range(300)]))
+        claude_md.write_text("\n".join([f"line {i}" for i in range(600)]))
 
         result = load_memory(str(tmp_path))
         assert "truncated" in result
@@ -157,8 +157,8 @@ class TestCompactContextWithLLM:
         assert tokens > COMPRESS_TRIGGER_TOKENS
 
         result, _, _, _, _ = compact_context(messages, estimated_tokens=tokens)
-        # Fallback: system marker + system msg + last 8 messages
-        assert len(result) <= 10
+        # Fallback: system marker + system msg + last 15 messages
+        assert len(result) <= 18
         assert result[0]["role"] == "system"
 
     def test_skips_compression_when_below_token_threshold(self):
@@ -223,8 +223,8 @@ class TestCompactContextEdgeCases:
         assert tokens > COMPRESS_TRIGGER_TOKENS
 
         result, _, _, _, _ = compact_context(messages, estimated_tokens=tokens)
-        # Fallback: system marker + system msg + last 8 messages
-        assert len(result) <= 10
+        # Fallback: system marker + system msg + last 15 messages
+        assert len(result) <= 18
         assert result[0]["role"] == "system"
 
     # NOTE: compact_context failure fallback is tested via E2E token budget

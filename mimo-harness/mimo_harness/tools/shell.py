@@ -36,9 +36,9 @@ def _cleanup_completed_jobs():
 
 # S5+S20: Configurable output length limit via env var
 try:
-    MAX_OUTPUT_LENGTH = int(os.environ.get("MIMO_MAX_OUTPUT_LENGTH", "30000"))
+    MAX_OUTPUT_LENGTH = int(os.environ.get("MIMO_MAX_OUTPUT_LENGTH", "50000"))
 except (ValueError, TypeError):
-    MAX_OUTPUT_LENGTH = 30000
+    MAX_OUTPUT_LENGTH = 50000
 
 # S19: Commands that are safe to auto-approve (read-only) — extended
 READONLY_PREFIXES = [
@@ -227,7 +227,7 @@ def _spill_output(output: str) -> str:
         fpath = os.path.join(outputs_dir, fname)
         with open(fpath, "w", encoding="utf-8") as f:
             f.write(output)
-        preview = output[:1000] + "\n... [truncated] ...\n" + output[-500:]
+        preview = output[:1000] + "\n... [truncated] ...\n" + output[-1000:]
         return preview + f"\n\n[Full output saved to: {os.path.abspath(fpath)}]"
     except Exception:
         # Fallback to simple truncation if file write fails

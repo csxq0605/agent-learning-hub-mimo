@@ -35,9 +35,9 @@ from .logging_utils import TraceLogger
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-DEFAULT_SUBAGENT_MAX_STEPS = 10
-DEFAULT_SUBAGENT_MAX_DURATION = 120.0  # 2 minutes
-DEFAULT_SUBAGENT_MAX_TOKENS = 50_000   # 50K tokens per subagent
+DEFAULT_SUBAGENT_MAX_STEPS = 50
+DEFAULT_SUBAGENT_MAX_DURATION = 300.0  # 5 minutes
+DEFAULT_SUBAGENT_MAX_TOKENS = 100_000  # 100K tokens per subagent
 MAX_CONCURRENT_SUBAGENTS = 5
 
 
@@ -618,7 +618,7 @@ class SubAgentManager:
 
         return results
 
-    def run_pipeline(self, configs: list[SubAgentConfig], max_context_length: int = 10000) -> list[SubAgentResult]:
+    def run_pipeline(self, configs: list[SubAgentConfig], max_context_length: int = 50000) -> list[SubAgentResult]:
         """Run SubAgents in pipeline mode (sequential, each gets previous results).
 
         Args:

@@ -120,6 +120,25 @@ class TestTerminationPaths:
         """Agent stops when time limit is exceeded."""
         harness = MiMoHarness(max_steps=100, auto_approve=True, bare=True, max_duration=0.01)
         session = Session(session_id="test")
+
+        import time as _time
+        _original_sleep = _time.sleep
+
+        # Patch _call_llm to simulate slow responses so time limit triggers
+        call_count = 0
+        def _slow_llm(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count >= 2:
+                _time.sleep(0.05)  # ensure we exceed 0.01s
+            # Return a tool call so the loop continues past the time check
+            return {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{"id": "tc1", "type": "function", "function": {"name": "task_list", "arguments": "{}"}}],
+            }
+
+        harness._call_llm = _slow_llm
         result = harness.run("test task", session)
 
         result_lower = result.lower()
