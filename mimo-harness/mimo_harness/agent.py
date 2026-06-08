@@ -26,7 +26,7 @@ from .logging_utils import TraceLogger
 from .permissions import Permission, PermissionGate, PermissionMode
 from .context import Session, compact_context, load_memory, load_memory_for_compaction, estimate_tokens, load_topic_on_demand
 from .tools.registry import ToolRegistry, ToolDef
-from .tools import file_ops, shell, code_exec, web_tools, doc_tools, math_tools, interactive, monitor, notebook_tools, task_tools, plan_tools, lsp_tools, scheduler_tools
+from .tools import file_ops, shell, code_exec, web_tools, doc_tools, math_tools, interactive, monitor, notebook_tools, task_tools, plan_tools, lsp_tools, scheduler_tools, subagent_tools
 from .tools.file_ops import FileOpsState, set_file_ops_state
 from .security_pipeline import filter_tool_output, SAFETY_SYSTEM_PROMPT_ADDITION
 from .hooks import HookRunner, HookEvent, HookResult
@@ -338,6 +338,7 @@ You help users with coding, file operations, web research, document creation, an
             + plan_tools.get_tools()
             + lsp_tools.get_tools()
             + scheduler_tools.get_tools()
+            + subagent_tools.get_tools(self)
         )
         self.registry.register_many(all_tools)
 
