@@ -73,7 +73,7 @@ class CommandSuggester(Suggester):
             return None
         for cmd in self.COMMANDS:
             if cmd.startswith(value) and cmd != value:
-                return cmd[len(value):]
+                return cmd  # Return full text, not suffix
         return None
 
 
@@ -322,19 +322,45 @@ class MiMoTUI(App):
         import mimo_harness.display as _display_mod
 
         # Save originals for restore
+        orig_console_print = _display_mod._console.print
         orig_safe_print = _display_mod._safe_print
         orig_print_token = _display_mod.print_streaming_token
+
+        def tui_console_print(*args, **kwargs):
+            """Intercept _console.print — route ALL display output to TUI."""
+            end = kwargs.get('end', '\n')
+            sep = kwargs.get('sep', ' ')
+            text = sep.join(str(a) for a in args)
+            if not text and end == '\n':
+                return
+            full = text + end
+            # Streaming tokens use end="" — buffer them
+            if end == '':
+                with _stream_buffer_lock:
+                    _stream_buffer.append(full)
+                    if len(_stream_buffer) >= 20:
+                        flush_stream_buffer()
+            else:
+                # Non-streaming: flush pending stream, then write
+                flush_stream_buffer()
+                try:
+                    self.call_from_thread(self._end_streaming)
+                    self.call_from_thread(self.write_output, full.rstrip('\n'))
+                    self.call_from_thread(self._start_streaming)
+                except Exception:
+                    pass
 
         def tui_safe_print(*args, **kwargs):
             """Route _safe_print calls to TUI output."""
             sep = kwargs.get('sep', ' ')
+            end = kwargs.get('end', '\n')
             text = sep.join(str(a) for a in args)
+            full = text + end
             if text:
+                flush_stream_buffer()
                 try:
-                    # Flush any pending streaming tokens first
-                    flush_stream_buffer()
                     self.call_from_thread(self._end_streaming)
-                    self.call_from_thread(self.write_output, text)
+                    self.call_from_thread(self.write_output, full.rstrip('\n'))
                     self.call_from_thread(self._start_streaming)
                 except Exception:
                     pass
@@ -346,17 +372,20 @@ class MiMoTUI(App):
                 if len(_stream_buffer) >= 20:
                     flush_stream_buffer()
 
-        # Monkey-patch display functions
+        # Monkey-patch ALL output paths
+        _display_mod._console.print = tui_console_print
         _display_mod._safe_print = tui_safe_print
         _display_mod.print_streaming_token = tui_print_streaming_token
 
         self.run_worker(
-            self._agent_worker(task, _display_mod, orig_safe_print, orig_print_token),
+            self._agent_worker(task, _display_mod, orig_console_print,
+                               orig_safe_print, orig_print_token),
             exclusive=True,
             thread=True,
         )
 
-    def _agent_worker(self, task, display_mod, orig_safe_print, orig_print_token):
+    def _agent_worker(self, task, display_mod, orig_console_print,
+                      orig_safe_print, orig_print_token):
         def worker():
             try:
                 result = self.harness.run(task, self.session)
@@ -369,7 +398,8 @@ class MiMoTUI(App):
                 self.call_from_thread(self._end_streaming)
                 self.call_from_thread(self.write_output, f"[red]Error: {e}[/red]")
             finally:
-                # Restore display functions
+                # Restore ALL display functions
+                display_mod._console.print = orig_console_print
                 display_mod._safe_print = orig_safe_print
                 display_mod.print_streaming_token = orig_print_token
                 self.call_from_thread(self._on_agent_done)
