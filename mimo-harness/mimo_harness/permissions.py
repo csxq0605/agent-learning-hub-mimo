@@ -409,7 +409,13 @@ class PermissionGate:
         print(f"\n  [CONFIRM] {action_desc}")
         print(f"  Permission: {permission.value}")
         try:
-            response = _rich_input("  Allow? [y=yes, n=no, default=y] ").strip().lower()
+            from prompt_toolkit.formatted_text import FormattedText
+            prompt = FormattedText([
+                ('', '  Allow? ('),
+                ('class:prompt.user', 'Y'),
+                ('', '/n) '),
+            ])
+            response = _rich_input(prompt).strip().lower()
         except (EOFError, KeyboardInterrupt):
             self._log(permission, action_desc, "denied_no_input")
             return False
