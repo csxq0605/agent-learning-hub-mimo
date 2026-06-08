@@ -39,9 +39,8 @@ def _set_tui_app(app):
 
 
 def flush_stream_buffer():
-    """Flush accumulated streaming tokens to TUI output.
+    """Flush accumulated streaming tokens to the TUI streaming widget.
 
-    Called by the agent's display functions periodically.
     Thread-safe — can be called from the agent worker thread.
     """
     app = _get_tui_app()
@@ -53,7 +52,7 @@ def flush_stream_buffer():
         text = ''.join(_stream_buffer)
         _stream_buffer.clear()
     try:
-        app.call_from_thread(app.write_output, text, end="")
+        app.call_from_thread(app._append_streaming, text)
     except Exception:
         pass
 
@@ -81,9 +80,11 @@ class CommandSuggester(Suggester):
 class MiMoTUI(App):
     """Full-screen TUI for MiMo Harness.
 
-    Layout:
-    - Output area (RichLog): scrolling conversation history
-    - Input area: fixed at bottom, single-line with command auto-complete
+    Layout (top to bottom):
+    - RichLog (#output): scrolling conversation history
+    - Static (#streaming): current streaming text (hidden when idle)
+    - Static (#status-bar): session/token info
+    - Input (#input-area): user input, fixed at bottom
     """
 
     CSS = """
@@ -93,6 +94,15 @@ class MiMoTUI(App):
     #output {
         height: 1fr;
         padding: 0 1;
+    }
+    #streaming {
+        height: auto;
+        min-height: 0;
+        padding: 0 1;
+        display: none;
+    }
+    #streaming.visible {
+        display: block;
     }
     #status-bar {
         height: 1;
@@ -125,6 +135,7 @@ class MiMoTUI(App):
         self.scheduled_prompts = scheduled_prompts
         self.scheduled_lock = scheduled_lock
         self._agent_running = False
+        self._streaming_text = ""  # accumulated streaming text
 
     def compose(self) -> ComposeResult:
         yield RichLog(
@@ -134,6 +145,7 @@ class MiMoTUI(App):
             auto_scroll=True,
             highlight=False,
         )
+        yield Static("", id="streaming")
         yield Static("", id="status-bar")
         yield Input(
             placeholder="Type a message or /help...",
@@ -150,19 +162,40 @@ class MiMoTUI(App):
     def on_unmount(self) -> None:
         _set_tui_app(None)
 
+    # ── Streaming Support ──────────────────────────────────────
+
+    def _start_streaming(self) -> None:
+        """Show the streaming widget for real-time token display."""
+        self._streaming_text = ""
+        stream = self.query_one("#streaming", Static)
+        stream.add_class("visible")
+        stream.update("")
+
+    def _append_streaming(self, text: str) -> None:
+        """Append tokens to the streaming widget (called from worker thread)."""
+        self._streaming_text += text
+        stream = self.query_one("#streaming", Static)
+        stream.update(self._streaming_text)
+
+    def _end_streaming(self) -> None:
+        """Move streaming content to RichLog and hide streaming widget."""
+        stream = self.query_one("#streaming", Static)
+        stream.remove_class("visible")
+        if self._streaming_text.strip():
+            log = self.query_one("#output", RichLog)
+            log.write(self._streaming_text)
+        self._streaming_text = ""
+
     # ── Output API ──────────────────────────────────────────────
 
-    def write_output(self, content, end="\n") -> None:
+    def write_output(self, content) -> None:
         """Write content to the output log.
 
         Accepts Rich renderables (Panel, Table, Text, Syntax)
-        or plain strings. Thread-safe via call_from_thread.
+        or plain strings.
         """
         log = self.query_one("#output", RichLog)
-        if isinstance(content, str):
-            log.write(content, end=end)
-        else:
-            log.write(content)
+        log.write(content)
 
     # ── Banner & Status ─────────────────────────────────────────
 
@@ -192,7 +225,7 @@ class MiMoTUI(App):
         table.add_row("Session", self.session.session_id)
         log.write(table)
         log.write("")
-        self.write_output("[dim]Type /help for commands, or just start chatting.[/dim]")
+        log.write("[dim]Type /help for commands, or just start chatting.[/dim]")
         log.write("")
 
     def _update_status_bar(self) -> None:
@@ -205,8 +238,8 @@ class MiMoTUI(App):
         status = self.query_one("#status-bar", Static)
         status.update(
             f"  [dim]Session[/dim] {self.session.session_id[:8]}  "
-            f"[dim]│[/dim]  [dim]Tokens[/dim] {token_str}/{max_str}  "
-            f"[dim]│[/dim]  [dim]Msgs[/dim] {msgs}"
+            f"[dim]|[/dim]  [dim]Tokens[/dim] {token_str}/{max_str}  "
+            f"[dim]|[/dim]  [dim]Msgs[/dim] {msgs}"
         )
 
     # ── Input Handling ──────────────────────────────────────────
@@ -240,9 +273,9 @@ class MiMoTUI(App):
         # Show user input
         self.write_output(Panel(
             text,
-            title="[cyan]❯ You[/cyan]",
+            title="[cyan]> You[/cyan]",
             border_style="cyan",
-            width=min(76, 72),
+            width=72,
             padding=(0, 1),
         ))
 
@@ -260,7 +293,7 @@ class MiMoTUI(App):
         parts = text.split()
         cmd = [parts[0].lower()] + parts[1:]
 
-        # Capture output from the command handler
+        # Capture stdout output from the command handler
         buf = io.StringIO()
         try:
             with redirect_stdout(buf):
@@ -284,25 +317,30 @@ class MiMoTUI(App):
     def _run_agent(self, task: str) -> None:
         self._agent_running = True
         self._disable_input()
+        self._start_streaming()
 
-        from .display import _safe_print as _orig_safe_print, print_streaming_token as _orig_print_token
         import mimo_harness.display as _display_mod
 
-        # Save originals
+        # Save originals for restore
         orig_safe_print = _display_mod._safe_print
         orig_print_token = _display_mod.print_streaming_token
 
         def tui_safe_print(*args, **kwargs):
+            """Route _safe_print calls to TUI output."""
             sep = kwargs.get('sep', ' ')
-            end = kwargs.get('end', '\n')
             text = sep.join(str(a) for a in args)
             if text:
                 try:
+                    # Flush any pending streaming tokens first
+                    flush_stream_buffer()
+                    self.call_from_thread(self._end_streaming)
                     self.call_from_thread(self.write_output, text)
+                    self.call_from_thread(self._start_streaming)
                 except Exception:
                     pass
 
         def tui_print_streaming_token(token: str, **kwargs):
+            """Buffer streaming tokens for periodic flush."""
             with _stream_buffer_lock:
                 _stream_buffer.append(token)
                 if len(_stream_buffer) >= 20:
@@ -321,12 +359,14 @@ class MiMoTUI(App):
     def _agent_worker(self, task, display_mod, orig_safe_print, orig_print_token):
         def worker():
             try:
-                # Use thread-safe output capture
                 result = self.harness.run(task, self.session)
+                # Flush remaining streaming tokens
                 flush_stream_buffer()
                 if result:
+                    self.call_from_thread(self._end_streaming)
                     self.call_from_thread(self.write_output, result)
             except Exception as e:
+                self.call_from_thread(self._end_streaming)
                 self.call_from_thread(self.write_output, f"[red]Error: {e}[/red]")
             finally:
                 # Restore display functions
@@ -336,6 +376,7 @@ class MiMoTUI(App):
         return worker
 
     def _on_agent_done(self) -> None:
+        self._end_streaming()
         self._agent_running = False
         self._enable_input()
         self._update_status_bar()
@@ -354,7 +395,7 @@ class MiMoTUI(App):
     def action_abort(self) -> None:
         if self._agent_running:
             self.harness.graceful_abort.request()
-            self.write_output("[yellow]Abort requested — stopping current task...[/yellow]")
+            self.write_output("[yellow]Abort requested - stopping current task...[/yellow]")
         else:
             self._save_and_exit()
 
