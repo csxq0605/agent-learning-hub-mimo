@@ -424,6 +424,7 @@ def main():
     mode_str = 'plan' if args.plan else 'dry-run' if args.dry_run else 'auto-approve' if args.auto_approve else 'interactive'
     if args.output_format == "text":
         print_session_info(harness.model, mode_str, bool(MIMO_API_KEY))
+        _safe_print(f"  {_dim('Session:')}  {session.session_id}")
         print_info("Type /help for commands, or just start chatting.")
         print()
 
@@ -481,6 +482,7 @@ def main():
             except OSError:
                 pass
             scheduler.stop()
+            _safe_print(f"  {_dim('Session:')}  {session.session_id} ({len(session.messages)} messages)")
             print_info("Bye!")
             break
 
@@ -580,6 +582,7 @@ def _handle_command(cmd, harness, session, memory_store, checkpoint_manager=None
         sched = get_scheduler()
         if sched:
             sched.stop()
+        _safe_print(f"  {_dim('Session:')}  {session.session_id} ({len(session.messages)} messages)")
         print_info("Bye!")
         return "quit", session
     elif cmd[0] == "/help":
