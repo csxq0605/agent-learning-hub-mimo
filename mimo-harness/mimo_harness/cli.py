@@ -885,6 +885,37 @@ def _handle_command(cmd, harness, session, memory_store, checkpoint_manager=None
             print_success(f"Session loaded from {cmd[1]}")
         except Exception as e:
             print_error(str(e))
+    elif cmd[0] == "/effort":
+        valid = ("low", "medium", "high")
+        if len(cmd) > 1 and cmd[1] in valid:
+            harness.effort = cmd[1]
+            print_success(f"Effort: {cmd[1]}")
+        else:
+            current = harness.effort
+            print(f"\n  {_bold('Effort Level')}  {_dim(f'(current: {current})')}")
+            for level in valid:
+                marker = _green(CHECK_ICON) if level == current else "  "
+                _safe_print(f"  {marker} {_yellow(level)}")
+            print(f"\n  {_dim('Usage: /effort <low|medium|high>')}")
+        print()
+    elif cmd[0] == "/mode":
+        from .permissions import PermissionMode
+        modes = {
+            "default": PermissionMode.DEFAULT,
+            "plan": PermissionMode.PLAN,
+        }
+        current = harness.perms.mode.value
+        if len(cmd) > 1 and cmd[1] in modes:
+            harness.perms.mode = modes[cmd[1]]
+            print_success(f"Mode: {cmd[1]}")
+        else:
+            print(f"\n  {_bold('Permission Mode')}  {_dim(f'(current: {current})')}")
+            for name, mode in modes.items():
+                marker = _green(CHECK_ICON) if name == current else "  "
+                desc = "read-only" if name == "plan" else "read+write"
+                _safe_print(f"  {marker} {_yellow(name)} {_dim(f'({desc})')}")
+            print(f"\n  {_dim('Usage: /mode <default|plan>')}")
+        print()
     else:
         print_warning(f"Unknown command: {cmd[0]}. Type /help for commands.")
     return "continue", session

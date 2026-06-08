@@ -485,6 +485,8 @@ def print_help():
         ("/save <path>", "Save session to file"),
         ("/load <path>", "Load session from file"),
         ("/tools", "List available tools"),
+        ("/effort <level>", "Set effort: low/medium/high"),
+        ("/mode <mode>", "Set mode: default/plan"),
         ("/dry-run", "Toggle dry-run mode"),
         ("/auto", "Toggle auto-approve mode"),
         ("/plan", "Toggle plan mode (read-only)"),
