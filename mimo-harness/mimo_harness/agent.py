@@ -24,7 +24,7 @@ from openai import OpenAI
 from .config import MIMO_BASE_URL, MIMO_API_KEY, MIMO_MODEL, require_api_key
 from .logging_utils import TraceLogger
 from .permissions import Permission, PermissionGate, PermissionMode
-from .context import Session, compact_context, load_memory, load_memory_for_compaction, estimate_tokens, load_topic_on_demand, COMPRESS_TRIGGER_TOKENS
+from .context import Session, load_memory, estimate_tokens, load_topic_on_demand, COMPRESS_TRIGGER_TOKENS
 from .tools.registry import ToolRegistry, ToolDef
 from .tools import file_ops, shell, code_exec, web_tools, doc_tools, math_tools, interactive, monitor, notebook_tools, task_tools, plan_tools, lsp_tools, scheduler_tools, subagent_tools
 from .tools.file_ops import FileOpsState, set_file_ops_state
@@ -317,6 +317,7 @@ You help users with coding, file operations, web research, document creation, an
         self._compaction_failures = 0
         self._thrashing_detected = False
         self._thrash_warned = False
+        self._compact_warned = False
         # SubAgent management (lazy-initialized)
         self._subagent_manager = None
         self._register_tools()
@@ -779,8 +780,9 @@ You help users with coding, file operations, web research, document creation, an
 
         # Reset circuit breaker for new task
         self.circuit_breaker.reset()
-        # Reset thrashing warning flag for new task
+        # Reset warning flags for new task
         self._thrash_warned = False
+        self._compact_warned = False
         # L1: Reset thrashing counters for new task
         self._compaction_attempts = 0
         self._compaction_failures = 0
@@ -817,34 +819,13 @@ You help users with coding, file operations, web research, document creation, an
                 self._last_session = session
                 return "[LIMIT] Max steps exceeded"
 
-            # Auto-compact when context gets large (no blocking — always proceed)
+            # Warn user when context is large — let them decide to /compact
             conv_tokens = estimate_tokens(session.get_messages())
-            if conv_tokens >= COMPRESS_TRIGGER_TOKENS and not self._thrashing_detected:
+            if conv_tokens >= COMPRESS_TRIGGER_TOKENS:
                 pct = conv_tokens / self.token_budget.effective_max
-                self.logger.info(f"[COMPACT] Context at {pct:.0%}, compressing...")
-                print_warning(f"Context at {pct:.0%} — auto-compacting...")
-                compacted, self._compaction_attempts, self._compaction_failures, thrashing, did_compress = compact_context(
-                    session.get_messages(),
-                    client=client,
-                    model=self.model,
-                    estimated_tokens=conv_tokens,
-                    compaction_attempts=self._compaction_attempts,
-                    compaction_failures=self._compaction_failures,
-                )
-                if thrashing:
-                    self._thrashing_detected = True
-                    self.logger.info("[THRASHING] Compaction not reducing size — disabled")
-                if did_compress:
-                    session.messages = compacted
-                    session.compaction_count += 1
-                    memory_content = load_memory_for_compaction()
-                    if memory_content:
-                        session.add_message("user", f"## Project Memory\n{memory_content}")
-                    session.add_message("user", task)
-                    new_tokens = estimate_tokens(session.get_messages())
-                    self.logger.info(f"[COMPACT] Done → ~{new_tokens} tokens")
-                    print_info(f"Compacted to {new_tokens / self.token_budget.effective_max:.0%}")
-
+                if not self._compact_warned:
+                    print_warning(f"Context at {pct:.0%} — consider /compact to free space")
+                    self._compact_warned = True
             messages = [system_msg] + session.get_messages()
             self.token_budget.update(messages)
 
