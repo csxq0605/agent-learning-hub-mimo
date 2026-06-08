@@ -120,12 +120,12 @@ class TestLargeInput:
 
     def test_glob_many_results_capped(self, tmp_path, monkeypatch):
         monkeypatch.setattr(file_ops, "_ALLOWED_WRITE_DIR", tmp_path)
-        for i in range(200):
+        for i in range(300):
             (tmp_path / f"file_{i}.txt").touch()
         result = json.loads(file_ops.glob_files({
             "pattern": str(tmp_path / "*.txt"),
         }))
-        assert len(result["matches"]) <= 100
+        assert len(result["matches"]) <= 250
 
     def test_calculator_large_exponent(self):
         """Large exponent should not hang (DoS vector)."""

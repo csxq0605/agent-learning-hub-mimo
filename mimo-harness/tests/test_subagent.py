@@ -84,9 +84,9 @@ class TestSubAgentConfig:
         config = SubAgentConfig(task="test task")
         assert config.task == "test task"
         assert config.description == ""
-        assert config.max_steps == 10
-        assert config.max_duration == 120.0
-        assert config.max_tokens == 50_000
+        assert config.max_steps == 50
+        assert config.max_duration == 300.0
+        assert config.max_tokens == 100_000
         assert config.priority == SubAgentPriority.NORMAL
         assert config.allowed_tools is None
         assert config.isolated is True
