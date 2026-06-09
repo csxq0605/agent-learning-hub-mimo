@@ -213,6 +213,9 @@ class MiMoTUI(App):
                     self._show_permission_prompt(desc, value)
         except queue.Empty:
             pass
+        # Update status bar in real-time during agent execution
+        if self._agent_running:
+            self._update_status_bar()
 
     # ── Streaming Support ──────────────────────────────────────
 
