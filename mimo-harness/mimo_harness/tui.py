@@ -442,6 +442,7 @@ class MiMoTUI(App):
         # Install TUI override callbacks in display.py.
         # These are checked INSIDE each display function, so they work even
         # when agent.py holds direct references via `from .display import ...`
+        _display_mod._tui_write = lambda text: _output_queue.put(("write", text.rstrip('\n')))
         _display_mod._tui_stream_token = lambda token: _output_queue.put(("stream", token))
         _display_mod._tui_stream_end = lambda: None  # no-op; _on_agent_done flushes
         _display_mod._tui_print = lambda *a, **kw: _output_queue.put(
@@ -451,12 +452,19 @@ class MiMoTUI(App):
             ("write", f"╭── {model} ──") if model else ("write", "╭── Assistant ──")
         )
         _display_mod._tui_model_output_end = lambda: _output_queue.put(("write", "╰──────"))
-        _display_mod._tui_tool_call_collapsible = lambda name, args, *a, **kw: _output_queue.put(
-            ("write", f"  ⚡ {name}{self._format_tool_args(name, args)}")
-        )
-        _display_mod._tui_tool_call_result = lambda name, ok, dur, *a, **kw: _output_queue.put(
-            ("write", f"  {'✓' if ok else '✗'} {name} ({dur:.1f}s)")
-        )
+        def tui_tool_call_collapsible(name, args, call_index=0, total=1, *a, **kw):
+            prefix = f"  ⚡ [{call_index + 1}/{total}]" if total > 1 else "  ⚡"
+            _output_queue.put(("write", f"{prefix} {name}{self._format_tool_args(name, args)}"))
+        _display_mod._tui_tool_call_collapsible = tui_tool_call_collapsible
+
+        def tui_tool_call_result(name, ok, dur, preview=None, error=None, *a, **kw):
+            icon = '✓' if ok else '✗'
+            _output_queue.put(("write", f"  {icon} {name} ({dur:.1f}s)"))
+            if error:
+                _output_queue.put(("write", f"    [red]{error[:200]}[/red]"))
+            elif preview:
+                _output_queue.put(("write", f"    [dim]{preview[:200]}[/dim]"))
+        _display_mod._tui_tool_call_result = tui_tool_call_result
 
         # Suppress _console.print — it writes directly to its file object
         # (the original stdout fd), bypassing sys.stdout and all overrides.
@@ -541,6 +549,7 @@ class MiMoTUI(App):
                 # Restore _console.file (was set to StringIO to suppress direct writes)
                 display_mod._console.file = orig_console_file or sys.__stdout__
                 # Clear ALL display override callbacks
+                display_mod._tui_write = None
                 display_mod._tui_stream_token = None
                 display_mod._tui_stream_end = None
                 display_mod._tui_print = None
@@ -667,10 +676,12 @@ class MiMoTUI(App):
             except Exception:
                 pass
         # Force-restore state even if thread doesn't die cleanly
-        # Clear the output queue to avoid stale items
+        # Drain queue: preserve stream tokens, discard the rest
         while not _output_queue.empty():
             try:
-                _output_queue.get_nowait()
+                kind, data = _output_queue.get_nowait()
+                if kind == "stream":
+                    self._streaming_text += data
             except queue.Empty:
                 break
         # Clean up incomplete messages from session to prevent old task continuation
