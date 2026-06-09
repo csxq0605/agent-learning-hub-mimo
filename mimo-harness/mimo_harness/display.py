@@ -116,9 +116,20 @@ def _get_terminal_width(default: int = 80) -> int:
 # Width capped at 80 for consistent display across terminal sizes
 _console = Console(highlight=False, force_terminal=True, width=_get_terminal_width())
 
-# TUI output callback — set by tui.py when full-screen mode is active.
-# When set, _safe_print routes output here instead of to the console.
+# TUI output callbacks — set by tui.py when full-screen mode is active.
+# When set, output functions route through these instead of to the console.
+# This is necessary because agent.py uses direct imports (from .display import
+# print_streaming_token) which create local references that bypass module-level
+# attribute patching. These callbacks are checked INSIDE each function, so
+# they work regardless of how the function was imported.
 _tui_write = None  # Callable[[str], None] or None
+_tui_stream_token = None  # Callable[[str], None] or None
+_tui_stream_end = None  # Callable[[], None] or None
+_tui_model_output_start = None  # Callable[[str], None] or None
+_tui_model_output_end = None  # Callable[[], None] or None
+_tui_tool_call_collapsible = None  # Callable[..., None] or None
+_tui_tool_call_result = None  # Callable[..., None] or None
+_tui_print = None  # Callable[..., None] or None
 
 
 def _safe_print(*args, **kwargs):
@@ -334,6 +345,9 @@ def print_step_header(step_info: StepInfo):
 
 def print_thinking_indicator():
     """Print a thinking indicator before model response."""
+    if _tui_print is not None:
+        _tui_print(f"  {THINK_ICON} Thinking...")
+        return
     _console.print(f"  [dim]{THINK_ICON} Thinking...[/dim]", highlight=False)
 
 
@@ -357,6 +371,9 @@ def print_tool_call_result(
     error: Optional[str] = None,
 ):
     """Print tool call result."""
+    if _tui_tool_call_result is not None:
+        _tui_tool_call_result(tool_name, success, duration, result_preview, error)
+        return
     if success:
         status = f"[green]{CHECK_ICON}[/green]"
         time_str = f"[dim]({duration:.1f}s)[/dim]"
@@ -378,26 +395,41 @@ def print_tool_call_result(
 
 def print_streaming_token(token: str):
     """Print a single streaming token (called from streaming callback)."""
+    if _tui_stream_token is not None:
+        _tui_stream_token(token)
+        return
     _console.print(token, end="", highlight=False)
 
 
 def print_streaming_end():
     """Print newline after streaming completes."""
+    if _tui_stream_end is not None:
+        _tui_stream_end()
+        return
     _console.print()
 
 
 def print_error(message: str):
     """Print an error message."""
+    if _tui_print is not None:
+        _tui_print(f"\n  {CROSS_ICON} {message}\n")
+        return
     _console.print(f"\n  [red]{CROSS_ICON}[/red] [red]{message}[/red]\n", highlight=False)
 
 
 def print_warning(message: str):
     """Print a warning message."""
+    if _tui_print is not None:
+        _tui_print(f"  {WARN_ICON} {message}")
+        return
     _console.print(f"  [yellow]{WARN_ICON}[/yellow] {message}", highlight=False)
 
 
 def print_info(message: str):
     """Print an info message."""
+    if _tui_print is not None:
+        _tui_print(f"  {INFO_ICON} {message}")
+        return
     _console.print(f"  [dim]{INFO_ICON}[/dim] {message}", highlight=False)
 
 
@@ -685,6 +717,9 @@ _OUTPUT_BOX_WIDTH = min(_get_terminal_width() - 4, 72)
 
 def print_model_output_start(model: str = ""):
     """Print the start of a model output container."""
+    if _tui_model_output_start is not None:
+        _tui_model_output_start(model)
+        return
     title = f"{ASSISTANT_ICON} {model}" if model else f"{ASSISTANT_ICON} Assistant"
     title_len = len(title) + 2  # spaces around title
     # Top border: left corner + dashes + title + dashes + right corner
@@ -696,6 +731,9 @@ def print_model_output_start(model: str = ""):
 
 def print_model_output_end():
     """Print the end of a model output container."""
+    if _tui_model_output_end is not None:
+        _tui_model_output_end()
+        return
     _console.print(f"  [blue]{BUBBLE_V}[/blue]")
     _console.print(f"  [blue]{BUBBLE_BL}{BUBBLE_H * (_OUTPUT_BOX_WIDTH - 2)}{BUBBLE_BR}[/blue]")
     _console.print()
@@ -731,6 +769,9 @@ def print_tool_call_collapsible(
     duration: Optional[float] = None,
 ):
     """Print a tool call with collapsible details."""
+    if _tui_tool_call_collapsible is not None:
+        _tui_tool_call_collapsible(tool_name, args, call_index, total, collapsed, result_preview, success, duration)
+        return
     args_str = _format_tool_args(tool_name, args)
     icon = COLLAPSE_ICON if collapsed else EXPAND_ICON
 

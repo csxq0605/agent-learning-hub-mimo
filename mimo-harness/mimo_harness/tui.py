@@ -407,48 +407,27 @@ class MiMoTUI(App):
         import mimo_harness.display as _display_mod
 
         # Save originals for restore
-        orig_console_print = _display_mod._console.print
-        orig_safe_print = _display_mod._safe_print
-        orig_print_token = _display_mod.print_streaming_token
         orig_stdout = sys.stdout
         orig_stderr = sys.stderr
 
-        def tui_console_print(*args, **kwargs):
-            """Intercept _console.print — route ALL display output to queue."""
-            end = kwargs.get('end', '\n')
-            sep = kwargs.get('sep', ' ')
-            text = sep.join(str(a) for a in args)
-            if not text and end == '\n':
-                return
-            full = text + end
-            # Streaming tokens use end="" — buffer in queue
-            if end == '':
-                _output_queue.put(("stream", full))
-            else:
-                # Non-streaming: end current stream, write content, restart stream
-                _output_queue.put(("end_stream", None))
-                _output_queue.put(("write", full.rstrip('\n')))
-                _output_queue.put(("start_stream", None))
-
-        def tui_safe_print(*args, **kwargs):
-            """Route _safe_print calls to queue."""
-            sep = kwargs.get('sep', ' ')
-            end = kwargs.get('end', '\n')
-            text = sep.join(str(a) for a in args)
-            full = text + end
-            if text:
-                _output_queue.put(("end_stream", None))
-                _output_queue.put(("write", full.rstrip('\n')))
-                _output_queue.put(("start_stream", None))
-
-        def tui_print_streaming_token(token: str, **kwargs):
-            """Route streaming tokens to queue."""
-            _output_queue.put(("stream", token))
-
-        # Monkey-patch ALL output paths
-        _display_mod._console.print = tui_console_print
-        _display_mod._safe_print = tui_safe_print
-        _display_mod.print_streaming_token = tui_print_streaming_token
+        # Install TUI override callbacks in display.py.
+        # These are checked INSIDE each display function, so they work even
+        # when agent.py holds direct references via `from .display import ...`
+        _display_mod._tui_stream_token = lambda token: _output_queue.put(("stream", token))
+        _display_mod._tui_stream_end = lambda: None  # no-op; _on_agent_done flushes
+        _display_mod._tui_print = lambda *a, **kw: _output_queue.put(
+            ("write", kw.get('sep', ' ').join(str(x) for x in a).rstrip('\n'))
+        ) if a else None
+        _display_mod._tui_model_output_start = lambda model: _output_queue.put(
+            ("write", f"╭── {model} ──") if model else ("write", "╭── Assistant ──")
+        )
+        _display_mod._tui_model_output_end = lambda: _output_queue.put(("write", "╰──────"))
+        _display_mod._tui_tool_call_collapsible = lambda name, args, *a, **kw: _output_queue.put(
+            ("write", f"  ⚡ {name}")
+        )
+        _display_mod._tui_tool_call_result = lambda name, ok, dur, *a, **kw: _output_queue.put(
+            ("write", f"  {'✓' if ok else '✗'} {name} ({dur:.1f}s)")
+        )
 
         # Monkey-patch permission input to route through TUI
         import mimo_harness.permissions as _perm_mod
@@ -456,16 +435,14 @@ class MiMoTUI(App):
         _perm_mod._tui_permission_request = self._queue_permission_request
 
         self.run_worker(
-            self._agent_worker(task, _display_mod, orig_console_print,
-                               orig_safe_print, orig_print_token,
+            self._agent_worker(task, _display_mod,
                                _perm_mod, orig_perm_request,
                                orig_stdout, orig_stderr),
             exclusive=True,
             thread=True,
         )
 
-    def _agent_worker(self, task, display_mod, orig_console_print,
-                      orig_safe_print, orig_print_token,
+    def _agent_worker(self, task, display_mod,
                       perm_mod=None, orig_perm_request=None,
                       orig_stdout=None, orig_stderr=None):
         def worker():
@@ -489,9 +466,8 @@ class MiMoTUI(App):
             sys.stderr = proxy
 
             try:
-                # harness.run() outputs through monkey-patched _console.print
-                # and print_streaming_token, which route to _output_queue.
-                # Do NOT write result again here — that causes duplicate output.
+                # harness.run() outputs through display.py override callbacks
+                # which route to _output_queue. Do NOT write result again here.
                 self.harness.run(task, self.session)
             except Exception as e:
                 _output_queue.put(("end_stream", None))
@@ -500,10 +476,14 @@ class MiMoTUI(App):
                 # Restore stdout/stderr
                 sys.stdout = orig_stdout or sys.__stdout__
                 sys.stderr = orig_stderr or sys.__stderr__
-                # Restore ALL display functions
-                display_mod._console.print = orig_console_print
-                display_mod._safe_print = orig_safe_print
-                display_mod.print_streaming_token = orig_print_token
+                # Clear ALL display override callbacks
+                display_mod._tui_stream_token = None
+                display_mod._tui_stream_end = None
+                display_mod._tui_print = None
+                display_mod._tui_model_output_start = None
+                display_mod._tui_model_output_end = None
+                display_mod._tui_tool_call_collapsible = None
+                display_mod._tui_tool_call_result = None
                 # Restore permission callback
                 if perm_mod is not None:
                     perm_mod._tui_permission_request = orig_perm_request
@@ -632,10 +612,17 @@ class MiMoTUI(App):
         # Clean up incomplete messages from session to prevent old task continuation
         self._cleanup_interrupted_session()
         self._on_agent_done()
-        # Restore display functions
+        # Restore display override callbacks
         import mimo_harness.display as _display_mod
         import mimo_harness.permissions as _perm_mod
         _display_mod._tui_write = None
+        _display_mod._tui_stream_token = None
+        _display_mod._tui_stream_end = None
+        _display_mod._tui_print = None
+        _display_mod._tui_model_output_start = None
+        _display_mod._tui_model_output_end = None
+        _display_mod._tui_tool_call_collapsible = None
+        _display_mod._tui_tool_call_result = None
         _perm_mod._tui_permission_request = None
         self.write_output("[yellow]Agent killed. Input re-enabled.[/yellow]")
 
