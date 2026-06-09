@@ -187,25 +187,35 @@ class MiMoTUI(App):
 
         Called every 50ms by Textual timer on the main thread.
         This is the ONLY place widgets are touched from.
+
+        Streaming tokens are written directly to RichLog with end=""
+        so they append to the current entry in real-time (no separate
+        #streaming widget). This matches the behavior described in the
+        TUI streaming report: content stays in RichLog permanently.
         """
         try:
             for _ in range(100):  # max 100 items per tick to avoid blocking UI
                 kind, data = _output_queue.get_nowait()
                 if kind == "stream":
-                    # Append streaming tokens to the streaming widget
+                    # Append streaming tokens directly to RichLog
+                    log = self.query_one("#output", RichLog)
+                    log.write(data, end="")
                     self._streaming_text += data
-                    stream = self.query_one("#streaming", Static)
-                    stream.update(self._streaming_text)
                 elif kind == "write":
-                    # Write completed content to RichLog
-                    self._end_streaming_internal()
+                    # Finalize current stream entry, then write content
+                    if self._streaming_text:
+                        log = self.query_one("#output", RichLog)
+                        log.write("")  # newline to close the stream entry
+                        self._streaming_text = ""
                     log = self.query_one("#output", RichLog)
                     log.write(data)
-                    self._start_streaming_internal()
                 elif kind == "start_stream":
-                    self._start_streaming_internal()
+                    self._streaming_text = ""
                 elif kind == "end_stream":
-                    self._end_streaming_internal()
+                    if self._streaming_text:
+                        log = self.query_one("#output", RichLog)
+                        log.write("")  # newline to close the stream entry
+                        self._streaming_text = ""
                 elif kind == "done":
                     self._on_agent_done()
                 elif kind == "permission":
@@ -218,22 +228,21 @@ class MiMoTUI(App):
             self._update_status_bar()
 
     # ── Streaming Support ──────────────────────────────────────
+    # Streaming tokens are now written directly to RichLog with end=""
+    # so they append in real-time. No separate #streaming widget needed.
+    # _start_streaming_internal and _end_streaming_internal are kept as
+    # no-ops for compatibility with code that calls them.
 
     def _start_streaming_internal(self) -> None:
-        """Show the streaming widget for real-time token display (main thread only)."""
+        """No-op: streaming tokens go directly to RichLog."""
         self._streaming_text = ""
-        stream = self.query_one("#streaming", Static)
-        stream.add_class("visible")
-        stream.update("")
 
     def _end_streaming_internal(self) -> None:
-        """Move streaming content to RichLog and hide streaming widget (main thread only)."""
-        stream = self.query_one("#streaming", Static)
-        stream.remove_class("visible")
-        if self._streaming_text.strip():
+        """Flush any remaining stream content to RichLog."""
+        if self._streaming_text:
             log = self.query_one("#output", RichLog)
-            log.write(self._streaming_text)
-        self._streaming_text = ""
+            log.write("")  # newline to close stream entry
+            self._streaming_text = ""
 
     # ── Output API ──────────────────────────────────────────────
 
