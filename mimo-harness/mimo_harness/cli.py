@@ -598,6 +598,7 @@ def _handle_command(cmd, harness, session, memory_store, checkpoint_manager=None
     Returns (action, session) where action is 'quit' or 'continue'.
     The session may be replaced by /load.
     """
+    from .skills import SkillManager
     if cmd[0] in ("/quit", "/exit", "/q"):
         try:
             session.save_meta_to_jsonl()
@@ -1048,6 +1049,7 @@ def _handle_command(cmd, harness, session, memory_store, checkpoint_manager=None
                 print_info("Install: /skills install <github-url>")
             print()
     elif cmd[0].startswith("/") and cmd[0][1:] in (getattr(harness, '_skill_manager', SkillManager()).skills if hasattr(harness, '_skill_manager') else {}):
+        # Note: SkillManager is imported in the /skills branch above
         # Invoke a skill
         skill_name = cmd[0][1:]
         arguments = " ".join(cmd[1:]) if len(cmd) > 1 else ""
