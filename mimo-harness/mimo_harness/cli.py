@@ -1214,6 +1214,116 @@ def _handle_command(cmd, harness, session, memory_store, checkpoint_manager=None
                 print_info("No MCP servers configured. Create .mimo/mcp.json to add servers.")
                 print_info("Install: /mcp install <package-or-repo>")
         print()
+    elif cmd[0] == "/agents":
+        # Agents management command
+        from .agents import AgentManager
+        if not hasattr(harness, '_agent_manager'):
+            harness._agent_manager = AgentManager()
+
+        if len(cmd) > 1:
+            subcmd = cmd[1]
+            if subcmd == "list":
+                # List all agents
+                agents = harness._agent_manager.list_agents()
+                if agents:
+                    print(f"\n  {_bold(f'Available Agents ({len(agents)})')}")
+                    _safe_print(f"  {_dim(BUBBLE_H * 40)}")
+                    for agent in agents:
+                        source_tag = _dim(f"[{agent['source']}]")
+                        _safe_print(f"  {_yellow(agent['name'])} {source_tag}")
+                        if agent['description']:
+                            _safe_print(f"    {_dim(agent['description'][:60])}")
+                        if agent['tools']:
+                            _safe_print(f"    {_dim('Tools:')} {', '.join(agent['tools'][:5])}")
+                else:
+                    print_info("No agents found. Create agents in ~/.mimo/agents/ or .mimo/agents/")
+                print()
+            elif subcmd == "create":
+                # Create new agent
+                if len(cmd) < 3:
+                    print_warning("Usage: /agents create <name> [description]")
+                    print_info("Example: /agents create code-reviewer 'Reviews code for quality'")
+                    print()
+                    return "continue", session
+                name = cmd[2]
+                description = " ".join(cmd[3:]) if len(cmd) > 3 else f"Custom agent: {name}"
+                print_info(f"Creating agent '{name}'...")
+                print_info("Enter agent system prompt (empty line to finish):")
+                lines = []
+                while True:
+                    try:
+                        line = _rich_input("  > ")
+                        if not line:
+                            break
+                        lines.append(line)
+                    except (EOFError, KeyboardInterrupt):
+                        break
+                prompt = "\n".join(lines) if lines else f"You are {name}."
+                filepath = harness._agent_manager.create_agent(
+                    name=name,
+                    description=description,
+                    prompt=prompt,
+                )
+                print_success(f"Agent '{name}' created at {filepath}")
+                print()
+            elif subcmd == "delete":
+                # Delete agent
+                if len(cmd) < 3:
+                    print_warning("Usage: /agents delete <name>")
+                    print()
+                    return "continue", session
+                name = cmd[2]
+                if harness._agent_manager.delete_agent(name):
+                    print_success(f"Agent '{name}' deleted")
+                else:
+                    print_error(f"Agent '{name}' not found")
+                print()
+            elif subcmd == "show":
+                # Show agent details
+                if len(cmd) < 3:
+                    print_warning("Usage: /agents show <name>")
+                    print()
+                    return "continue", session
+                name = cmd[2]
+                agent = harness._agent_manager.get_agent(name)
+                if agent:
+                    print(f"\n  {_bold(f'Agent: {agent.name}')}")
+                    _safe_print(f"  {_dim(BUBBLE_H * 40)}")
+                    _safe_print(f"  {_dim('Description:')} {agent.config.description}")
+                    _safe_print(f"  {_dim('Source:')} {agent.source_type}")
+                    _safe_print(f"  {_dim('Model:')} {agent.config.model}")
+                    _safe_print(f"  {_dim('Permission:')} {agent.config.permission_mode}")
+                    if agent.config.tools:
+                        _safe_print(f"  {_dim('Tools:')} {', '.join(agent.config.tools)}")
+                    if agent.config.prompt:
+                        _safe_print(f"\n  {_dim('System Prompt:')}")
+                        for line in agent.config.prompt.split('\n')[:10]:
+                            _safe_print(f"    {line}")
+                        if agent.config.prompt.count('\n') > 10:
+                            _safe_print(f"    {_dim('...')}")
+                else:
+                    print_error(f"Agent '{name}' not found")
+                print()
+            else:
+                print_warning(f"Unknown agents subcommand: {subcmd}")
+                print_info("Available: list, create, delete, show")
+                print()
+        else:
+            # Show agent list by default
+            agents = harness._agent_manager.list_agents()
+            if agents:
+                print(f"\n  {_bold(f'Available Agents ({len(agents)})')}")
+                _safe_print(f"  {_dim(BUBBLE_H * 40)}")
+                for agent in agents:
+                    source_tag = _dim(f"[{agent['source']}]")
+                    _safe_print(f"  {_yellow(agent['name'])} {source_tag}")
+                    if agent['description']:
+                        _safe_print(f"    {_dim(agent['description'][:60])}")
+                print(f"\n  {_dim('Commands: /agents list|create|delete|show [name]')}")
+            else:
+                print_info("No agents found. Create agents in ~/.mimo/agents/ or .mimo/agents/")
+                print_info("Create: /agents create <name> [description]")
+            print()
     else:
         print_warning(f"Unknown command: {cmd[0]}. Type /help for commands.")
     return "continue", session

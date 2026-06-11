@@ -19,6 +19,7 @@ _SLASH_COMMANDS = [
     "/compact", "/context", "/init", "/rewind", "/fork",
     "/subagents", "/subagent", "/parallel", "/pipeline",
     "/effort", "/mode",
+    "/agents", "/agents list", "/agents create", "/agents show", "/agents delete",
     "/skills", "/skills install",
     "/mcp", "/mcp install", "/mcp connect", "/mcp disconnect", "/mcp refresh",
 ]
