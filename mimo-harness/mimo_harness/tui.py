@@ -123,6 +123,7 @@ class MiMoTUI(App):
         "/mode", "/save", "/load", "/fork", "/rewind", "/init",
         "/subagents", "/subagent", "/parallel", "/pipeline",
         "/agents", "/agents list", "/agents create", "/agents show", "/agents delete",
+        "/tasks", "/tasks list", "/tasks show", "/tasks cancel", "/tasks cleanup",
         "/skills", "/skills install",
         "/mcp", "/mcp install", "/mcp connect", "/mcp disconnect", "/mcp refresh",
     ]

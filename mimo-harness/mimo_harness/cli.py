@@ -31,7 +31,7 @@ from .display import (
     print_banner as display_banner, print_session_info, print_help as display_help,
     print_error, print_warning, print_info, print_success,
     print_token_usage, print_context_breakdown, print_session_stats,
-    print_tool_list, USE_COLOR, _format_tokens, _dim, _bold, _yellow, _green, _red, _cyan,
+    print_tool_list, USE_COLOR, _format_tokens, _dim, _bold, _yellow, _green, _red, _blue, _cyan,
     _safe_print, get_status_bar,
     BUBBLE_H, BULLET_ICON, ARROW_ICON, CHECK_ICON, CROSS_ICON,
 )
@@ -1323,6 +1323,103 @@ def _handle_command(cmd, harness, session, memory_store, checkpoint_manager=None
             else:
                 print_info("No agents found. Create agents in ~/.mimo/agents/ or .mimo/agents/")
                 print_info("Create: /agents create <name> [description]")
+            print()
+    elif cmd[0] == "/tasks":
+        # Background tasks management
+        from .background_tasks import get_task_manager
+        task_manager = get_task_manager()
+
+        if len(cmd) > 1:
+            subcmd = cmd[1]
+            if subcmd == "list":
+                # List all tasks
+                tasks = task_manager.list_tasks()
+                if tasks:
+                    print(f"\n  {_bold(f'Background Tasks ({len(tasks)})')}")
+                    _safe_print(f"  {_dim(BUBBLE_H * 40)}")
+                    for task in tasks:
+                        state_icon = {
+                            'pending': _yellow('⏳'),
+                            'running': _blue('🔄'),
+                            'completed': _green('✓'),
+                            'failed': _red('✗'),
+                            'cancelled': _dim('⊘'),
+                        }.get(task['state'], '?')
+                        duration = f"{task['duration']:.1f}s" if task['duration'] > 0 else ""
+                        _safe_print(f"  {state_icon} {_yellow(task['id'])} {task['description'][:40]}")
+                        _safe_print(f"    {_dim(task['state'])} {duration}")
+                else:
+                    print_info("No background tasks")
+                print()
+            elif subcmd == "show":
+                # Show task details
+                if len(cmd) < 3:
+                    print_warning("Usage: /tasks show <task-id>")
+                    print()
+                    return "continue", session
+                task_id = cmd[2]
+                task = task_manager.get_task(task_id)
+                if task:
+                    print(f"\n  {_bold(f'Task: {task.task_id}')}")
+                    _safe_print(f"  {_dim(BUBBLE_H * 40)}")
+                    _safe_print(f"  {_dim('Description:')} {task.description}")
+                    _safe_print(f"  {_dim('State:')} {task.state.value}")
+                    if task.start_time > 0:
+                        duration = task.end_time - task.start_time if task.end_time > 0 else time.time() - task.start_time
+                        _safe_print(f"  {_dim('Duration:')} {duration:.1f}s")
+                    if task.output:
+                        _safe_print(f"\n  {_dim('Output:')}")
+                        for line in task.output.split('\n')[:20]:
+                            _safe_print(f"    {line}")
+                        if task.output.count('\n') > 20:
+                            _safe_print(f"    {_dim('...')}")
+                    if task.error:
+                        _safe_print(f"\n  {_dim('Error:')}")
+                        _safe_print(f"    {_red(task.error)}")
+                else:
+                    print_error(f"Task '{task_id}' not found")
+                print()
+            elif subcmd == "cancel":
+                # Cancel task
+                if len(cmd) < 3:
+                    print_warning("Usage: /tasks cancel <task-id>")
+                    print()
+                    return "continue", session
+                task_id = cmd[2]
+                if task_manager.cancel_task(task_id):
+                    print_success(f"Task '{task_id}' cancelled")
+                else:
+                    print_error(f"Task '{task_id}' not found or not running")
+                print()
+            elif subcmd == "cleanup":
+                # Cleanup completed tasks
+                task_manager.cleanup_completed()
+                print_success("Completed tasks cleaned up")
+                print()
+            else:
+                print_warning(f"Unknown tasks subcommand: {subcmd}")
+                print_info("Available: list, show, cancel, cleanup")
+                print()
+        else:
+            # Show task list by default
+            tasks = task_manager.list_tasks()
+            if tasks:
+                print(f"\n  {_bold(f'Background Tasks ({len(tasks)})')}")
+                _safe_print(f"  {_dim(BUBBLE_H * 40)}")
+                for task in tasks:
+                    state_icon = {
+                        'pending': _yellow('⏳'),
+                        'running': _blue('🔄'),
+                        'completed': _green('✓'),
+                        'failed': _red('✗'),
+                        'cancelled': _dim('⊘'),
+                    }.get(task['state'], '?')
+                    duration = f"{task['duration']:.1f}s" if task['duration'] > 0 else ""
+                    _safe_print(f"  {state_icon} {_yellow(task['id'])} {task['description'][:40]}")
+                print(f"\n  {_dim('Commands: /tasks list|show|cancel|cleanup [task-id]')}")
+            else:
+                print_info("No background tasks")
+                print_info("Run tasks in background by appending & to commands")
             print()
     else:
         print_warning(f"Unknown command: {cmd[0]}. Type /help for commands.")

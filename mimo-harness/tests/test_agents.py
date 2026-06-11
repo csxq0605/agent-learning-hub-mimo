@@ -166,7 +166,7 @@ User prompt.""")
 class TestAgentManager:
     """Test agent management."""
 
-    def test_list_agents(self, tmp_path):
+    def test_list_agents(self, tmp_path, monkeypatch):
         """Test listing agents."""
         agents_dir = tmp_path / '.mimo' / 'agents'
         agents_dir.mkdir(parents=True)
@@ -180,6 +180,10 @@ name: agent2
 description: Second agent
 ---
 Prompt 2.""")
+
+        # Isolate from user-level agents
+        monkeypatch.setenv('USERPROFILE', str(tmp_path / 'empty_user'))
+        monkeypatch.setenv('HOME', str(tmp_path / 'empty_user'))
 
         old_cwd = os.getcwd()
         os.chdir(tmp_path)
