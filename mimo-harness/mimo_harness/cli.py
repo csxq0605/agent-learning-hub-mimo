@@ -576,6 +576,14 @@ def main():
                 print_error(f"[error: {e}]")
             continue
 
+        # Process @ file references
+        from .file_references import FileReferenceResolver
+        if FileReferenceResolver.has_references(user_input):
+            resolved_input = FileReferenceResolver.resolve_and_format(user_input, os.getcwd())
+            if resolved_input != user_input:
+                print_info("Resolving @ file references...")
+                user_input = resolved_input
+
         # Run agent with graceful interrupt support
         try:
             # Update status bar to executing

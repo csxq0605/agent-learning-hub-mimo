@@ -1,0 +1,200 @@
+"""File References system - @ file and folder references.
+
+Implements Claude Code-style file references:
+- @filename syntax for referencing files
+- @folder/ syntax for referencing directories
+- Wildcard support (e.g., @*.py)
+- Automatic content injection into context
+"""
+
+import os
+import re
+import glob
+from pathlib import Path
+from typing import List, Tuple, Optional
+
+
+class FileReferenceParser:
+    """Parse @ file references in user input."""
+
+    # Pattern to match @ references
+    # Matches: @filename, @folder/, @*.ext, @path/to/file
+    REFERENCE_PATTERN = re.compile(
+        r'@(?:'
+        r'(?:[^\s*?\[\]]+)'  # Normal path
+        r'|(?:[^\s*?\[\]]*[*?][^\s*?\[\]]*)'  # Wildcard path
+        r')'
+    )
+
+    @classmethod
+    def parse_references(cls, text: str) -> List[Tuple[str, int, int]]:
+        """Parse @ references from text.
+
+        Returns:
+            List of (reference_path, start_pos, end_pos) tuples
+        """
+        references = []
+        for match in cls.REFERENCE_PATTERN.finditer(text):
+            ref_path = match.group(0)[1:]  # Remove @ prefix
+            references.append((ref_path, match.start(), match.end()))
+        return references
+
+    @classmethod
+    def resolve_reference(cls, ref_path: str, base_dir: str = '.') -> List[str]:
+        """Resolve a file reference to actual file paths.
+
+        Args:
+            ref_path: The reference path (without @)
+            base_dir: Base directory for relative paths
+
+        Returns:
+            List of resolved file paths
+        """
+        # Handle absolute paths
+        if os.path.isabs(ref_path):
+            if os.path.exists(ref_path):
+                return [ref_path]
+            # Try glob for wildcards
+            matches = glob.glob(ref_path)
+            return [m for m in matches if os.path.isfile(m)]
+
+        # Handle relative paths
+        full_path = os.path.join(base_dir, ref_path)
+
+        # Check if it's a directory
+        if os.path.isdir(full_path):
+            # Return directory listing instead of content
+            return [full_path]
+
+        # Check if it's a file
+        if os.path.isfile(full_path):
+            return [full_path]
+
+        # Try glob for wildcards
+        matches = glob.glob(full_path, recursive=True)
+        if matches:
+            return [m for m in matches if os.path.isfile(m)]
+
+        return []
+
+    @classmethod
+    def read_file_content(cls, filepath: str, max_lines: int = 1000) -> Optional[str]:
+        """Read file content with size limits.
+
+        Args:
+            filepath: Path to file
+            max_lines: Maximum lines to read
+
+        Returns:
+            File content or None if error
+        """
+        try:
+            with open(filepath, 'r', encoding='utf-8', errors='replace') as f:
+                lines = []
+                for i, line in enumerate(f):
+                    if i >= max_lines:
+                        lines.append(f"\n... (truncated at {max_lines} lines)")
+                        break
+                    lines.append(line)
+                return ''.join(lines)
+        except Exception:
+            return None
+
+    @classmethod
+    def read_directory_structure(cls, dirpath: str, max_depth: int = 3) -> Optional[str]:
+        """Read directory structure as a tree.
+
+        Args:
+            dirpath: Path to directory
+            max_depth: Maximum depth to traverse
+
+        Returns:
+            Directory tree string or None if error
+        """
+        try:
+            lines = []
+            for root, dirs, files in os.walk(dirpath):
+                # Calculate depth
+                depth = root.replace(dirpath, '').count(os.sep)
+                if depth >= max_depth:
+                    dirs.clear()
+                    continue
+
+                # Add directory
+                indent = '  ' * depth
+                dir_name = os.path.basename(root) or root
+                lines.append(f"{indent}{dir_name}/")
+
+                # Add files
+                for file in sorted(files):
+                    file_indent = '  ' * (depth + 1)
+                    lines.append(f"{file_indent}{file}")
+
+            return '\n'.join(lines)
+        except Exception:
+            return None
+
+
+class FileReferenceResolver:
+    """Resolve and inject file references into context."""
+
+    @classmethod
+    def resolve_and_format(cls, text: str, base_dir: str = '.') -> str:
+        """Resolve @ references and format them for context injection.
+
+        Args:
+            text: Input text with @ references
+            base_dir: Base directory for relative paths
+
+        Returns:
+            Text with references replaced by file contents
+        """
+        references = FileReferenceParser.parse_references(text)
+        if not references:
+            return text
+
+        # Process references in reverse order to maintain positions
+        result = text
+        for ref_path, start, end in reversed(references):
+            resolved_paths = FileReferenceParser.resolve_reference(ref_path, base_dir)
+
+            if not resolved_paths:
+                # Reference not found - add note
+                replacement = f"[File not found: @{ref_path}]"
+            elif len(resolved_paths) == 1:
+                path = resolved_paths[0]
+                if os.path.isdir(path):
+                    # Directory reference - show structure
+                    structure = FileReferenceParser.read_directory_structure(path)
+                    if structure:
+                        replacement = f"[Directory: @{ref_path}]\n{structure}"
+                    else:
+                        replacement = f"[Empty directory: @{ref_path}]"
+                else:
+                    # File reference - show content
+                    content = FileReferenceParser.read_file_content(path)
+                    if content:
+                        filename = os.path.basename(path)
+                        replacement = f"[File: @{ref_path}]\n```{filename}\n{content}\n```"
+                    else:
+                        replacement = f"[Cannot read: @{ref_path}]"
+            else:
+                # Multiple files (wildcard)
+                parts = []
+                for path in resolved_paths[:10]:  # Limit to 10 files
+                    content = FileReferenceParser.read_file_content(path)
+                    if content:
+                        filename = os.path.basename(path)
+                        parts.append(f"[File: {filename}]\n```{filename}\n{content}\n```")
+                if len(resolved_paths) > 10:
+                    parts.append(f"... and {len(resolved_paths) - 10} more files")
+                replacement = '\n\n'.join(parts)
+
+            result = result[:start] + replacement + result[end:]
+
+        return result
+
+    @classmethod
+    def has_references(cls, text: str) -> bool:
+        """Check if text contains @ references."""
+        return bool(FileReferenceParser.REFERENCE_PATTERN.search(text))
