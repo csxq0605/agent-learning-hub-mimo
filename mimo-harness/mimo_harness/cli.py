@@ -1120,12 +1120,15 @@ def _handle_command(cmd, harness, session, memory_store, checkpoint_manager=None
                         server_name = package.split('/')[-1]
                         install_dir = os.path.join(os.path.expanduser('~'), '.mimo', 'mcp-servers', server_name)
                         os.makedirs(install_dir, exist_ok=True)
-                        with tempfile.NamedTemporaryFile(suffix='.zip', delete=False) as tmp:
-                            subprocess.run(['curl', '-L', '-o', tmp.name, download_url],
+                        tmp_path = os.path.join(tempfile.gettempdir(), f'{server_name}.zip')
+                        try:
+                            subprocess.run(['curl', '-L', '-o', tmp_path, download_url],
                                            capture_output=True, check=True)
-                            with zipfile.ZipFile(tmp.name, 'r') as zf:
+                            with zipfile.ZipFile(tmp_path, 'r') as zf:
                                 zf.extractall(install_dir)
-                            os.unlink(tmp.name)
+                        finally:
+                            if os.path.exists(tmp_path):
+                                os.unlink(tmp_path)
                         # Find executable
                         exe_path = None
                         for f in os.listdir(install_dir):
