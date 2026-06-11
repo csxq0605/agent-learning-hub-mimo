@@ -986,26 +986,67 @@ def _handle_command(cmd, harness, session, memory_store, checkpoint_manager=None
             print(f"\n  {_dim('Usage: /mode <default|plan>')}")
         print()
     elif cmd[0] == "/skills":
-        # List available skills
         from .skills import SkillManager
-        skill_manager = SkillManager()
-        skills = skill_manager.list_skills()
-        if skills:
-            print(f"\n  {_bold(f'Available Skills ({len(skills)})')}")
-            _safe_print(f"  {_dim(BUBBLE_H * 40)}")
-            for skill in skills:
-                invocable = ""
-                if not skill['user_invocable']:
-                    invocable = _dim(" (model-only)")
-                elif skill['disable_model_invocation']:
-                    invocable = _dim(" (user-only)")
-                _safe_print(f"  {_yellow('/')}{skill['name']}{invocable}")
-                if skill['description']:
-                    _safe_print(f"    {_dim(skill['description'][:60])}")
-            print(f"\n  {_dim('Usage: /<skill-name> [arguments]')}")
+        if len(cmd) > 1 and cmd[1] == "install":
+            # Install skill from URL
+            if len(cmd) < 3:
+                print_warning("Usage: /skills install <github-url>")
+                print_info("Example: /skills install https://github.com/blader/humanizer")
+                print()
+                return "continue", session
+            url = cmd[2]
+            try:
+                import tempfile
+                import subprocess
+                import shutil
+                # Extract repo name from URL
+                repo_name = url.rstrip('/').split('/')[-1].replace('.git', '')
+                skill_dir = os.path.join(os.path.expanduser('~'), '.mimo', 'skills', repo_name)
+                os.makedirs(skill_dir, exist_ok=True)
+                # Clone to temp dir
+                with tempfile.TemporaryDirectory() as tmpdir:
+                    print_info(f"Cloning {url}...")
+                    subprocess.run(['git', 'clone', '--depth', '1', url, tmpdir],
+                                   capture_output=True, check=True)
+                    # Find SKILL.md
+                    skill_md = os.path.join(tmpdir, 'SKILL.md')
+                    if not os.path.exists(skill_md):
+                        print_error("No SKILL.md found in repository")
+                        print()
+                        return "continue", session
+                    # Copy SKILL.md
+                    shutil.copy2(skill_md, os.path.join(skill_dir, 'SKILL.md'))
+                    print_success(f"Skill '{repo_name}' installed to {skill_dir}")
+                    # Refresh skill manager
+                    if hasattr(harness, '_skill_manager'):
+                        harness._skill_manager._refresh_skills()
+            except subprocess.CalledProcessError as e:
+                print_error(f"Failed to clone repository: {e.stderr.decode() if e.stderr else str(e)}")
+            except Exception as e:
+                print_error(f"Installation failed: {str(e)}")
+            print()
         else:
-            print_info("No skills found. Create skills in ~/.mimo/skills/ or .mimo/skills/")
-        print()
+            # List available skills
+            skill_manager = SkillManager()
+            skills = skill_manager.list_skills()
+            if skills:
+                print(f"\n  {_bold(f'Available Skills ({len(skills)})')}")
+                _safe_print(f"  {_dim(BUBBLE_H * 40)}")
+                for skill in skills:
+                    invocable = ""
+                    if not skill['user_invocable']:
+                        invocable = _dim(" (model-only)")
+                    elif skill['disable_model_invocation']:
+                        invocable = _dim(" (user-only)")
+                    _safe_print(f"  {_yellow('/')}{skill['name']}{invocable}")
+                    if skill['description']:
+                        _safe_print(f"    {_dim(skill['description'][:60])}")
+                print(f"\n  {_dim('Usage: /<skill-name> [arguments]')}")
+                print(f"  {_dim('Install: /skills install <github-url>')}")
+            else:
+                print_info("No skills found. Create skills in ~/.mimo/skills/ or .mimo/skills/")
+                print_info("Install: /skills install <github-url>")
+            print()
     elif cmd[0].startswith("/") and cmd[0][1:] in (getattr(harness, '_skill_manager', SkillManager()).skills if hasattr(harness, '_skill_manager') else {}):
         # Invoke a skill
         skill_name = cmd[0][1:]
@@ -1039,7 +1080,94 @@ def _handle_command(cmd, harness, session, memory_store, checkpoint_manager=None
         if len(cmd) > 1:
             # Subcommands
             subcmd = cmd[1]
-            if subcmd == "connect" and len(cmd) > 2:
+            if subcmd == "install":
+                # Install MCP server
+                if len(cmd) < 3:
+                    print_warning("Usage: /mcp install <package-or-repo>")
+                    print_info("Examples:")
+                    print_info("  /mcp install github/github-mcp-server  (GitHub release)")
+                    print_info("  /mcp install @modelcontextprotocol/server-filesystem .  (npm)")
+                    print()
+                    return "continue", session
+                package = cmd[2]
+                extra_args = cmd[3:] if len(cmd) > 3 else []
+                try:
+                    import subprocess
+                    import json as json_mod
+                    # Determine if it's a GitHub repo or npm package
+                    if '/' in package and not package.startswith('@') and not package.startswith('http'):
+                        # GitHub release: owner/repo
+                        print_info(f"Installing from GitHub: {package}...")
+                        # Get latest release
+                        result = subprocess.run(
+                            ['gh', 'api', f'repos/{package}/releases/latest', '--jq',
+                             '.tag_name, (.assets[] | select(.name | test("Windows.*x86_64.*zip$")) | .browser_download_url)'],
+                            capture_output=True, text=True
+                        )
+                        if result.returncode != 0:
+                            print_error(f"Failed to get release info: {result.stderr}")
+                            print()
+                            return "continue", session
+                        lines = result.stdout.strip().split('\n')
+                        if len(lines) < 2:
+                            print_error("No Windows x86_64 binary found")
+                            print()
+                            return "continue", session
+                        tag_name, download_url = lines[0], lines[1]
+                        # Download and extract
+                        import tempfile
+                        import zipfile
+                        server_name = package.split('/')[-1]
+                        install_dir = os.path.join(os.path.expanduser('~'), '.mimo', 'mcp-servers', server_name)
+                        os.makedirs(install_dir, exist_ok=True)
+                        with tempfile.NamedTemporaryFile(suffix='.zip', delete=False) as tmp:
+                            subprocess.run(['curl', '-L', '-o', tmp.name, download_url],
+                                           capture_output=True, check=True)
+                            with zipfile.ZipFile(tmp.name, 'r') as zf:
+                                zf.extractall(install_dir)
+                            os.unlink(tmp.name)
+                        # Find executable
+                        exe_path = None
+                        for f in os.listdir(install_dir):
+                            if f.endswith('.exe'):
+                                exe_path = os.path.join(install_dir, f)
+                                break
+                        if not exe_path:
+                            print_error("No executable found in release")
+                            print()
+                            return "continue", session
+                        # Update config
+                        config_path = os.path.join(os.path.expanduser('~'), '.mimo', 'config.json')
+                        config = {}
+                        if os.path.exists(config_path):
+                            with open(config_path, 'r') as f:
+                                config = json_mod.load(f)
+                        if 'mcpServers' not in config:
+                            config['mcpServers'] = {}
+                        config['mcpServers'][server_name] = {
+                            'type': 'stdio',
+                            'command': exe_path,
+                            'args': ['stdio']
+                        }
+                        with open(config_path, 'w') as f:
+                            json_mod.dump(config, f, indent=2)
+                        print_success(f"MCP server '{server_name}' installed to {install_dir}")
+                        print_info(f"Config updated: {config_path}")
+                        # Refresh MCP manager
+                        harness._mcp_manager.load_configurations()
+                    else:
+                        # npm package
+                        print_info(f"Installing npm package: {package}...")
+                        subprocess.run(['npm', 'install', '-g', package] + extra_args,
+                                       capture_output=True, check=True)
+                        print_success(f"npm package '{package}' installed")
+                        print_info("Add configuration to ~/.mimo/config.json manually")
+                except subprocess.CalledProcessError as e:
+                    print_error(f"Installation failed: {e.stderr.decode() if e.stderr else str(e)}")
+                except Exception as e:
+                    print_error(f"Installation failed: {str(e)}")
+                print()
+            elif subcmd == "connect" and len(cmd) > 2:
                 server_name = cmd[2]
                 print_info(f"Connecting to {server_name}...")
                 if harness._mcp_manager.connect_server(server_name):
@@ -1054,7 +1182,7 @@ def _handle_command(cmd, harness, session, memory_store, checkpoint_manager=None
                 harness._mcp_manager.load_configurations()
                 print_success("MCP configurations refreshed")
             else:
-                print_warning("Usage: /mcp [connect|disconnect|refresh] [server-name]")
+                print_warning("Usage: /mcp [install|connect|disconnect|refresh] [server-name]")
         else:
             # Show status
             status = harness._mcp_manager.get_server_status()
@@ -1076,9 +1204,10 @@ def _handle_command(cmd, harness, session, memory_store, checkpoint_manager=None
                     _safe_print(f"    {_dim(transport + ' | ' + scope)}")
                     if server['error']:
                         _safe_print(f"    {_red(server['error'][:50])}")
-                print(f"\n  {_dim('Commands: /mcp connect <name>, /mcp disconnect <name>, /mcp refresh')}")
+                print(f"\n  {_dim('Commands: /mcp install|connect|disconnect|refresh [server-name]')}")
             else:
                 print_info("No MCP servers configured. Create .mimo/mcp.json to add servers.")
+                print_info("Install: /mcp install <package-or-repo>")
         print()
     else:
         print_warning(f"Unknown command: {cmd[0]}. Type /help for commands.")

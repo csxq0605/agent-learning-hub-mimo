@@ -19,7 +19,8 @@ _SLASH_COMMANDS = [
     "/compact", "/context", "/init", "/rewind", "/fork",
     "/subagents", "/subagent", "/parallel", "/pipeline",
     "/effort", "/mode",
-    "/skills", "/mcp",
+    "/skills", "/skills install",
+    "/mcp", "/mcp install", "/mcp connect", "/mcp disconnect", "/mcp refresh",
 ]
 
 # Lazy-loaded prompt_toolkit components
