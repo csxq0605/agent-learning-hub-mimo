@@ -122,6 +122,7 @@ class MiMoTUI(App):
         "/hooks", "/dry-run", "/auto", "/plan", "/abort", "/effort",
         "/mode", "/save", "/load", "/fork", "/rewind", "/init",
         "/subagents", "/subagent", "/parallel", "/pipeline",
+        "/skills", "/mcp",
     ]
 
     def __init__(self, harness, session, memory_store, checkpoint_manager,
