@@ -829,8 +829,13 @@ def _handle_command(cmd, harness, session, memory_store, checkpoint_manager=None
         if summary.get('total_time_elapsed', 0) > 0:
             print(f"  {_dim('Time elapsed:')} {summary['total_time_elapsed']:.1f}s")
         print()
-    elif cmd[0] == "/subagent" and len(cmd) > 1:
+    elif cmd[0] == "/subagent":
         # Run a single task as a SubAgent
+        if len(cmd) < 2:
+            print_warning("Usage: /subagent <task description>")
+            print_info("Example: /subagent Analyze the codebase structure")
+            print()
+            return "continue", session
         task = " ".join(cmd[1:])
         print_info(f"Running SubAgent: {task[:60]}...")
         try:
@@ -848,8 +853,14 @@ def _handle_command(cmd, harness, session, memory_store, checkpoint_manager=None
         except Exception as e:
             print_error(str(e))
         print()
-    elif cmd[0] == "/parallel" and len(cmd) > 1:
+    elif cmd[0] == "/parallel":
         # Run tasks in parallel
+        if len(cmd) < 2:
+            print_warning("Usage: /parallel <task1> | <task2> | ...")
+            print_info("Separate tasks with | (pipe)")
+            print_info("Example: /parallel Analyze code | Write tests | Review docs")
+            print()
+            return "continue", session
         tasks_str = " ".join(cmd[1:])
         tasks = [t.strip() for t in tasks_str.split("|") if t.strip()]
         if len(tasks) < 2:
@@ -875,8 +886,14 @@ def _handle_command(cmd, harness, session, memory_store, checkpoint_manager=None
             except Exception as e:
                 print_error(str(e))
         print()
-    elif cmd[0] == "/pipeline" and len(cmd) > 1:
+    elif cmd[0] == "/pipeline":
         # Run tasks in pipeline
+        if len(cmd) < 2:
+            print_warning("Usage: /pipeline <task1> | <task2> | ...")
+            print_info("Separate tasks with | (pipe)")
+            print_info("Example: /pipeline Research topic | Write article | Edit and polish")
+            print()
+            return "continue", session
         tasks_str = " ".join(cmd[1:])
         tasks = [t.strip() for t in tasks_str.split("|") if t.strip()]
         if len(tasks) < 2:
@@ -903,13 +920,23 @@ def _handle_command(cmd, harness, session, memory_store, checkpoint_manager=None
             except Exception as e:
                 print_error(str(e))
         print()
-    elif cmd[0] == "/save" and len(cmd) > 1:
+    elif cmd[0] == "/save":
+        if len(cmd) < 2:
+            print_warning("Usage: /save <filepath>")
+            print_info("Example: /save my-session.json")
+            print()
+            return "continue", session
         try:
             session.save(cmd[1])
             print_success(f"Session saved to {cmd[1]}")
         except Exception as e:
             print_error(str(e))
-    elif cmd[0] == "/load" and len(cmd) > 1:
+    elif cmd[0] == "/load":
+        if len(cmd) < 2:
+            print_warning("Usage: /load <filepath>")
+            print_info("Example: /load my-session.json")
+            print()
+            return "continue", session
         try:
             # Save current session metadata before replacing
             try:
