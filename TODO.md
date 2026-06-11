@@ -436,78 +436,130 @@ def test_classify_action_safe_command():
 
 ### 任务 6：ESC 中断任务功能
 
-**问题描述**：当前 Agent 执行任务时，用户无法方便地中断并修改任务描述或要求。Claude Code 支持 ESC 键中断当前任务，用户可以重新输入或修改指令。
+**问题描述**：当前 Agent 执行任务时，用户无法方便地中断并修改任务描述或要求。
 
-**目标**：
-- 实现 ESC 键中断当前 Agent 任务
-- 中断后允许用户修改任务描述并重新提交
-- 保持会话上下文不丢失
+**目标**：实现 ESC 键中断当前 Agent 任务，中断后允许用户修改任务描述并重新提交，保持会话上下文不丢失。
 
 **参考实现**：Claude Code 的 ESC 中断功能
+- **单次 ESC**：中断当前响应或工具调用，Claude 保留已完成的工作
+- **双击 ESC**：清空输入草稿并保存到历史（可通过 Up 键召回）；输入为空时打开 rewind 菜单
+- **Ctrl+C**：中断运行中的操作；无操作时第一次清空输入，第二次退出
+- **Ctrl+B**：将正在运行的 Bash 命令移至后台
+- **实现机制**：通过信号处理（SIGINT）中断 LLM 推理和工具执行，保留已产生的上下文
 
 **验收标准**：
 - [ ] ESC 键可以中断正在执行的 Agent 任务
-- [ ] 中断后显示友好的提示信息
+- [ ] 中断后显示友好的提示信息（如 "Interrupted"）
 - [ ] 用户可以修改任务描述并重新提交
 - [ ] 中断不会导致数据丢失或状态异常
 - [ ] TUI 和 CLI 模式都支持 ESC 中断
+- [ ] 双击 ESC 清空输入草稿并保存到历史
 
 ---
 
 ### 任务 7：/agents 自定义智能体命令
 
-**问题描述**：当前 harness 只有单一的 Agent 模式，无法定义和调用专门的智能体。Claude Code 支持 /agents 命令，允许用户定义不同功能的智能体。
+**问题描述**：当前 harness 只有单一的 Agent 模式，无法定义和调用专门的智能体。
 
-**目标**：
-- 实现 /agents 命令，支持查看和管理自定义智能体
-- 支持全局环境（~/.mimo/agents/）和项目环境（.mimo/agents/）的智能体定义
-- 智能体定义文件支持 YAML/JSON 格式，包含功能描述、工具权限、系统提示等
+**目标**：实现 /agents 命令，支持查看、创建、编辑和运行自定义智能体。
 
 **参考实现**：Claude Code 的 /agents 命令
+- **配置位置**：
+  - `.claude/agents/` — 项目级智能体（可版本控制）
+  - `~/.claude/agents/` — 用户级智能体（所有项目可用）
+  - 支持递归扫描子目录
+- **配置格式**：Markdown 文件 + YAML frontmatter
+  ```markdown
+  ---
+  name: code-reviewer
+  description: Reviews code for quality and best practices
+  tools: Read, Glob, Grep
+  model: sonnet
+  permissionMode: default
+  memory: user
+  background: false
+  color: blue
+  ---
+  You are a code reviewer. Analyze code and provide feedback.
+  ```
+- **Frontmatter 字段**：
+  - `name`：唯一标识符（小写+连字符）
+  - `description`：何时使用此智能体
+  - `tools`：允许使用的工具（白名单）
+  - `disallowedTools`：禁止使用的工具（黑名单）
+  - `model`：使用的模型（sonnet/opus/haiku/inherit）
+  - `permissionMode`：权限模式（default/auto/plan 等）
+  - `maxTurns`：最大执行轮数
+  - `skills`：预加载的 Skills
+  - `mcpServers`：可用的 MCP 服务器
+  - `hooks`：生命周期钩子
+  - `memory`：持久记忆范围（user/project/local）
+  - `background`：是否后台运行
+  - `isolation`：隔离模式（worktree）
+  - `color`：显示颜色
+- **/agents 界面**：
+  - Running 标签：查看运行中的智能体
+  - Library 标签：查看、创建、编辑、删除智能体
+  - 支持 "Generate with Claude" 自动生成配置
 
 **验收标准**：
-- [ ] `/agents` 列出所有可用智能体
-- [ ] `/agents create <name>` 创建新智能体
-- [ ] `/agents edit <name>` 编辑智能体配置
-- [ ] `/agents run <name> <task>` 运行指定智能体
-- [ ] 支持全局和项目级别的智能体定义
+- [ ] `/agents` 打开智能体管理界面
+- [ ] 支持项目级（.mimo/agents/）和用户级（~/.mimo/agents/）智能体
 - [ ] 智能体配置文件格式清晰，易于扩展
+- [ ] 支持通过 CLI 参数 `--agents` 传递 JSON 配置
+- [ ] 智能体可指定工具权限、模型、权限模式等
+- [ ] 支持智能体预加载 Skills 和 MCP 服务器
 
 ---
 
 ### 任务 8：/tasks 后台任务管理
 
-**问题描述**：当前任务执行是阻塞式的，用户必须等待任务完成才能进行其他操作。Claude Code 支持 & 后缀将任务移至后台运行。
+**问题描述**：当前任务执行是阻塞式的，用户必须等待任务完成才能进行其他操作。
 
-**目标**：
-- 实现 /tasks 命令查看后台任务
-- 支持命令以 & 结尾时自动移至后台
-- 后台任务支持自动运行、处理和反馈
+**目标**：实现后台任务管理，支持任务在后台运行并自动反馈结果。
 
 **参考实现**：Claude Code 的后台任务功能
+- **Ctrl+B**：将正在运行的 Bash 命令移至后台（tmux 用户按两次）
+- **后台 Bash 命令**：
+  - 异步执行，立即返回后台任务 ID
+  - 输出写入文件，Claude 可通过 Read 工具获取
+  - 任务有唯一 ID 用于跟踪和输出检索
+  - 退出时自动清理
+  - 输出超过 5GB 自动终止
+- **/tasks 命令**：查看后台任务列表和状态
+- **Ctrl+X Ctrl+K**：终止所有后台子智能体（3 秒内按两次确认）
+- **background frontmatter**：智能体可设置 `background: true` 始终后台运行
+- **禁用**：设置 `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`
 
 **验收标准**：
-- [ ] 命令以 `&` 结尾时自动移至后台执行
+- [ ] Ctrl+B 将运行中的命令移至后台
 - [ ] `/tasks` 列出所有后台任务及状态
-- [ ] `/tasks <id>` 查看特定任务详情
+- [ ] `/tasks <id>` 查看特定任务详情和输出
 - [ ] `/tasks cancel <id>` 取消后台任务
 - [ ] 后台任务完成后自动通知用户
 - [ ] 支持多个后台任务并行执行
+- [ ] 后台任务输出可被主会话读取
 
 ---
 
 ### 任务 9：@ 文件引用功能
 
-**问题描述**：当前无法在对话中直接引用特定文件或文件夹，Agent 需要通过工具调用才能查看文件内容。Claude Code 支持 @filename 语法直接引用文件。
+**问题描述**：当前无法在对话中直接引用特定文件或文件夹，Agent 需要通过工具调用才能查看文件内容。
 
-**目标**：
-- 实现 @ 文件或文件夹引用语法
-- 引用的文件内容自动注入到上下文中
-- 支持文件夹引用，自动包含目录结构
+**目标**：实现 @ 文件引用语法，引用的文件内容自动注入到上下文中。
 
 **参考实现**：Claude Code 的 @ 文件引用功能
+- **触发方式**：输入 `@` 触发文件路径自动补全
+- **支持格式**：
+  - `@filename` — 引用单个文件
+  - `@folder/` — 引用文件夹（显示目录结构）
+  - `@*.py` — 通配符引用
+- **路径支持**：相对路径和绝对路径
+- **集成方式**：引用的文件内容自动添加到对话上下文
+- **VS Code 集成**：在 IDE 中可通过 @-mentions 引用编辑器中的文件
 
 **验收标准**：
+- [ ] 输入 `@` 触发文件路径自动补全
 - [ ] 支持 `@filename` 语法引用单个文件
 - [ ] 支持 `@folder/` 语法引用文件夹（显示目录结构）
 - [ ] 引用的文件内容自动添加到对话上下文
@@ -519,22 +571,41 @@ def test_classify_action_safe_command():
 
 ### 任务 10：/goal 目标管理命令
 
-**问题描述**：在连续长程任务中，容易偏离原始目标或忘记关键需求。Claude Code 支持 /goal 命令管理任务目标。
+**问题描述**：在连续长程任务中，容易偏离原始目标或忘记关键需求。
 
-**目标**：
-- 实现 /goal 命令管理任务目标
-- 支持设置、查看、修改目标
-- 在任务执行过程中持续检查目标一致性
+**目标**：实现 /goal 命令，设置完成条件后 Claude 持续工作直到条件满足。
 
 **参考实现**：Claude Code 的 /goal 命令
+- **核心机制**：
+  - `/goal <condition>` 设置完成条件
+  - 每轮结束后，快速模型（默认 Haiku）检查条件是否满足
+  - 条件未满足 → Claude 继续下一轮
+  - 条件满足 → 清除 goal，返回控制权
+- **条件编写建议**：
+  - 可测量的最终状态（测试结果、构建退出码、文件数量）
+  - 明确的检查方式（如 "`npm test` exits 0" 或 "`git status` is clean")
+  - 必要的约束条件（如 "不修改其他测试文件"）
+  - 条件最长 4000 字符
+  - 可包含轮数/时间限制（如 "or stop after 20 turns"）
+- **命令语法**：
+  - `/goal <condition>` — 设置目标（立即开始执行）
+  - `/goal` — 查看当前状态（条件、运行时间、轮数、token 消耗）
+  - `/goal clear` — 清除目标（别名：stop/off/reset/none/cancel）
+- **评估机制**：
+  - 基于 session-scoped 的 prompt-based Stop hook
+  - 评估器只看 Claude 在对话中展示的内容，不独立运行命令
+  - 评估 token 消耗通常可忽略不计
+- **会话恢复**：活跃的 goal 在 `--resume` 时恢复（轮数/计时器重置）
+- **非交互模式**：支持 `claude -p "/goal ..."` 单次调用运行到完成
 
 **验收标准**：
-- [ ] `/goal set <description>` 设置任务目标
-- [ ] `/goal` 查看当前目标
-- [ ] `/goal update <description>` 更新目标
+- [ ] `/goal <condition>` 设置完成条件并开始执行
+- [ ] `/goal` 查看当前目标状态
 - [ ] `/goal clear` 清除目标
-- [ ] Agent 在执行过程中定期检查是否偏离目标
-- [ ] 偏离目标时给出警告提示
+- [ ] 每轮结束后自动评估条件是否满足
+- [ ] 条件满足时自动停止并通知用户
+- [ ] 支持轮数/时间限制
+- [ ] 会话恢复时保持活跃的 goal
 
 ---
 
