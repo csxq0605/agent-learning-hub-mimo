@@ -4,7 +4,7 @@ import pytest
 import json
 import tempfile
 import os
-from mimo_harness.context import (
+from agent_hub.context import (
     Session, compact_context, load_memory,
     estimate_tokens,
     COMPRESS_TRIGGER_TOKENS,
@@ -18,7 +18,7 @@ from mimo_harness.context import (
 def _real_llm_client():
     """Create a real OpenAI client from env vars. Skip test if unavailable."""
     from openai import OpenAI
-    from mimo_harness.config import MIMO_API_KEY, MIMO_BASE_URL, MIMO_MODEL
+    from agent_hub.config import MIMO_API_KEY, MIMO_BASE_URL, MIMO_MODEL
     if not MIMO_API_KEY or MIMO_API_KEY == "test-key-for-testing":
         pytest.skip("Real MIMO_API_KEY not set")
     return OpenAI(api_key=MIMO_API_KEY, base_url=MIMO_BASE_URL), MIMO_MODEL
@@ -829,7 +829,7 @@ class TestEstimateTokensEdgeCases:
 # snip_compress / microcompact independent boundary tests
 # ============================================================================
 
-from mimo_harness.context import snip_compress, microcompact, COMPRESS_MARKER
+from agent_hub.context import snip_compress, microcompact, COMPRESS_MARKER
 
 
 class TestSnipCompress:
@@ -968,49 +968,49 @@ class TestParseFrontmatter:
     """Test _parse_frontmatter YAML-like frontmatter parser."""
 
     def test_simple_key_value(self):
-        from mimo_harness.context import _parse_frontmatter
+        from agent_hub.context import _parse_frontmatter
         content = "---\npaths: *.py\n---\nBody content here"
         meta, body = _parse_frontmatter(content)
         assert meta["paths"] == "*.py"
         assert body == "Body content here"
 
     def test_list_value(self):
-        from mimo_harness.context import _parse_frontmatter
+        from agent_hub.context import _parse_frontmatter
         content = '---\npaths: ["*.py", "*.js"]\n---\nBody'
         meta, body = _parse_frontmatter(content)
         assert meta["paths"] == ["*.py", "*.js"]
         assert body == "Body"
 
     def test_multiple_keys(self):
-        from mimo_harness.context import _parse_frontmatter
+        from agent_hub.context import _parse_frontmatter
         content = "---\npaths: *.py\nname: test-rule\n---\nBody"
         meta, body = _parse_frontmatter(content)
         assert meta["paths"] == "*.py"
         assert meta["name"] == "test-rule"
 
     def test_no_frontmatter(self):
-        from mimo_harness.context import _parse_frontmatter
+        from agent_hub.context import _parse_frontmatter
         content = "No frontmatter here"
         meta, body = _parse_frontmatter(content)
         assert meta == {}
         assert body == content
 
     def test_unclosed_frontmatter(self):
-        from mimo_harness.context import _parse_frontmatter
+        from agent_hub.context import _parse_frontmatter
         content = "---\npaths: *.py\nNo closing delimiter"
         meta, body = _parse_frontmatter(content)
         assert meta == {}
         assert body == content
 
     def test_empty_frontmatter(self):
-        from mimo_harness.context import _parse_frontmatter
+        from agent_hub.context import _parse_frontmatter
         content = "---\n---\nBody"
         meta, body = _parse_frontmatter(content)
         assert meta == {}
         assert body == "Body"
 
     def test_quoted_values(self):
-        from mimo_harness.context import _parse_frontmatter
+        from agent_hub.context import _parse_frontmatter
         content = '---\nname: "quoted value"\n---\nBody'
         meta, body = _parse_frontmatter(content)
         assert meta["name"] == "quoted value"
@@ -1024,7 +1024,7 @@ class TestResolveImports:
     """Test _resolve_imports @import directive resolver."""
 
     def test_basic_import(self, tmp_path):
-        from mimo_harness.context import _resolve_imports
+        from agent_hub.context import _resolve_imports
         (tmp_path / "helper.md").write_text("Helper content")
         content = "Before\n@helper.md\nAfter"
         result = _resolve_imports(content, str(tmp_path))
@@ -1033,21 +1033,21 @@ class TestResolveImports:
         assert "After" in result
 
     def test_import_nonexistent_file(self, tmp_path):
-        from mimo_harness.context import _resolve_imports
+        from agent_hub.context import _resolve_imports
         content = "Before\n@nonexistent.md\nAfter"
         result = _resolve_imports(content, str(tmp_path))
         # Unresolved imports left as-is
         assert "@nonexistent.md" in result
 
     def test_import_path_traversal_blocked(self, tmp_path):
-        from mimo_harness.context import _resolve_imports
+        from agent_hub.context import _resolve_imports
         content = "@../outside.md"
         result = _resolve_imports(content, str(tmp_path))
         # Should not resolve — path traversal blocked
         assert "@../outside.md" in result
 
     def test_import_nested(self, tmp_path):
-        from mimo_harness.context import _resolve_imports
+        from agent_hub.context import _resolve_imports
         (tmp_path / "a.md").write_text("Content from A\n@b.md")
         (tmp_path / "b.md").write_text("Content from B")
         content = "@a.md"
@@ -1056,7 +1056,7 @@ class TestResolveImports:
         assert "Content from B" in result
 
     def test_import_depth_limit(self, tmp_path):
-        from mimo_harness.context import _resolve_imports
+        from agent_hub.context import _resolve_imports
         # Create a chain of 10 imports (depth limit is 5)
         for i in range(10):
             next_file = f"level{i+1}.md" if i < 9 else "final.md"
@@ -1068,7 +1068,7 @@ class TestResolveImports:
         assert isinstance(result, str)
 
     def test_no_imports(self, tmp_path):
-        from mimo_harness.context import _resolve_imports
+        from agent_hub.context import _resolve_imports
         content = "No imports here, just plain text."
         result = _resolve_imports(content, str(tmp_path))
         assert result == content

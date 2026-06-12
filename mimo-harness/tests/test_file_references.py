@@ -8,7 +8,7 @@ from pathlib import Path
 import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from mimo_harness.file_references import (
+from agent_hub.file_references import (
     FileReferenceParser, FileReferenceResolver
 )
 
@@ -162,6 +162,90 @@ class TestFileReferenceResolver:
         os.chdir(tmp_path)
         result = FileReferenceResolver.resolve_and_format("Check @src/")
         assert "[Directory: @src/]" in result
+
+
+class TestScanCompletions:
+    """Test scan_completions for interactive @ file completion."""
+
+    def test_basic_match(self, tmp_path):
+        from agent_hub.file_references import scan_completions
+        (tmp_path / "README.md").write_text("# Hi")
+        (tmp_path / "requirements.txt").write_text("py")
+        results = scan_completions("README", str(tmp_path))
+        assert len(results) == 1
+        assert results[0] == "README.md"
+
+    def test_partial_match(self, tmp_path):
+        from agent_hub.file_references import scan_completions
+        (tmp_path / "app.py").write_text("")
+        (tmp_path / "api.py").write_text("")
+        (tmp_path / "test.txt").write_text("")
+        results = scan_completions("a", str(tmp_path))
+        assert len(results) == 2
+        assert "app.py" in results
+        assert "api.py" in results
+
+    def test_directory_slash_suffix(self, tmp_path):
+        from agent_hub.file_references import scan_completions
+        (tmp_path / "src").mkdir()
+        (tmp_path / "src" / "main.py").write_text("")
+        results = scan_completions("", str(tmp_path))
+        dirs = [r for r in results if r.endswith('/')]
+        assert "src/" in dirs
+
+    def test_nested_path(self, tmp_path):
+        from agent_hub.file_references import scan_completions
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "main.py").write_text("")
+        (src / "models.py").write_text("")
+        results = scan_completions("src/m", str(tmp_path))
+        assert "src/main.py" in results
+        assert "src/models.py" in results
+
+    def test_hidden_files_excluded(self, tmp_path):
+        from agent_hub.file_references import scan_completions
+        (tmp_path / ".hidden").write_text("")
+        (tmp_path / "visible.py").write_text("")
+        results = scan_completions("", str(tmp_path))
+        assert ".hidden" not in results
+        assert "visible.py" in results
+
+    def test_empty_prefix_lists_all(self, tmp_path):
+        from agent_hub.file_references import scan_completions
+        (tmp_path / "a.py").write_text("")
+        (tmp_path / "b.py").write_text("")
+        results = scan_completions("", str(tmp_path))
+        assert len(results) == 2
+
+    def test_no_match(self, tmp_path):
+        from agent_hub.file_references import scan_completions
+        (tmp_path / "a.py").write_text("")
+        results = scan_completions("zzz", str(tmp_path))
+        assert len(results) == 0
+
+    def test_limit(self, tmp_path):
+        from agent_hub.file_references import scan_completions
+        for i in range(20):
+            (tmp_path / f"f{i:02d}.py").write_text("")
+        results = scan_completions("f", str(tmp_path), limit=5)
+        assert len(results) == 5
+
+    def test_path_traversal_blocked(self, tmp_path):
+        from agent_hub.file_references import scan_completions
+        results = scan_completions("../../etc", str(tmp_path))
+        assert len(results) == 0
+
+    def test_case_insensitive(self, tmp_path):
+        from agent_hub.file_references import scan_completions
+        (tmp_path / "README.md").write_text("")
+        results = scan_completions("readme", str(tmp_path))
+        assert "README.md" in results
+
+    def test_nonexistent_dir(self, tmp_path):
+        from agent_hub.file_references import scan_completions
+        results = scan_completions("f", str(tmp_path / "nope"))
+        assert len(results) == 0
 
 
 if __name__ == '__main__':

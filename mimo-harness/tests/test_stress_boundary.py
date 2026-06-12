@@ -17,10 +17,10 @@ import time
 
 import pytest
 
-from mimo_harness.tools import file_ops, web_tools, doc_tools, math_tools
-from mimo_harness.permissions import Permission, PermissionGate, PermissionRule
-from mimo_harness.memory import MemoryStore, MemoryType
-from mimo_harness.agent import CircuitBreaker, TokenBudget
+from agent_hub.tools import file_ops, web_tools, doc_tools, math_tools
+from agent_hub.permissions import Permission, PermissionGate, PermissionRule
+from agent_hub.memory import MemoryStore, MemoryType
+from agent_hub.agent import CircuitBreaker, TokenBudget
 
 
 # ============================================================================
@@ -314,7 +314,7 @@ class TestMonitorMaxLimit:
 
     def test_monitor_max_limit(self, monkeypatch):
         """Starting more than MAX_MONITORS should be rejected."""
-        from mimo_harness.tools import monitor
+        from agent_hub.tools import monitor
 
         monkeypatch.setattr(monitor, "_monitors", {})
         sleep_cmd = f'{sys.executable} -c "import time; time.sleep(60)"'
@@ -345,7 +345,7 @@ class TestMonitorMaxLimit:
 
     def test_monitor_cleanup_allows_restart(self, monkeypatch):
         """Stopping a monitor frees a slot for a new one."""
-        from mimo_harness.tools import monitor
+        from agent_hub.tools import monitor
 
         monkeypatch.setattr(monitor, "_monitors", {})
         sleep_cmd = f'{sys.executable} -c "import time; time.sleep(60)"'
@@ -379,7 +379,7 @@ class TestTaskThreadSafety:
 
     def test_concurrent_task_create(self):
         """20 concurrent task_create calls should not crash or lose data."""
-        from mimo_harness.tools import task_tools
+        from agent_hub.tools import task_tools
 
         results = []
         errors = []

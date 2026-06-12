@@ -2,7 +2,7 @@
 
 ## Create Reports
 ```
-mimo-harness
+ah
 
 > 帮我写一份周报，包含本周进展、阻塞问题、下周计划三个部分
 # Agent 调用 create_doc 创建 markdown 文件
@@ -13,7 +13,7 @@ mimo-harness
 
 ## Generate Spreadsheets
 ```
-mimo-harness
+ah
 
 > 创建一个预算表 CSV，列：项目、预估成本、实际成本、差异
 # Agent 调用 create_spreadsheet 生成 CSV
@@ -24,7 +24,7 @@ mimo-harness
 
 ## Summarize Documents
 ```
-mimo-harness
+ah
 
 > 读一下 meeting_notes.md，帮我提取会议摘要和待办事项
 # Agent 调用 read_file 读取会议记录
@@ -37,7 +37,7 @@ mimo-harness
 
 ## Data Processing
 ```
-mimo-harness
+ah
 
 > 读一下 data.csv，算一下 score 列的平均值和标准差
 # Agent 调用 read_file 读取数据，调用 calculator 计算
@@ -48,13 +48,13 @@ mimo-harness
 
 ## Pipe CSV Data
 ```
-cat sales_q1.csv | mimo-harness -p "按区域统计总营收，生成汇总表"
+cat sales_q1.csv | ah -p "按区域统计总营收，生成汇总表"
 # Agent 解析 CSV 数据，按区域分组计算
 ```
 
 ## Task Tracking
 ```
-mimo-harness
+ah
 
 > 创建一个数据库迁移的任务清单：1) 更新 schema 2) 迁移数据 3) 更新 API 4) 写测试
 # Agent 调用 task_create 创建 4 个任务
@@ -70,7 +70,7 @@ mimo-harness
 
 ## Multi-file Workflow
 ```
-mimo-harness
+ah
 
 > 读一下 specs/ 目录下所有 markdown 文件
 # Agent 调用 glob_files 列出文件，逐个 read_file
@@ -86,17 +86,17 @@ mimo-harness
 
 ## Session Resume
 ```
-mimo-harness --name "quarterly-report"
+ah --name "quarterly-report"
 
 > 读一下去年的年报模板，按同样的结构写今年的
 # Agent 调用 read_file 读取模板，调用 create_doc 创建新文件
 
 # ... 中途退出 ...
 
-mimo-harness --continue
+ah --continue
 # 自动恢复上次会话，继续写年报
 
 # 或者用指定 ID 恢复（适合自动化场景）
-mimo-harness --session-id quarterly-report
+ah --session-id quarterly-report
 # 按 ID 精确恢复，不存在则创建新会话
 ```

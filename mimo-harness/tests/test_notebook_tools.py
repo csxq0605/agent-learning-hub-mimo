@@ -3,8 +3,8 @@
 import json
 import os
 import pytest
-from mimo_harness.tools.notebook_tools import notebook_edit, get_tools
-from mimo_harness.tools import file_ops
+from agent_hub.tools.notebook_tools import notebook_edit, get_tools
+from agent_hub.tools import file_ops
 
 
 @pytest.fixture(autouse=True)

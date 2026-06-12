@@ -4,13 +4,13 @@ import os
 import re
 import logging
 import pytest
-from mimo_harness.logging_utils import TraceLogger
+from agent_hub.logging_utils import TraceLogger
 
 
 @pytest.fixture(autouse=True)
 def clean_logger():
-    """Ensure the mimo-harness logger is clean before each test."""
-    logger = logging.getLogger("mimo-harness")
+    """Ensure the agent-hub logger is clean before each test."""
+    logger = logging.getLogger("agent-hub")
     logger.handlers.clear()
     yield
     logger.handlers.clear()
@@ -29,20 +29,20 @@ class TestTraceLogger:
 
     def test_trace_logger_info(self, caplog):
         logger = TraceLogger()
-        with caplog.at_level(logging.DEBUG, logger="mimo-harness"):
+        with caplog.at_level(logging.DEBUG, logger="agent-hub"):
             logger.info("test info message")
         assert "test info message" in caplog.text
 
     def test_trace_logger_error(self, caplog):
         logger = TraceLogger()
         exc = ValueError("test error")
-        with caplog.at_level(logging.DEBUG, logger="mimo-harness"):
+        with caplog.at_level(logging.DEBUG, logger="agent-hub"):
             logger.error("something failed", exc=exc)
         assert "something failed" in caplog.text
 
     def test_trace_logger_trace(self, caplog):
         logger = TraceLogger()
-        with caplog.at_level(logging.DEBUG, logger="mimo-harness"):
+        with caplog.at_level(logging.DEBUG, logger="agent-hub"):
             logger.trace("test_event", {"key": "value"})
         assert "[TRACE]" in caplog.text
         assert "test_event" in caplog.text
@@ -51,7 +51,7 @@ class TestTraceLogger:
 
     def test_trace_logger_tool_call(self, caplog):
         logger = TraceLogger()
-        with caplog.at_level(logging.DEBUG, logger="mimo-harness"):
+        with caplog.at_level(logging.DEBUG, logger="agent-hub"):
             logger.tool_call("read_file", {"path": "/tmp/test"}, result="hello world")
         assert "tool_call" in caplog.text
         assert "read_file" in caplog.text
@@ -59,7 +59,7 @@ class TestTraceLogger:
 
     def test_trace_logger_session_summary(self, caplog):
         logger = TraceLogger()
-        with caplog.at_level(logging.DEBUG, logger="mimo-harness"):
+        with caplog.at_level(logging.DEBUG, logger="agent-hub"):
             logger.session_summary({"steps": 3, "duration": 1.5})
         assert "session_complete" in caplog.text
         assert "steps" in caplog.text

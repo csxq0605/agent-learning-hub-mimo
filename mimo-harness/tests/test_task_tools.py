@@ -2,7 +2,7 @@
 
 import json
 import pytest
-from mimo_harness.tools.task_tools import (
+from agent_hub.tools.task_tools import (
     task_create, task_get, task_list,
     task_update, task_delete, get_tools, _task_store,
 )

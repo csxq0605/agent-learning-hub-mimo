@@ -14,7 +14,7 @@ import os
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from mimo_harness.token_counter import (
+from agent_hub.token_counter import (
     count_tokens,
     count_tokens_tiktoken,
     count_tokens_heuristic,
@@ -28,7 +28,7 @@ from mimo_harness.token_counter import (
     _detect_content_type,
     _get_ratio,
 )
-from mimo_harness.agent import TokenBudget
+from agent_hub.agent import TokenBudget
 
 
 # ============================================================================

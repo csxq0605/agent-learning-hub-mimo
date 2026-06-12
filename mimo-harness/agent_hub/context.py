@@ -18,7 +18,7 @@ import shutil
 import platform
 import threading
 
-_logger = logging.getLogger("mimo-harness.context")
+_logger = logging.getLogger("agent-hub.context")
 from dataclasses import dataclass, field
 from typing import Optional, Any, NamedTuple
 

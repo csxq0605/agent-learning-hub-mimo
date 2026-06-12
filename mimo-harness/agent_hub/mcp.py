@@ -326,7 +326,7 @@ class MCPConnection:
                         'resources': {},
                     },
                     'clientInfo': {
-                        'name': 'mimo-harness',
+                        'name': 'agent-hub',
                         'version': '1.0.0',
                     },
                 },

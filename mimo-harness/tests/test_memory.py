@@ -2,7 +2,7 @@
 
 import pytest
 import os
-from mimo_harness.memory import (
+from agent_hub.memory import (
     MemoryType, MemoryEntry, MemoryStore,
     MEMORY_INDEX_MAX_LINES, MEMORY_INDEX_MAX_BYTES,
 )

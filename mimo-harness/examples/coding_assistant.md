@@ -2,7 +2,7 @@
 
 ## Generate and Test Code
 ```
-mimo-harness
+ah
 
 > 写一个 merge sort 函数，用 [3,1,4,1,5,9,2,6] 测试一下
 # Agent 调用 execute_python 编写并运行代码，输出排序结果
@@ -13,7 +13,7 @@ mimo-harness
 
 ## Debug Code
 ```
-mimo-harness
+ah
 
 > 读一下 main.py，帮我找 bug
 # Agent 调用 read_file 读取代码，分析问题
@@ -27,7 +27,7 @@ mimo-harness
 
 ## Refactor
 ```
-mimo-harness
+ah
 
 > 读一下 utils.py，把里面的 for 循环改成列表推导式
 # Agent 调用 read_file 分析，再调用 edit_file 重构
@@ -38,7 +38,7 @@ mimo-harness
 
 ## Add Tests
 ```
-mimo-harness
+ah
 
 > 读一下 calculator.py，给所有函数写单元测试
 # Agent 调用 read_file 分析函数签名
@@ -52,13 +52,13 @@ mimo-harness
 
 ## Pipe Error Logs
 ```
-cat app.log | mimo-harness -p "分析这些错误日志，找到根因并建议修复方案"
+cat app.log | ah -p "分析这些错误日志，找到根因并建议修复方案"
 # Agent 解析日志内容，逐条分析错误原因
 ```
 
 ## Edit Jupyter Notebook
 ```
-mimo-harness
+ah
 
 > 打开 analysis.ipynb，在第 5 个 cell 后面加一个画分布图的 cell
 # Agent 调用 notebook_edit 插入新 cell
@@ -69,7 +69,7 @@ mimo-harness
 
 ## Code Review
 ```
-mimo-harness --effort high
+ah --effort high
 
 > 审查 src/auth.py 的安全漏洞，给出修复建议
 # Agent 调用 read_file 读取代码，逐行分析安全问题
@@ -80,7 +80,7 @@ mimo-harness --effort high
 
 ## Interactive Multi-turn
 ```
-mimo-harness
+ah
 
 > 列出当前目录所有 Python 文件
 # Agent 调用 glob_files 搜索

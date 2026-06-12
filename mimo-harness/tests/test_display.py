@@ -7,8 +7,8 @@ import os
 import sys
 import json
 import pytest
-import mimo_harness.display
-from mimo_harness.display import (
+import agent_hub.display
+from agent_hub.display import (
     _supports_color,
     _c,
     _dim,
@@ -62,9 +62,9 @@ from mimo_harness.display import (
 @pytest.fixture(autouse=True)
 def _restore_use_color():
     """Restore USE_COLOR after each test."""
-    original = mimo_harness.display.USE_COLOR
+    original = agent_hub.display.USE_COLOR
     yield
-    mimo_harness.display.USE_COLOR = original
+    agent_hub.display.USE_COLOR = original
 
 
 class TestSupportsColor:
@@ -91,49 +91,49 @@ class TestColorFunctions:
 
     def test_c_with_color_disabled(self):
         """_c should return plain text when USE_COLOR is False."""
-        mimo_harness.display.USE_COLOR = False
+        agent_hub.display.USE_COLOR = False
         result = _c("\033[31m", "hello")
         assert result == "hello"
 
     def test_c_with_color_enabled(self):
         """_c should wrap text with color codes when USE_COLOR is True."""
-        mimo_harness.display.USE_COLOR = True
+        agent_hub.display.USE_COLOR = True
         result = _c("\033[31m", "hello")
         assert result == "\033[31mhello\033[0m"
 
     def test_dim_returns_dim_text(self):
         """_dim should apply DIM formatting."""
-        mimo_harness.display.USE_COLOR = False
+        agent_hub.display.USE_COLOR = False
         assert _dim("test") == "test"
 
     def test_bold_returns_bold_text(self):
         """_bold should apply BOLD formatting."""
-        mimo_harness.display.USE_COLOR = False
+        agent_hub.display.USE_COLOR = False
         assert _bold("test") == "test"
 
     def test_green_returns_green_text(self):
         """_green should apply GREEN formatting."""
-        mimo_harness.display.USE_COLOR = False
+        agent_hub.display.USE_COLOR = False
         assert _green("test") == "test"
 
     def test_yellow_returns_yellow_text(self):
         """_yellow should apply YELLOW formatting."""
-        mimo_harness.display.USE_COLOR = False
+        agent_hub.display.USE_COLOR = False
         assert _yellow("test") == "test"
 
     def test_red_returns_red_text(self):
         """_red should apply RED formatting."""
-        mimo_harness.display.USE_COLOR = False
+        agent_hub.display.USE_COLOR = False
         assert _red("test") == "test"
 
     def test_cyan_returns_cyan_text(self):
         """_cyan should apply CYAN formatting."""
-        mimo_harness.display.USE_COLOR = False
+        agent_hub.display.USE_COLOR = False
         assert _cyan("test") == "test"
 
     def test_blue_returns_blue_text(self):
         """_blue should apply BLUE formatting."""
-        mimo_harness.display.USE_COLOR = False
+        agent_hub.display.USE_COLOR = False
         assert _blue("test") == "test"
 
 
@@ -326,7 +326,7 @@ class TestPrintFunctions:
         """Should print banner."""
         print_banner("1.0.0")
         captured = capsys.readouterr()
-        assert "MiMo Harness" in captured.out
+        assert "Agent Hub" in captured.out
         assert "1.0.0" in captured.out
 
     def test_print_session_info(self, capsys):
@@ -358,7 +358,7 @@ class TestSpinner:
 
     def test_start_stop_without_color(self, capsys):
         """Should print message directly when color is disabled."""
-        mimo_harness.display.USE_COLOR = False
+        agent_hub.display.USE_COLOR = False
         spinner = Spinner("Testing")
         spinner.start()
         spinner.stop()
@@ -371,7 +371,7 @@ class TestUnicodeFallback:
 
     def test_safe_print_handles_unicode_error(self, capsys, monkeypatch):
         """_safe_print should fall back to ASCII when encoding fails."""
-        from mimo_harness.display import _safe_print
+        from agent_hub.display import _safe_print
         # _safe_print should not raise even with Unicode chars
         _safe_print("test message with unicode: ✓")
         captured = capsys.readouterr()
@@ -400,7 +400,7 @@ class TestUnicodeFallback:
         """print_banner should never raise UnicodeEncodeError."""
         print_banner("1.0.0")
         captured = capsys.readouterr()
-        assert "MiMo Harness" in captured.out
+        assert "Agent Hub" in captured.out
 
     def test_print_error_no_unicode_error(self, capsys):
         """print_error should never raise UnicodeEncodeError."""
@@ -428,7 +428,7 @@ class TestUnicodeFallback:
 
     def test_unicode_constants_defined(self):
         """All Unicode/ASCII fallback constants should be defined."""
-        from mimo_harness.display import (
+        from agent_hub.display import (
             THINK_ICON, TOOL_ICON, CHECK_ICON, CROSS_ICON,
             WARN_ICON, INFO_ICON, DOT_ICON, ARROW_ICON,
             SPINNER_FRAMES, BOX_TL, BOX_TR, BOX_BL, BOX_BR,
@@ -454,7 +454,7 @@ class TestVisibleLen:
 
     def test_ansi_colored_text(self):
         """ANSI codes should not count toward visible length."""
-        mimo_harness.display.USE_COLOR = True
+        agent_hub.display.USE_COLOR = True
         colored = _cyan("hello")
         assert _visible_len(colored) == 5
 
@@ -580,7 +580,7 @@ class TestPrintModelOutput:
 
     def test_border_width_consistent(self, capsys):
         """Top and bottom borders should have consistent visible width."""
-        from mimo_harness.display import _visible_len, _OUTPUT_BOX_WIDTH
+        from agent_hub.display import _visible_len, _OUTPUT_BOX_WIDTH
         print_model_output_start("test-model")
         print_model_output_end()
         captured = capsys.readouterr()

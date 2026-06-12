@@ -3,13 +3,13 @@
 import json
 import time
 
-from mimo_harness.tools.scheduler_tools import (
+from agent_hub.tools.scheduler_tools import (
     Scheduler,
     cron_create, cron_delete, cron_list,
     set_scheduler, get_tools,
 )
-from mimo_harness.tools.registry import ToolDef
-from mimo_harness.permissions import Permission
+from agent_hub.tools.registry import ToolDef
+from agent_hub.permissions import Permission
 
 
 class TestScheduler:

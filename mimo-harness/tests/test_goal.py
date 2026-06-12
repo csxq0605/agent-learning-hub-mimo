@@ -8,7 +8,7 @@ from unittest.mock import patch, MagicMock
 import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from mimo_harness.goal import (
+from agent_hub.goal import (
     GoalManager, GoalState, GoalEvaluator, get_goal_manager, clear_goal_manager
 )
 
@@ -164,6 +164,23 @@ class TestGoalEvaluator:
         )
         assert is_met is False
         assert "Condition not yet met" in reason
+
+    def test_evaluate_no_false_positive_done(self):
+        """Test that 'done' in conversation doesn't match 'not done yet'."""
+        is_met, reason = GoalEvaluator.evaluate(
+            "task done",
+            "Working on it... not done yet"
+        )
+        assert is_met is False
+
+    def test_evaluate_singular_test_failed(self):
+        """Test that 'test failed' (singular) is detected."""
+        is_met, reason = GoalEvaluator.evaluate(
+            "all tests pass",
+            "Running... 1 test failed"
+        )
+        assert is_met is False
+        assert "Tests still failing" in reason
 
 
 class TestGetGoalManager:

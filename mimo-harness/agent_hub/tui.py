@@ -9,6 +9,7 @@ Falls back to normal REPL when:
 """
 
 import io
+import os
 import queue
 import sys
 import threading
@@ -47,21 +48,31 @@ from .commands import SLASH_COMMANDS as _SHARED_COMMANDS, SUGGEST_COMMANDS
 
 
 class CommandSuggester(Suggester):
-    """Auto-suggest slash commands for the input widget."""
+    """Auto-suggest slash commands and @file references for the input widget."""
 
     COMMANDS = SUGGEST_COMMANDS
 
     async def get_suggestion(self, value: str) -> str | None:
-        if not value.startswith("/"):
+        # Slash command suggestions
+        if value.startswith("/"):
+            for cmd in self.COMMANDS:
+                if cmd.startswith(value) and cmd != value:
+                    return cmd
             return None
-        for cmd in self.COMMANDS:
-            if cmd.startswith(value) and cmd != value:
-                return cmd  # Return full text, not suffix
+        # @ file reference suggestions
+        at_pos = value.rfind('@')
+        if at_pos >= 0 and (at_pos == 0 or value[at_pos - 1] == ' '):
+            prefix = value[at_pos + 1:]
+            if ' ' not in prefix:
+                from .file_references import scan_completions
+                matches = scan_completions(prefix, os.getcwd(), limit=1)
+                if matches:
+                    return value[:at_pos + 1] + matches[0]
         return None
 
 
 class MiMoTUI(App):
-    """Full-screen TUI for MiMo Harness.
+    """Full-screen TUI for Agent Hub.
 
     Layout (top to bottom):
     - RichLog (#output): scrolling conversation history
@@ -242,8 +253,8 @@ class MiMoTUI(App):
     def _show_banner(self) -> None:
         log = self.query_one("#output", RichLog)
         banner = Panel(
-            "[bold cyan]MiMo Harness v0.3.0[/]\n"
-            "AI Agent powered by Xiaomi MiMo model\n"
+            "[bold cyan]Agent Hub v0.4.0[/]\n"
+            "AI Agent Harness — model agnostic\n"
             "Claude Code architecture patterns",
             border_style="cyan",
             width=56,
@@ -357,6 +368,15 @@ class MiMoTUI(App):
             padding=(0, 1),
         ))
 
+        # Resolve @ file references (same as CLI path in cli.py:579-585)
+        if not text.startswith("/"):
+            from .file_references import FileReferenceResolver
+            if FileReferenceResolver.has_references(text):
+                resolved = FileReferenceResolver.resolve_and_format(text, os.getcwd())
+                if resolved != text:
+                    self.write_output("[dim]Resolving @ file references...[/dim]")
+                    text = resolved
+
         if text.startswith("/"):
             self._handle_command(text)
         else:
@@ -423,7 +443,7 @@ class MiMoTUI(App):
         # Start streaming via queue
         _output_queue.put(("start_stream", None))
 
-        import mimo_harness.display as _display_mod
+        import agent_hub.display as _display_mod
         import io
 
         # Save originals for restore
@@ -465,7 +485,7 @@ class MiMoTUI(App):
         _display_mod._console.file = io.StringIO()
 
         # Monkey-patch permission input to route through TUI
-        import mimo_harness.permissions as _perm_mod
+        import agent_hub.permissions as _perm_mod
         orig_perm_request = _perm_mod._tui_permission_request
         _perm_mod._tui_permission_request = self._queue_permission_request
 
@@ -707,8 +727,8 @@ class MiMoTUI(App):
         self._on_agent_done()
         # Restore display override callbacks
         import builtins
-        import mimo_harness.display as _display_mod
-        import mimo_harness.permissions as _perm_mod
+        import agent_hub.display as _display_mod
+        import agent_hub.permissions as _perm_mod
         if hasattr(self, '_orig_builtins_print'):
             builtins.print = self._orig_builtins_print
         _display_mod._tui_write = None
@@ -762,7 +782,7 @@ class MiMoTUI(App):
     # ── Tab Completion ──────────────────────────────────────────
 
     def action_tab_complete(self) -> None:
-        """Cycle through matching slash commands."""
+        """Cycle through matching slash commands or @file references."""
         inp = self.query_one("#input-area", Input)
         value = inp.value
 
@@ -773,7 +793,42 @@ class MiMoTUI(App):
             inp.cursor_position = len(inp.value)
             return
 
-        # Find matches
+        # Detect @ file reference trigger
+        at_pos = value.rfind('@')
+        if at_pos >= 0 and (at_pos == 0 or value[at_pos - 1] == ' '):
+            prefix = value[at_pos + 1:]
+            if ' ' not in prefix:
+                from .file_references import scan_completions
+                # Strip line number suffix
+                search_prefix = prefix
+                line_suffix = ''
+                if ':' in prefix:
+                    parts = prefix.rsplit(':', 1)
+                    if parts[1].isdigit():
+                        search_prefix = parts[0]
+                        line_suffix = ':' + parts[1]
+                matches = scan_completions(search_prefix, os.getcwd(), limit=15)
+                if not matches:
+                    return
+                # Build full input values with each match
+                base = value[:at_pos + 1]
+                full_matches = [base + m + line_suffix for m in matches]
+
+                if len(full_matches) == 1:
+                    inp.value = full_matches[0] + " "
+                    inp.cursor_position = len(inp.value)
+                    self._tab_matches = []
+                    self._tab_idx = -1
+                else:
+                    self._tab_matches = full_matches
+                    self._tab_prefix = value
+                    self._tab_idx = 0
+                    inp.value = full_matches[0]
+                    inp.cursor_position = len(inp.value)
+                    self.write_output("  [dim]" + "  ".join(matches) + "[/dim]")
+                return
+
+        # Find slash command matches
         if not value.startswith("/"):
             return
         matches = [cmd for cmd in self.COMMANDS if cmd.startswith(value)]

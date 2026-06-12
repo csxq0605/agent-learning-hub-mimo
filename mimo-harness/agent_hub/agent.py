@@ -235,7 +235,7 @@ def retry_with_backoff(fn, max_retries: int = 3, base_delay: float = 1.0):
 # ---------------------------------------------------------------------------
 # Main Agent Harness
 # ---------------------------------------------------------------------------
-class MiMoHarness:
+class AgentHub:
     """Production-grade agent harness following Claude Code architecture.
 
     Key patterns from the book:
@@ -245,7 +245,7 @@ class MiMoHarness:
     - Ch7: progressive context compression, circuit breaker, token budget
     """
 
-    SYSTEM_PROMPT_TEMPLATE = """You are MiMo Harness, a capable AI assistant powered by Xiaomi MiMo model.
+    SYSTEM_PROMPT_TEMPLATE = """You are Agent Hub, a capable AI assistant.
 You help users with coding, file operations, web research, document creation, and system tasks.
 
 ## Rules

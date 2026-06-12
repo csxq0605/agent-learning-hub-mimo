@@ -286,12 +286,13 @@ def test_classify_action_safe_command():
   - get_performance_stats 性能统计
   - CLI 命令（/subagents, /subagent, /parallel, /pipeline）
 
-### 全项目最终状态（2026-06-05）
+### 全项目最终状态（2026-06-12）
 
-- **总测试数**: 760 单元 + 46 E2E = 806 个测试全部通过
-- **测试文件**: 23 个测试文件覆盖所有模块
+- **总测试数**: 928 单元 + 73 E2E = 1001 个测试全部通过
+- **测试文件**: 24 个测试文件覆盖所有模块
+- **E2E 分层**: 57 fast（默认运行）+ 16 slow（`--run-slow` 启用）
 - **代码规模**: ~6500 行 Python（harness 核心）+ ~3000 行测试 + ~1500 行 stage 实现
-- **新增模块**: `display.py`（结构化 CLI 显示，830 行）
+- **新增模块**: `display.py`（830 行）、`agents.py`、`background_tasks.py`、`file_references.py`、`goal.py`、`commands.py`
 - **CI/CD**: GitHub Actions — unit-tests (4 Python 版本矩阵，push/PR 自动) + e2e-fast (仅手动触发) + e2e-full (仅手动触发)
 - **当前状态**: 无已知 bug，代码质量稳定，CLI 体验显著提升
 
@@ -344,10 +345,11 @@ def test_classify_action_safe_command():
 - CLI 冲突参数
 
 **E2E 优化**：
-- 51 → 46 个测试（合并冗余）
-- 34 个 fast + 12 个 slow 分组
-- fast 测试 push/PR 自动运行（~10min）
-- slow 测试仅手动触发（~20min）
+- 51 → 46 → 73 个测试（合并冗余 + 新增 Tasks 6-10 覆盖）
+- 57 个 fast + 16 个 slow 分组
+- fast 测试 push/PR 自动运行（~5min）
+- slow 测试仅手动触发（~6min）
+- `--run-slow` 控制 slow 测试开关
 
 ### 任务 4 最终成果（2026-06-04）
 
@@ -370,7 +372,7 @@ def test_classify_action_safe_command():
 
 ### 任务 4：CLI 流式输出与思考过程展示
 
-**问题描述**：当前使用 mimo-harness CLI 时，输入指令后完全看不到模型在做什么——既没有显示思考过程，也没有中间输出，用户体验与 claude-code、codex 有明显差距。
+**问题描述**：当前使用 agent-hub CLI 时，输入指令后完全看不到模型在做什么——既没有显示思考过程，也没有中间输出，用户体验与 claude-code、codex 有明显差距。
 
 **目标**：
 - 实现流式输出（streaming），让用户实时看到模型生成的内容
@@ -402,7 +404,7 @@ def test_classify_action_safe_command():
 
 **问题描述**：当前 CLI 界面非常简陋，没有任何结构化展示，信息密度低且难以阅读。
 
-**目标**：参考 claude-code 的结构化 CLI 界面，重构 mimo-harness 的 CLI 输出。
+**目标**：参考 claude-code 的结构化 CLI 界面，重构 agent-hub 的 CLI 输出。
 
 **参考实现**：claude-code CLI 界面
 - 清晰的对话气泡/区域划分（用户输入 vs 模型输出）
@@ -459,6 +461,7 @@ def test_classify_action_safe_command():
 - 修改 `tui.py`：ESC 键绑定到 `action_interrupt` 方法
 - 行为：Agent 运行时中断、输入有文本时清空并保存历史、输入为空时退出
 - 测试结果：926 个测试全部通过
+- E2E 测试：3 fast（目标评估、agent 调用）+ 2 slow（session 记录、fork）
 
 ---
 
@@ -520,6 +523,7 @@ def test_classify_action_safe_command():
 - 支持项目级和用户级智能体定义
 - `/agents` 命令：list、create、delete、show 子命令
 - 测试结果：926 个测试全部通过
+- E2E 测试：2 slow（创建 agent + API 调用、预设模板验证）
 
 ---
 
@@ -556,6 +560,7 @@ def test_classify_action_safe_command():
 - 支持任务创建、列表、取消、清理
 - `/tasks` 命令：list、show、cancel、cleanup 子命令
 - 测试结果：926 个测试全部通过
+- E2E 测试：3 fast（生命周期、取消、并发）
 
 ---
 
@@ -576,7 +581,7 @@ def test_classify_action_safe_command():
 - **VS Code 集成**：在 IDE 中可通过 @-mentions 引用编辑器中的文件
 
 **验收标准**：
-- [ ] 输入 `@` 触发文件路径自动补全
+- [x] 输入 `@` 触发文件路径自动补全
 - [x] 支持 `@filename` 语法引用单个文件
 - [x] 支持 `@folder/` 语法引用文件夹（显示目录结构）
 - [x] 引用的文件内容自动添加到对话上下文
@@ -589,6 +594,7 @@ def test_classify_action_safe_command():
 - 支持 @filename、@folder/、@*.ext 语法
 - 自动解析并注入文件内容到上下文
 - 测试结果：926 个测试全部通过
+- E2E 测试：4 fast（agent 读取引用文件、glob 解析、目录结构、404 提示）
 
 ---
 
@@ -635,6 +641,7 @@ def test_classify_action_safe_command():
 - 支持 /goal 设置、查看、清除目标
 - 简单关键词评估（可扩展为模型评估）
 - 测试结果：926 个测试全部通过
+- E2E 测试：10 fast（目标设置/评估/agent 联动 × 3、评估器 7 个用例）
 
 ---
 

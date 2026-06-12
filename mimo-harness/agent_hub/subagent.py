@@ -236,7 +236,7 @@ class SubAgent:
     # Thread-safe import cache
     _import_lock = threading.Lock()
     _imports_cached = False
-    _MiMoHarness = None
+    _AgentHub = None
     _AgentDeps = None
     _Session = None
 
@@ -258,20 +258,20 @@ class SubAgent:
             if not SubAgent._imports_cached:
                 with SubAgent._import_lock:
                     if not SubAgent._imports_cached:
-                        from .agent import MiMoHarness, AgentDeps
+                        from .agent import AgentHub, AgentDeps
                         from .context import Session
                         from .tools.file_ops import FileOpsState, set_file_ops_state
-                        SubAgent._MiMoHarness = MiMoHarness
+                        SubAgent._AgentHub = AgentHub
                         SubAgent._AgentDeps = AgentDeps
                         SubAgent._Session = Session
                         SubAgent._imports_cached = True
 
-            MiMoHarness = SubAgent._MiMoHarness
+            AgentHub = SubAgent._AgentHub
             AgentDeps = SubAgent._AgentDeps
             Session = SubAgent._Session
 
             # Create a child harness with limited capabilities
-            child_harness = MiMoHarness(
+            child_harness = AgentHub(
                 model=self.parent_harness.model if self.parent_harness else None,
                 auto_approve=self.config.auto_approve,
                 dry_run=self.parent_harness.perms.dry_run if self.parent_harness else False,
@@ -824,7 +824,7 @@ def run_parallel_tasks(
 
     Args:
         tasks: List of task descriptions
-        parent_harness: Parent MiMoHarness instance
+        parent_harness: Parent AgentHub instance
         max_concurrent: Maximum concurrent SubAgents
 
     Returns:
@@ -846,7 +846,7 @@ def run_pipeline_tasks(
 
     Args:
         stages: List of dicts with 'task' and optional 'description', 'allowed_tools'
-        parent_harness: Parent MiMoHarness instance
+        parent_harness: Parent AgentHub instance
 
     Returns:
         List of SubAgentResult

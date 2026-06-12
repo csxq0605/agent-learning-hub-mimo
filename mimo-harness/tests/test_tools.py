@@ -5,7 +5,7 @@ import json
 import os
 import sys
 import time
-from mimo_harness.tools import file_ops, shell, code_exec, math_tools, web_tools, interactive, monitor, doc_tools
+from agent_hub.tools import file_ops, shell, code_exec, math_tools, web_tools, interactive, monitor, doc_tools
 
 
 class TestFileOps:

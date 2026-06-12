@@ -8,7 +8,7 @@ from unittest.mock import patch, MagicMock
 import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from mimo_harness.background_tasks import (
+from agent_hub.background_tasks import (
     BackgroundTaskManager, BackgroundTask, TaskState, get_task_manager
 )
 

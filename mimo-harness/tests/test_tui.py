@@ -1,4 +1,4 @@
-"""Tests for the Textual TUI interface (mimo_harness/tui.py).
+"""Tests for the Textual TUI interface (agent_hub/tui.py).
 
 Tests the TUI components without launching a full-screen application.
 Focuses on the CommandSuggester, history, and tab completion logic.
@@ -14,7 +14,7 @@ class TestCommandSuggester:
 
     @pytest.fixture
     def suggester(self):
-        from mimo_harness.tui import CommandSuggester
+        from agent_hub.tui import CommandSuggester
         return CommandSuggester()
 
     def test_no_suggestion_for_non_slash(self, suggester):
@@ -54,12 +54,12 @@ class TestStreamBuffer:
     """Test the output queue mechanism."""
 
     def test_output_queue_exists(self):
-        from mimo_harness.tui import _output_queue
+        from agent_hub.tui import _output_queue
         import queue
         assert isinstance(_output_queue, queue.Queue)
 
     def test_queue_put_get(self):
-        from mimo_harness.tui import _output_queue
+        from agent_hub.tui import _output_queue
         # Drain any existing items
         while not _output_queue.empty():
             try:
@@ -76,25 +76,25 @@ class TestTUIImports:
     """Test that TUI module imports correctly."""
 
     def test_import_mimo_tui(self):
-        from mimo_harness.tui import MiMoTUI
+        from agent_hub.tui import MiMoTUI
         assert MiMoTUI is not None
 
     def test_import_run_tui(self):
-        from mimo_harness.tui import run_tui
+        from agent_hub.tui import run_tui
         assert callable(run_tui)
 
     def test_import_output_queue(self):
-        from mimo_harness.tui import _output_queue
+        from agent_hub.tui import _output_queue
         import queue
         assert isinstance(_output_queue, queue.Queue)
 
     def test_import_set_get_app(self):
-        from mimo_harness.tui import _get_tui_app, _set_tui_app
+        from agent_hub.tui import _get_tui_app, _set_tui_app
         assert callable(_get_tui_app)
         assert callable(_set_tui_app)
 
     def test_default_tui_app_is_none(self):
-        from mimo_harness.tui import _get_tui_app
+        from agent_hub.tui import _get_tui_app
         app = _get_tui_app()
         assert app is None
 
@@ -103,7 +103,7 @@ class TestTUIClass:
     """Test MiMoTUI class attributes without launching the app."""
 
     def test_has_command_list(self):
-        from mimo_harness.tui import MiMoTUI
+        from agent_hub.tui import MiMoTUI
         assert hasattr(MiMoTUI, 'COMMANDS')
         assert len(MiMoTUI.COMMANDS) > 20
         assert "/help" in MiMoTUI.COMMANDS
@@ -112,7 +112,7 @@ class TestTUIClass:
         assert "/mode" in MiMoTUI.COMMANDS
 
     def test_has_bindings(self):
-        from mimo_harness.tui import MiMoTUI
+        from agent_hub.tui import MiMoTUI
         binding_keys = [b.key for b in MiMoTUI.BINDINGS]
         assert "ctrl+c" in binding_keys
         assert "escape" in binding_keys
@@ -121,7 +121,7 @@ class TestTUIClass:
         assert "tab" in binding_keys
 
     def test_has_css(self):
-        from mimo_harness.tui import MiMoTUI
+        from agent_hub.tui import MiMoTUI
         assert MiMoTUI.CSS is not None
         assert "#output" in MiMoTUI.CSS
         assert "#input-area" in MiMoTUI.CSS
@@ -129,7 +129,7 @@ class TestTUIClass:
         assert "#status-bar" in MiMoTUI.CSS
 
     def test_has_required_methods(self):
-        from mimo_harness.tui import MiMoTUI
+        from agent_hub.tui import MiMoTUI
         expected_methods = [
             'compose', 'on_mount', 'on_unmount',
             'write_output', '_show_banner', '_update_status_bar',

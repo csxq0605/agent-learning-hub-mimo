@@ -10,7 +10,7 @@ class TraceLogger:
     def __init__(self, log_file: str = None, verbose: bool = False):
         self.session_id = secrets.token_hex(4)
         self.step = 0
-        self.logger = logging.getLogger("mimo-harness")
+        self.logger = logging.getLogger("agent-hub")
         self.logger.setLevel(logging.DEBUG)
         if not self.logger.handlers:
             if log_file:

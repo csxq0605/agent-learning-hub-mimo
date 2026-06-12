@@ -3,14 +3,14 @@
 import json
 import os
 import pytest
-from mimo_harness.settings import SettingsManager, SETTINGS_LEVELS
+from agent_hub.settings import SettingsManager, SETTINGS_LEVELS
 
 
 def _setup_settings(tmp_path, monkeypatch):
     """Helper: create fake home dir and patch Path.home()."""
     fake_home = tmp_path / "fake_home"
     fake_home.mkdir()
-    monkeypatch.setattr("mimo_harness.settings.Path.home", staticmethod(lambda: fake_home))
+    monkeypatch.setattr("agent_hub.settings.Path.home", staticmethod(lambda: fake_home))
     return fake_home
 
 

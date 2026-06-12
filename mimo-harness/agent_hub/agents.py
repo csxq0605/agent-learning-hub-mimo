@@ -197,7 +197,8 @@ class AgentDiscovery:
                 source_path=filepath,
                 source_type=source_type,
             )
-        except Exception:
+        except Exception as e:
+            print(f"Warning: Failed to load agent from {filepath}: {e}")
             return None
 
 
@@ -262,7 +263,6 @@ class AgentManager:
         abs_agents_dir = os.path.abspath(agents_dir)
 
         # Use pathlib for robust path comparison
-        from pathlib import Path
         try:
             Path(abs_filepath).relative_to(Path(abs_agents_dir))
         except ValueError:

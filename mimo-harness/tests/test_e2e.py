@@ -1,4 +1,4 @@
-"""End-to-End tests for MiMo Harness — real API calls, real tool execution.
+"""End-to-End tests for Agent Hub — real API calls, real tool execution.
 
 Uses the real MiMo API from .env. No mocking of LLM calls.
 All tools run against a temp directory inside CWD (file_ops sandbox requirement).
@@ -16,13 +16,14 @@ import os
 import sys
 import shutil
 import subprocess
+import time
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from mimo_harness.agent import MiMoHarness
-from mimo_harness.context import Session
-from mimo_harness.tools import file_ops
+from agent_hub.agent import AgentHub
+from agent_hub.context import Session
+from agent_hub.tools import file_ops
 
 # All E2E tests require a real API key
 pytestmark = pytest.mark.skipif(
@@ -76,7 +77,7 @@ def _harness(auto_approve=True, max_steps=10, max_duration=120.0):
     """
     # Ensure allowed_write_dir is current CWD (may have been changed by previous tests)
     file_ops.set_allowed_write_dir(os.getcwd())
-    return MiMoHarness(auto_approve=auto_approve, bare=True, max_steps=max_steps, max_duration=max_duration)
+    return AgentHub(auto_approve=auto_approve, bare=True, max_steps=max_steps, max_duration=max_duration)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -278,7 +279,7 @@ class TestE2EMultiStep:
         target = os.path.join(work_dir, "calc.py")
 
         # Use longer max_duration — execute_python API calls can be slow
-        harness = MiMoHarness(auto_approve=True, bare=True, max_steps=15, max_duration=180.0)
+        harness = AgentHub(auto_approve=True, bare=True, max_steps=15, max_duration=180.0)
         file_ops.set_allowed_write_dir(os.getcwd())
         result = harness.run(
             f"Create a Python script at {target} that calculates and prints "
@@ -401,7 +402,7 @@ class TestE2ETokenBudgetExhaustion:
 
     def test_token_budget_blocks_when_exceeded(self):
         """Agent should stop when token budget is exceeded."""
-        from mimo_harness.agent import TokenBudget
+        from agent_hub.agent import TokenBudget
         harness = _harness(max_steps=10)
         # Set a very small token budget that will be exceeded
         harness.token_budget = TokenBudget(max_tokens=1000)
@@ -420,8 +421,8 @@ class TestE2ETokenCounter:
 
     def test_token_count_accuracy_vs_api_response(self):
         """Compare our token count with the API's reported usage."""
-        from mimo_harness.token_counter import count_messages_tokens
-        from mimo_harness.config import MIMO_BASE_URL, MIMO_MODEL, require_api_key
+        from agent_hub.token_counter import count_messages_tokens
+        from agent_hub.config import MIMO_BASE_URL, MIMO_MODEL, require_api_key
         from openai import OpenAI
 
         api_key = require_api_key()
@@ -473,14 +474,14 @@ class TestE2ECompactContext:
     """Compact context with real MiMo API calls."""
 
     def _get_client(self):
-        from mimo_harness.config import MIMO_BASE_URL, MIMO_MODEL, require_api_key
+        from agent_hub.config import MIMO_BASE_URL, MIMO_MODEL, require_api_key
         from openai import OpenAI
         api_key = require_api_key()
         return OpenAI(api_key=api_key, base_url=MIMO_BASE_URL), MIMO_MODEL
 
     def test_compact_context_with_llm(self):
         """LLM compression should reduce message count."""
-        from mimo_harness.context import compact_context, estimate_tokens, COMPRESS_TRIGGER_TOKENS
+        from agent_hub.context import compact_context, estimate_tokens, COMPRESS_TRIGGER_TOKENS
 
         client, model = self._get_client()
         # Create messages large enough to exceed token threshold
@@ -507,7 +508,7 @@ class TestE2ECompactContext:
 
 def _run_cli(*args, timeout=120):
     """Run the CLI as a subprocess."""
-    cmd = [sys.executable, "-m", "mimo_harness.cli"] + list(args)
+    cmd = [sys.executable, "-m", "agent_hub.cli"] + list(args)
     # Ensure UTF-8 encoding for subprocess output (Windows GBK fix)
     env = os.environ.copy()
     env["PYTHONIOENCODING"] = "utf-8"
@@ -681,8 +682,8 @@ class TestMainFunctionPaths:
 
     def test_main_single_task(self, monkeypatch, capsys):
         """main() with --task runs and produces output."""
-        monkeypatch.setattr("sys.argv", ["mimo", "--task", "Reply with the word hello."])
-        from mimo_harness.cli import main
+        monkeypatch.setattr("sys.argv", ["ah", "--task", "Reply with the word hello."])
+        from agent_hub.cli import main
         main()
         output = capsys.readouterr().out.strip()
         assert len(output) > 0
@@ -690,17 +691,17 @@ class TestMainFunctionPaths:
 
     def test_main_flags_accepted(self, monkeypatch, capsys):
         """main() accepts --dry-run without crash (no API call)."""
-        monkeypatch.setattr("sys.argv", ["mimo", "--task", "test", "--dry-run"])
-        from mimo_harness.cli import main
+        monkeypatch.setattr("sys.argv", ["ah", "--task", "test", "--dry-run"])
+        from agent_hub.cli import main
         main()
         output = capsys.readouterr().out.strip()
         assert len(output) > 0, "Dry-run should produce output"
 
     def test_main_repl_quit(self, monkeypatch, capsys):
         """REPL exits cleanly on /quit."""
-        monkeypatch.setattr("sys.argv", ["mimo"])
+        monkeypatch.setattr("sys.argv", ["ah"])
         monkeypatch.setattr("builtins.input", lambda _="": "/quit")
-        from mimo_harness.cli import main
+        from agent_hub.cli import main
         main()
         assert "Bye!" in capsys.readouterr().out
 
@@ -777,4 +778,310 @@ class TestCLISessionId:
         decoder = json.JSONDecoder()
         data, _ = decoder.raw_decode(result.stdout, json_start)
         assert data["session_id"] == "test-session-123"
+
+
+# ═══════════════════════════════════════════════════════════════
+# Goal-driven agent behavior — real API
+# ═══════════════════════════════════════════════════════════════
+
+class TestGoalDrivenE2E:
+    """Goal system with real agent execution."""
+
+    def test_goal_set_and_evaluate(self):
+        from agent_hub.goal import GoalManager, GoalEvaluator
+        manager = GoalManager()
+        manager.set_goal("all tests pass")
+        is_met, reason = GoalEvaluator.evaluate(
+            "all tests pass", "Running tests... all tests passed"
+        )
+        assert is_met is True
+        manager.clear_goal()
+
+    def test_goal_not_met_continues(self):
+        from agent_hub.goal import GoalManager, GoalEvaluator
+        manager = GoalManager()
+        manager.set_goal("all tests pass")
+        is_met, reason = GoalEvaluator.evaluate(
+            "all tests pass", "Running tests... 3 test failed"
+        )
+        assert is_met is False
+        manager.clear_goal()
+
+    def test_goal_with_real_agent(self):
+        from agent_hub.goal import get_goal_manager
+        manager = get_goal_manager("e2e-goal-test")
+        manager.set_goal("answer the math question")
+        harness = _harness(max_steps=5)
+        result = harness.run("What is 7 * 8? Reply with just the number.")
+        assert "56" in result
+        status = manager.get_status()
+        assert status['active'] is True
+        manager.clear_goal()
+
+
+# ═══════════════════════════════════════════════════════════════
+# @file references with real agent — fast
+# ═══════════════════════════════════════════════════════════════
+
+class TestAtFileRefE2E:
+    """@file reference resolution with real agent reading."""
+
+    def test_agent_reads_referenced_file(self, work_dir):
+        target = os.path.join(work_dir, "data.txt")
+        with open(target, "w") as f:
+            f.write("The answer is ZETA-7742")
+        from agent_hub.file_references import FileReferenceResolver
+        user_input = f"Read @{target} and tell me what the answer is."
+        resolved = FileReferenceResolver.resolve_and_format(user_input, os.getcwd())
+        harness = _harness(max_steps=5)
+        result = harness.run(resolved)
+        assert "ZETA-7742" in result
+
+    def test_at_file_resolve_glob(self, work_dir):
+        for name in ["a.py", "b.py", "c.txt"]:
+            with open(os.path.join(work_dir, name), "w") as f:
+                f.write(f"content of {name}")
+        from agent_hub.file_references import FileReferenceParser
+        resolved = FileReferenceParser.resolve_reference("*.py", work_dir)
+        assert len(resolved) == 2
+        names = [os.path.basename(r) for r in resolved]
+        assert "a.py" in names and "b.py" in names
+
+    def test_at_file_resolve_directory(self, work_dir):
+        src = os.path.join(work_dir, "src")
+        os.makedirs(src)
+        with open(os.path.join(src, "main.py"), "w") as f:
+            f.write("print('hi')")
+        from agent_hub.file_references import FileReferenceParser
+        structure = FileReferenceParser.read_directory_structure(src)
+        assert "main.py" in structure
+
+    def test_at_file_not_found(self, work_dir):
+        from agent_hub.file_references import FileReferenceResolver
+        result = FileReferenceResolver.resolve_and_format(
+            "Check @nonexistent.txt", work_dir
+        )
+        assert "not found" in result.lower() or "nonexistent" in result
+
+
+# ═══════════════════════════════════════════════════════════════
+# Agent management — create agent then invoke via API
+# ═══════════════════════════════════════════════════════════════
+
+@pytest.mark.slow
+class TestAgentInvocationE2E:
+    """Create custom agent, then invoke it with real API."""
+
+    def test_create_and_use_agent(self, work_dir, monkeypatch):
+        from agent_hub.agents import AgentManager, get_preset
+        monkeypatch.chdir(work_dir)
+        monkeypatch.setenv("USERPROFILE", work_dir)
+        monkeypatch.setenv("HOME", work_dir)
+        manager = AgentManager(project_root=work_dir)
+        preset = get_preset("code-reviewer")
+        filepath = manager.create_agent(
+            name="code-reviewer",
+            description=preset["description"],
+            prompt=preset["prompt"],
+            tools=preset.get("tools"),
+        )
+        assert os.path.exists(filepath)
+        agent = manager.get_agent("code-reviewer")
+        assert agent is not None
+        harness = _harness(max_steps=5)
+        result = harness.run(
+            f"Using this system prompt: {agent.config.prompt}\n\n"
+            "Review this code: x = 1\n"
+            "Is there anything wrong? Reply briefly."
+        )
+        assert len(result) > 10
+
+    def test_agent_preset_templates_work(self):
+        from agent_hub.agents import get_preset_names, get_preset
+        for name in get_preset_names():
+            preset = get_preset(name)
+            assert "description" in preset
+            assert "prompt" in preset
+            assert len(preset["prompt"]) > 20
+
+
+# ═══════════════════════════════════════════════════════════════
+# Background tasks — fast
+# ═══════════════════════════════════════════════════════════════
+
+class TestBackgroundTasksE2E:
+    """Background task system with real operations."""
+
+    def test_task_lifecycle(self):
+        from agent_hub.background_tasks import BackgroundTaskManager, TaskState
+        manager = BackgroundTaskManager()
+        task_id = manager.create_task("Compute sum", lambda: sum(range(100)))
+        manager.wait_for_task(task_id, timeout=5.0)
+        task = manager.get_task(task_id)
+        assert task.state == TaskState.COMPLETED
+        assert task.output == "4950"
+        manager.cleanup_completed()
+
+    def test_task_cancel(self):
+        from agent_hub.background_tasks import BackgroundTaskManager, TaskState
+        manager = BackgroundTaskManager()
+        task_id = manager.create_task("Long running", lambda: time.sleep(30))
+        time.sleep(0.05)
+        assert manager.cancel_task(task_id) is True
+        assert manager.get_task(task_id).state == TaskState.CANCELLED
+
+    def test_concurrent_tasks(self):
+        from agent_hub.background_tasks import BackgroundTaskManager, TaskState
+        manager = BackgroundTaskManager()
+        ids = []
+        for i in range(5):
+            ids.append(manager.create_task(f"Task-{i}", lambda v=i: v * 2))
+        for tid in ids:
+            manager.wait_for_task(tid, timeout=5.0)
+        results = {tid: manager.get_task(tid).output for tid in ids}
+        assert results[ids[0]] == "0"
+        assert results[ids[4]] == "8"
+        manager.cleanup_completed()
+
+
+# ═══════════════════════════════════════════════════════════════
+# Goal evaluator — realistic conversation patterns
+# ═══════════════════════════════════════════════════════════════
+
+class TestGoalEvaluatorE2E:
+    """GoalEvaluator with realistic API output patterns."""
+
+    def test_tests_passing(self):
+        from agent_hub.goal import GoalEvaluator
+        is_met, _ = GoalEvaluator.evaluate(
+            "all tests pass", "Running pytest... all tests passed in 12.3s"
+        )
+        assert is_met is True
+
+    def test_tests_failing(self):
+        from agent_hub.goal import GoalEvaluator
+        is_met, _ = GoalEvaluator.evaluate(
+            "all tests pass", "Running pytest... 3 test failed"
+        )
+        assert is_met is False
+
+    def test_build_success(self):
+        from agent_hub.goal import GoalEvaluator
+        is_met, _ = GoalEvaluator.evaluate(
+            "build success", "Building... build successful"
+        )
+        assert is_met is True
+
+    def test_build_failed(self):
+        from agent_hub.goal import GoalEvaluator
+        is_met, _ = GoalEvaluator.evaluate(
+            "build success", "Building... build failed"
+        )
+        assert is_met is False
+
+    def test_no_false_positive_not_done(self):
+        from agent_hub.goal import GoalEvaluator
+        is_met, _ = GoalEvaluator.evaluate(
+            "task done", "Working... not done yet"
+        )
+        assert is_met is False
+
+    def test_no_false_positive_undone(self):
+        from agent_hub.goal import GoalEvaluator
+        is_met, _ = GoalEvaluator.evaluate(
+            "task done", "Changes were undone"
+        )
+        assert is_met is False
+
+    def test_singular_test_failed(self):
+        from agent_hub.goal import GoalEvaluator
+        is_met, _ = GoalEvaluator.evaluate(
+            "all tests pass", "1 test failed out of 100"
+        )
+        assert is_met is False
+
+
+# ═══════════════════════════════════════════════════════════════
+# Commands module — single source of truth
+# ═══════════════════════════════════════════════════════════════
+
+class TestCommandsModule:
+    """commands.py is the single source of truth for slash commands."""
+
+    def test_slash_commands_not_empty(self):
+        from agent_hub.commands import SLASH_COMMANDS
+        assert len(SLASH_COMMANDS) > 20
+
+    def test_suggest_is_subset(self):
+        from agent_hub.commands import SLASH_COMMANDS, SUGGEST_COMMANDS
+        for cmd in SUGGEST_COMMANDS:
+            assert cmd in SLASH_COMMANDS
+
+    def test_new_commands_registered(self):
+        from agent_hub.commands import SLASH_COMMANDS
+        for cmd in ["/agents", "/tasks", "/goal", "/skills", "/mcp",
+                    "/skills install", "/mcp install"]:
+            assert cmd in SLASH_COMMANDS
+
+    def test_tab_suggester(self):
+        from agent_hub.tui import CommandSuggester
+        import asyncio
+        suggester = CommandSuggester()
+        loop = asyncio.new_event_loop()
+        assert loop.run_until_complete(suggester.get_suggestion("/he")) == "/help"
+        assert loop.run_until_complete(suggester.get_suggestion("hello")) is None
+        loop.close()
+
+
+# ═══════════════════════════════════════════════════════════════
+# Singleton safety
+# ═══════════════════════════════════════════════════════════════
+
+class TestSingletonSafety:
+    """Global singletons behave correctly."""
+
+    def test_task_manager_singleton(self):
+        from agent_hub.background_tasks import get_task_manager
+        assert get_task_manager() is get_task_manager()
+
+    def test_goal_manager_per_session(self):
+        from agent_hub.goal import get_goal_manager, clear_goal_manager
+        m1 = get_goal_manager("s1")
+        m2 = get_goal_manager("s1")
+        m3 = get_goal_manager("s2")
+        assert m1 is m2 and m1 is not m3
+        clear_goal_manager("s1")
+        clear_goal_manager("s2")
+
+
+# ═══════════════════════════════════════════════════════════════
+# Session operations with real API — slow
+# ═══════════════════════════════════════════════════════════════
+
+@pytest.mark.slow
+class TestSessionWithAPI:
+    """Session save/load/fork with real API interactions."""
+
+    def test_session_records_messages(self):
+        harness = _harness(max_steps=5)
+        result = harness.run("What is 3 + 4? Reply with just the number.")
+        assert "7" in result
+        session = harness._last_session
+        assert session is not None
+        roles = [m["role"] for m in session.messages]
+        assert "user" in roles
+        assert "assistant" in roles
+
+    def test_session_fork_preserves_history(self, tmp_path):
+        harness = _harness(max_steps=5)
+        session = Session(session_id="fork-test", auto_save_dir=str(tmp_path))
+        harness.run("What is 2 + 2?", session=session)
+        assert len(session.messages) >= 2
+        import uuid
+        old_id = session.session_id
+        new_id = f"fork-{uuid.uuid4().hex[:8]}"
+        session.session_id = new_id
+        session.name = f"fork-{old_id[:8]}"
+        assert session.session_id != old_id
+        assert len(session.messages) >= 2
 

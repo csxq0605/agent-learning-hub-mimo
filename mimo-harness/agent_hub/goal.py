@@ -125,9 +125,9 @@ class GoalEvaluator:
 
         # Check for test-related conditions
         if 'test' in condition_lower and 'pass' in condition_lower:
-            if 'all tests passed' in conversation_lower or 'passed' in conversation_lower:
+            if 'all tests passed' in conversation_lower or 'all tests pass' in conversation_lower:
                 return True, "Tests appear to be passing"
-            if 'failed' in conversation_lower or 'error' in conversation_lower:
+            if 'test failed' in conversation_lower or 'tests failed' in conversation_lower:
                 return False, "Tests still failing"
 
         # Check for build-related conditions
@@ -137,9 +137,10 @@ class GoalEvaluator:
             if 'build failed' in conversation_lower:
                 return False, "Build still failing"
 
-        # Check for completion keywords
+        # Check for completion keywords — use exact phrase matching to avoid
+        # false positives like "not done yet" or "undone"
         if 'done' in condition_lower or 'complete' in condition_lower:
-            if 'task complete' in conversation_lower or 'done' in conversation_lower:
+            if 'task complete' in conversation_lower or 'task done' in conversation_lower:
                 return True, "Task appears complete"
 
         # Default: not met

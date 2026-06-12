@@ -4,9 +4,9 @@ import json
 import pytest
 from unittest.mock import MagicMock, patch
 
-from mimo_harness.tools.subagent_tools import get_tools, _make_run_handler
-from mimo_harness.tools.registry import ToolDef
-from mimo_harness.permissions import Permission
+from agent_hub.tools.subagent_tools import get_tools, _make_run_handler
+from agent_hub.tools.registry import ToolDef
+from agent_hub.permissions import Permission
 
 
 # ---------------------------------------------------------------------------
@@ -70,7 +70,7 @@ class TestGetTools:
 class TestHandlerSuccess:
     def _make_result(self, **overrides):
         """Build a mock SubAgentResult."""
-        from mimo_harness.subagent import SubAgentState
+        from agent_hub.subagent import SubAgentState
         defaults = {
             "subagent_id": "abc12345",
             "task": "do something",
@@ -89,7 +89,7 @@ class TestHandlerSuccess:
         return result
 
     def test_returns_json_with_result(self, mock_harness):
-        from mimo_harness.subagent import SubAgentState
+        from agent_hub.subagent import SubAgentState
         mock_harness.subagent_manager.run_single.return_value = self._make_result()
 
         handler = _make_run_handler(mock_harness)
@@ -128,7 +128,7 @@ class TestHandlerSuccess:
 
 class TestHandlerFailure:
     def test_failed_state_returns_error(self, mock_harness):
-        from mimo_harness.subagent import SubAgentState
+        from agent_hub.subagent import SubAgentState
         result = MagicMock()
         result.subagent_id = "fail123"
         result.state = SubAgentState.FAILED
@@ -162,7 +162,7 @@ class TestHandlerFailure:
 
 class TestDefaults:
     def test_default_effort_medium(self, mock_harness):
-        from mimo_harness.subagent import SubAgentState
+        from agent_hub.subagent import SubAgentState
         result = MagicMock()
         result.subagent_id = "x"
         result.state = SubAgentState.COMPLETED
@@ -180,7 +180,7 @@ class TestDefaults:
         assert config.effort == "medium"
 
     def test_default_allowed_tools_none(self, mock_harness):
-        from mimo_harness.subagent import SubAgentState
+        from agent_hub.subagent import SubAgentState
         result = MagicMock()
         result.subagent_id = "x"
         result.state = SubAgentState.COMPLETED

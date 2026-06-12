@@ -15,7 +15,7 @@ import subprocess
 import platform
 import threading
 
-_logger = logging.getLogger("mimo-harness.hooks")
+_logger = logging.getLogger("agent-hub.hooks")
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional, Callable

@@ -4,10 +4,10 @@ import pytest
 import json
 import tempfile
 import os
-from mimo_harness.permissions import (
+from agent_hub.permissions import (
     Permission, PermissionRule, PermissionGate,
 )
-from mimo_harness.security_pipeline import SafetyDecision, ClassificationResult, ReviewResult
+from agent_hub.security_pipeline import SafetyDecision, ClassificationResult, ReviewResult
 
 
 class TestPermissionGate:
@@ -104,21 +104,21 @@ class TestPermissionGate:
     def test_check_bypass_mode_allows(self):
         """BYPASS mode auto-approves non-dangerous actions."""
         gate = PermissionGate(auto_approve=True)
-        from mimo_harness.permissions import PermissionMode
+        from agent_hub.permissions import PermissionMode
         gate.mode = PermissionMode.BYPASS
         assert gate.check(Permission.WRITE, "write_file(path)")
 
     def test_check_bypass_mode_blocks_dangerous_rm(self):
         """BYPASS mode blocks dangerous rm commands."""
         gate = PermissionGate(auto_approve=True)
-        from mimo_harness.permissions import PermissionMode
+        from agent_hub.permissions import PermissionMode
         gate.mode = PermissionMode.BYPASS
         assert not gate.check(Permission.WRITE, "run_command(rm -rf /)")
 
     def test_check_dont_ask_mode_allow(self):
         """DONT_ASK mode with matching allow rule."""
         gate = PermissionGate()
-        from mimo_harness.permissions import PermissionMode
+        from agent_hub.permissions import PermissionMode
         gate.mode = PermissionMode.DONT_ASK
         gate.rules.append(PermissionRule(tool_pattern="write_file", action="allow"))
         assert gate.check(Permission.WRITE, "write_file(path)")
@@ -126,28 +126,28 @@ class TestPermissionGate:
     def test_check_dont_ask_mode_no_match_deny(self):
         """DONT_ASK mode with no matching rule denies."""
         gate = PermissionGate()
-        from mimo_harness.permissions import PermissionMode
+        from agent_hub.permissions import PermissionMode
         gate.mode = PermissionMode.DONT_ASK
         assert not gate.check(Permission.WRITE, "write_file(path)")
 
     def test_check_accept_edits_mode_read(self):
         """ACCEPT_EDITS mode auto-approves READ."""
         gate = PermissionGate()
-        from mimo_harness.permissions import PermissionMode
+        from agent_hub.permissions import PermissionMode
         gate.mode = PermissionMode.ACCEPT_EDITS
         assert gate.check(Permission.READ, "read_file(path)")
 
     def test_check_accept_edits_mode_write_file(self):
         """ACCEPT_EDITS mode auto-approves write_file."""
         gate = PermissionGate()
-        from mimo_harness.permissions import PermissionMode
+        from agent_hub.permissions import PermissionMode
         gate.mode = PermissionMode.ACCEPT_EDITS
         assert gate.check(Permission.WRITE, "write_file(path)")
 
     def test_check_accept_edits_mode_other_write(self, monkeypatch):
         """ACCEPT_EDITS mode falls through to interactive for non-file writes."""
         gate = PermissionGate()
-        from mimo_harness.permissions import PermissionMode
+        from agent_hub.permissions import PermissionMode
         gate.mode = PermissionMode.ACCEPT_EDITS
         monkeypatch.setattr("builtins.input", lambda _: "y")
         assert gate.check(Permission.WRITE, "run_command(echo hi)")
@@ -216,7 +216,7 @@ class TestModelDrivenPermissions:
         """set_permission_mode updates the mode."""
         gate = PermissionGate()
         gate.set_permission_mode("bypass")
-        from mimo_harness.permissions import PermissionMode
+        from agent_hub.permissions import PermissionMode
         assert gate.mode == PermissionMode.BYPASS
 
     def test_set_permission_mode_invalid(self):

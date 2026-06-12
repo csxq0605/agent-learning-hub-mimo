@@ -14,7 +14,7 @@ import threading
 from dataclasses import dataclass, field
 from typing import Optional
 
-_logger = logging.getLogger("mimo-harness.token_counter")
+_logger = logging.getLogger("agent-hub.token_counter")
 
 # ---------------------------------------------------------------------------
 # tiktoken encoder cache (thread-safe)

@@ -14,6 +14,50 @@ import sys
 # Import shared command list
 from .commands import SLASH_COMMANDS as _SLASH_COMMANDS
 
+
+class AtFileCompleter:
+    """Completer for @file references — fuzzy file finder.
+
+    Detects @<prefix> in the input and yields matching files/directories.
+    Works with prompt_toolkit's completion dropdown menu.
+    """
+
+    def get_completions(self, document, complete_event):
+        from prompt_toolkit.completion import Completion
+        from .file_references import scan_completions
+
+        text = document.text_before_cursor
+        # Find the last @ in the text
+        at_pos = text.rfind('@')
+        if at_pos < 0:
+            return
+
+        # Extract the prefix after @
+        prefix = text[at_pos + 1:]
+
+        # Don't complete if prefix contains spaces (not a file ref)
+        if ' ' in prefix:
+            return
+
+        # Strip line number suffix like :42
+        line_suffix = ''
+        if ':' in prefix:
+            parts = prefix.rsplit(':', 1)
+            if parts[1].isdigit():
+                prefix = parts[0]
+                line_suffix = ':' + parts[1]
+
+        # Scan for matching files
+        matches = scan_completions(prefix, os.getcwd(), limit=15)
+        for match in matches:
+            # The text to insert replaces everything after @
+            insert_text = match + line_suffix
+            yield Completion(
+                insert_text,
+                start_position=-len(prefix) - len(line_suffix),
+                display=match,
+            )
+
 # Lazy-loaded prompt_toolkit components
 _session = None
 _prompt_toolkit_available = None
@@ -32,12 +76,14 @@ def _init_prompt_toolkit():
 
     try:
         from prompt_toolkit import PromptSession
-        from prompt_toolkit.completion import WordCompleter
+        from prompt_toolkit.completion import WordCompleter, merge_completers
         from prompt_toolkit.history import FileHistory
         from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
         from prompt_toolkit.styles import Style
 
-        completer = WordCompleter(_SLASH_COMMANDS, ignore_case=True, sentence=True)
+        slash_completer = WordCompleter(_SLASH_COMMANDS, ignore_case=True, sentence=True)
+        at_file_completer = AtFileCompleter()
+        completer = merge_completers(slash_completer, at_file_completer)
         history_path = os.path.join(os.path.expanduser("~"), ".mimo", "history")
         os.makedirs(os.path.dirname(history_path), exist_ok=True)
 

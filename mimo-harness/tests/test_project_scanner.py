@@ -2,7 +2,7 @@
 
 import pytest
 import os
-from mimo_harness.project_scanner import scan_project, generate_agents_md
+from agent_hub.project_scanner import scan_project, generate_agents_md
 
 
 class TestScanProject:

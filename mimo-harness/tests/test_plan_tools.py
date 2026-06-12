@@ -2,10 +2,10 @@
 
 import json
 
-from mimo_harness.tools import plan_tools
-from mimo_harness.tools.plan_tools import enter_plan_mode, exit_plan_mode, get_tools
-from mimo_harness.tools.registry import ToolDef
-from mimo_harness.permissions import Permission
+from agent_hub.tools import plan_tools
+from agent_hub.tools.plan_tools import enter_plan_mode, exit_plan_mode, get_tools
+from agent_hub.tools.registry import ToolDef
+from agent_hub.permissions import Permission
 
 
 class TestEnterPlanMode:
@@ -65,8 +65,8 @@ class TestHandlePlanApproval:
         monkeypatch.setenv("MIMO_API_KEY", "test-key")
         monkeypatch.setenv("MIMO_BASE_URL", "http://test.com")
         monkeypatch.setenv("MIMO_MODEL", "test-model")
-        from mimo_harness.agent import MiMoHarness
-        return MiMoHarness(auto_approve=False)
+        from agent_hub.agent import AgentHub
+        return AgentHub(auto_approve=False)
 
     def test_approve(self, monkeypatch):
         harness = self._make_harness(monkeypatch)
@@ -92,8 +92,8 @@ class TestHandlePlanApproval:
         monkeypatch.setenv("MIMO_API_KEY", "test-key")
         monkeypatch.setenv("MIMO_BASE_URL", "http://test.com")
         monkeypatch.setenv("MIMO_MODEL", "test-model")
-        from mimo_harness.agent import MiMoHarness
-        harness = MiMoHarness(auto_approve=True)
+        from agent_hub.agent import AgentHub
+        harness = AgentHub(auto_approve=True)
         result = json.loads(harness._handle_plan_approval({"plan": "do X"}))
         assert result["decision"] == "approved"
 

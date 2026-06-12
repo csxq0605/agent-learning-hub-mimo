@@ -1,4 +1,4 @@
-"""MiMo Harness - A production-grade AI agent harness powered by Xiaomi MiMo model.
+"""Agent Hub - A production-grade model-agnostic AI agent harness.
 
 Architecture follows Claude Code patterns:
 - Ch2: Dependency injection, circuit breaker, state machine
@@ -10,9 +10,9 @@ Architecture follows Claude Code patterns:
 - SubAgent: Multi-agent coordination with lifecycle management
 """
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
-from .agent import MiMoHarness, AgentDeps, CircuitBreaker, TokenBudget
+from .agent import AgentHub, AgentDeps, CircuitBreaker, TokenBudget
 from .permissions import PermissionGate, Permission, PermissionMode, PermissionRule
 from .context import Session, compact_context, load_memory
 from .hooks import HookRunner, HookConfig, HookEvent, HookResult, HookDecision
@@ -31,7 +31,7 @@ from .subagent import (
 )
 
 __all__ = [
-    "MiMoHarness",
+    "AgentHub",
     "AgentDeps",
     "CircuitBreaker",
     "TokenBudget",

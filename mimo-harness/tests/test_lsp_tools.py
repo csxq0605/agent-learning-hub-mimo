@@ -3,13 +3,13 @@
 import json
 import pytest
 
-from mimo_harness.tools import lsp_tools
-from mimo_harness.tools.lsp_tools import (
+from agent_hub.tools import lsp_tools
+from agent_hub.tools.lsp_tools import (
     lsp_definition, lsp_references, lsp_diagnostics,
     get_tools,
 )
-from mimo_harness.tools.registry import ToolDef
-from mimo_harness.permissions import Permission
+from agent_hub.tools.registry import ToolDef
+from agent_hub.permissions import Permission
 
 
 class TestLspDefinition:

@@ -4,7 +4,7 @@ import json
 import threading
 import http.server
 import pytest
-from mimo_harness.hooks import (
+from agent_hub.hooks import (
     HookEvent, HookDecision, HookConfig, HookRunner, HookResult, HookType,
 )
 
@@ -163,7 +163,7 @@ class TestHookRunner:
     def test_run_hooks_prompt_hook_with_client(self):
         """Prompt hook with real LLM client — verifies end-to-end mechanism works."""
         from openai import OpenAI
-        from mimo_harness.config import MIMO_API_KEY, MIMO_BASE_URL, MIMO_MODEL
+        from agent_hub.config import MIMO_API_KEY, MIMO_BASE_URL, MIMO_MODEL
         if not MIMO_API_KEY or MIMO_API_KEY == "test-key-for-testing":
             pytest.skip("Real MIMO_API_KEY not set")
 
@@ -189,7 +189,7 @@ class TestHookRunner:
         assert hasattr(result, 'reason')
         # The LLM returned a parsed decision — either block or approve is valid.
         # The important thing is the hook ran and parsed the response correctly.
-        from mimo_harness.hooks import HookDecision
+        from agent_hub.hooks import HookDecision
         assert result.decision in (HookDecision.BLOCK, HookDecision.APPROVE)
 
     def test_run_hooks_http_hook_failure_non_blocking(self):
@@ -275,7 +275,7 @@ class TestHttpHookSuccess:
         server, port = self._start_server(ApproveHandler)
         try:
             # Bypass SSRF check for localhost testing (SSRF tested separately)
-            monkeypatch.setattr("mimo_harness.tools.web_tools._validate_url", lambda url: None)
+            monkeypatch.setattr("agent_hub.tools.web_tools._validate_url", lambda url: None)
             runner = HookRunner()
             config = HookConfig(
                 event=HookEvent.PRE_TOOL_USE,
@@ -308,7 +308,7 @@ class TestHttpHookSuccess:
 
         server, port = self._start_server(BlockHandler)
         try:
-            monkeypatch.setattr("mimo_harness.tools.web_tools._validate_url", lambda url: None)
+            monkeypatch.setattr("agent_hub.tools.web_tools._validate_url", lambda url: None)
             runner = HookRunner()
             config = HookConfig(
                 event=HookEvent.PRE_TOOL_USE,
@@ -343,7 +343,7 @@ class TestHttpHookSuccess:
 
         server, port = self._start_server(ContextHandler)
         try:
-            monkeypatch.setattr("mimo_harness.tools.web_tools._validate_url", lambda url: None)
+            monkeypatch.setattr("agent_hub.tools.web_tools._validate_url", lambda url: None)
             runner = HookRunner()
             config = HookConfig(
                 event=HookEvent.PRE_TOOL_USE,

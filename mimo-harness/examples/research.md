@@ -2,7 +2,7 @@
 
 ## Web Search
 ```
-mimo-harness
+ah
 
 > 搜索一下小米 MiMo 模型的最新消息
 # Agent 调用 web_search 搜索并整理结果
@@ -16,7 +16,7 @@ mimo-harness
 
 ## Fetch and Analyze
 ```
-mimo-harness
+ah
 
 > 抓取 https://example.com 的内容，帮我总结要点
 # Agent 调用 web_fetch 获取页面，分析并摘要
@@ -27,7 +27,7 @@ mimo-harness
 
 ## Multi-step Research
 ```
-mimo-harness
+ah
 
 > 搜索 "AI agent frameworks 2026"，取前 3 个结果，写一份对比文档
 # Agent 调用 web_search 搜索，逐个 web_fetch 抓取，最后 create_doc 生成对比文档
@@ -41,7 +41,7 @@ mimo-harness
 
 ## Code Research
 ```
-mimo-harness
+ah
 
 > 搜索 Python 异步编程最佳实践，写一份速查表
 # Agent 调用 web_search 搜索多个来源
@@ -55,13 +55,13 @@ mimo-harness
 
 ## Pipe and Analyze
 ```
-curl -s https://api.example.com/data | mimo-harness -p "分析这个 JSON 数据，找出趋势和异常值"
+curl -s https://api.example.com/data | ah -p "分析这个 JSON 数据，找出趋势和异常值"
 # Agent 解析 JSON 数据，识别模式和异常
 ```
 
 ## Document Analysis
 ```
-mimo-harness
+ah
 
 > 列出 reports/ 目录下所有 PDF 文件
 # Agent 调用 glob_files 搜索
@@ -75,7 +75,7 @@ mimo-harness
 
 ## Research with Memory
 ```
-mimo-harness --session-id "ml-research"
+ah --session-id "ml-research"
 
 > 搜索最近的 transformer 架构论文
 # Agent 调用 web_search 搜索
@@ -89,7 +89,7 @@ mimo-harness --session-id "ml-research"
 
 # --- 下次继续 ---
 
-mimo-harness --session-id "ml-research"
+ah --session-id "ml-research"
 # 按 ID 精确恢复上次的研究会话
 
 > 上次我们研究到哪了？
@@ -98,7 +98,7 @@ mimo-harness --session-id "ml-research"
 
 ## Interactive Exploration
 ```
-mimo-harness
+ah
 
 > 搜索 "RAG vs fine-tuning comparison"
 # Agent 调用 web_search

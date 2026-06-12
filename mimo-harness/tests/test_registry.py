@@ -3,8 +3,8 @@
 import pytest
 import json
 import os
-from mimo_harness.tools.registry import ToolDef, ToolRegistry
-from mimo_harness.permissions import Permission, PermissionGate
+from agent_hub.tools.registry import ToolDef, ToolRegistry
+from agent_hub.permissions import Permission, PermissionGate
 
 
 class TestToolRegistry:
@@ -143,7 +143,7 @@ class TestAggregateToolRegistration:
 
     def test_all_modules_register_18_plus_tools(self):
         """Register all tool modules together and verify 18+ tools with valid schemas."""
-        from mimo_harness.tools import (
+        from agent_hub.tools import (
             file_ops, shell, code_exec, web_tools, doc_tools,
             math_tools, interactive, monitor, notebook_tools, task_tools,
         )

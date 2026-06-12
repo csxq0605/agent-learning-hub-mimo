@@ -11,11 +11,11 @@ from unittest.mock import patch, MagicMock
 import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from mimo_harness.skills import (
+from agent_hub.skills import (
     SkillParser, SkillSubstitutor, SkillDiscovery, SkillManager,
     SkillFrontmatter, Skill
 )
-from mimo_harness.mcp import (
+from agent_hub.mcp import (
     MCPConfigParser, MCPManager, MCPConnection,
     MCPServerConfig, MCPTransport, MCPServerStatus
 )
@@ -382,7 +382,7 @@ class TestSkillsInstall:
 
     def test_skills_install_no_url(self, capsys):
         """Test /skills install without URL shows usage."""
-        from mimo_harness.cli import _handle_command
+        from agent_hub.cli import _handle_command
         _handle_command(['/skills', 'install'], None, None, None)
         captured = capsys.readouterr()
         assert 'Usage:' in captured.out
@@ -395,7 +395,7 @@ class TestSkillsInstall:
     def test_skills_install_success(self, mock_exists, mock_tmpdir, mock_copy,
                                      mock_makedirs, mock_run, capsys):
         """Test successful skill installation."""
-        from mimo_harness.cli import _handle_command
+        from agent_hub.cli import _handle_command
 
         # Mock temp directory
         mock_tmpdir.return_value.__enter__ = MagicMock(return_value='/tmp/test')
@@ -416,7 +416,7 @@ class TestSkillsInstall:
     @patch('tempfile.TemporaryDirectory')
     def test_skills_install_no_skill_md(self, mock_tmpdir, mock_makedirs, mock_run, capsys):
         """Test skill installation fails when no SKILL.md found."""
-        from mimo_harness.cli import _handle_command
+        from agent_hub.cli import _handle_command
         import re
 
         # Mock temp directory
@@ -438,7 +438,7 @@ class TestMCPInstall:
 
     def test_mcp_install_no_package(self, capsys):
         """Test /mcp install without package shows usage."""
-        from mimo_harness.cli import _handle_command
+        from agent_hub.cli import _handle_command
         harness = MagicMock()
         _handle_command(['/mcp', 'install'], harness, None, None)
         captured = capsys.readouterr()
@@ -458,7 +458,7 @@ class TestMCPInstall:
                                          mock_open, mock_unlink, mock_join, mock_exists,
                                          mock_listdir, mock_makedirs, mock_run, capsys):
         """Test successful MCP server installation from GitHub."""
-        from mimo_harness.cli import _handle_command
+        from agent_hub.cli import _handle_command
         import re
 
         # Mock gh api response
@@ -492,7 +492,7 @@ class TestMCPInstall:
     @patch('subprocess.run')
     def test_mcp_install_npm_success(self, mock_run, capsys):
         """Test successful MCP server installation from npm."""
-        from mimo_harness.cli import _handle_command
+        from agent_hub.cli import _handle_command
 
         # Mock npm install
         mock_run.return_value = MagicMock(returncode=0)

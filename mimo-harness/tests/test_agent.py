@@ -6,11 +6,11 @@ Uses real LLM API calls — no mocking.
 import os
 import pytest
 import json
-from mimo_harness.agent import (
-    MiMoHarness, retry_with_backoff,
+from agent_hub.agent import (
+    AgentHub, retry_with_backoff,
 )
-from mimo_harness.context import Session
-from mimo_harness.tools import file_ops
+from agent_hub.context import Session
+from agent_hub.tools import file_ops
 
 # Helper to check if real API key is available
 def _has_real_api_key():
@@ -90,7 +90,7 @@ class TestRunWithToolCalls:
         monkeypatch.chdir(tmp_path)
         file_ops.set_file_ops_state(file_ops.FileOpsState())
 
-        harness = MiMoHarness(max_steps=5, auto_approve=True, bare=True)
+        harness = AgentHub(max_steps=5, auto_approve=True, bare=True)
         session = Session(session_id="test")
         result = harness.run("What is 2+2? Use the calculator tool to compute it.", session)
 
@@ -104,7 +104,7 @@ class TestRunWithToolCalls:
 class TestRunMaxStepsTermination:
     def test_run_max_steps_termination(self):
         """Verify agent stops at max_steps."""
-        harness = MiMoHarness(max_steps=1, auto_approve=True, bare=True)
+        harness = AgentHub(max_steps=1, auto_approve=True, bare=True)
         session = Session(session_id="test")
         result = harness.run("What is the capital of France?", session)
 
@@ -114,11 +114,11 @@ class TestRunMaxStepsTermination:
 
 @requires_api
 class TestTerminationPaths:
-    """Test termination paths in MiMoHarness.run()."""
+    """Test termination paths in AgentHub.run()."""
 
     def test_max_duration_termination(self):
         """Agent stops when time limit is exceeded."""
-        harness = MiMoHarness(max_steps=100, auto_approve=True, bare=True, max_duration=0.01)
+        harness = AgentHub(max_steps=100, auto_approve=True, bare=True, max_duration=0.01)
         session = Session(session_id="test")
 
         import time as _time
@@ -153,7 +153,7 @@ class TestTerminationPaths:
 
     def test_user_abort_termination(self):
         """Agent stops when graceful abort is requested."""
-        harness = MiMoHarness(max_steps=10, auto_approve=True, bare=True)
+        harness = AgentHub(max_steps=10, auto_approve=True, bare=True)
         harness.graceful_abort.request()
 
         session = Session(session_id="test")
@@ -163,7 +163,7 @@ class TestTerminationPaths:
 
     def test_token_limit_auto_compact(self):
         """Agent auto-compacts when token usage is high, never blocks."""
-        harness = MiMoHarness(max_steps=10, auto_approve=True, bare=True)
+        harness = AgentHub(max_steps=10, auto_approve=True, bare=True)
         # Force high token usage
         harness.token_budget.effective_max = 1
         harness.token_budget.estimated_tokens = 999999
@@ -182,14 +182,14 @@ class TestBareMode:
 
     def test_bare_mode_system_prompt(self):
         """Bare mode should skip memory loading."""
-        harness = MiMoHarness(bare=True)
+        harness = AgentHub(bare=True)
         prompt = harness._build_system_prompt()
         assert isinstance(prompt, str)
         assert len(prompt) > 0
         # Bare mode: memory is not loaded as a user message
         assert harness.bare is True
         # Verify the system prompt itself is well-formed
-        assert "MiMo Harness" in prompt
+        assert "Agent Hub" in prompt
         assert "Available Tools" in prompt
 
 
@@ -198,7 +198,7 @@ class TestRunStreamMode:
     """Test run() with stream=True using real API."""
 
     def test_run_stream_mode_returns_final(self):
-        harness = MiMoHarness(max_steps=3, auto_approve=True, stream=True, bare=True)
+        harness = AgentHub(max_steps=3, auto_approve=True, stream=True, bare=True)
         session = Session(session_id="stream-test")
         result = harness.run("Reply with just the number 42.", session)
 
@@ -211,7 +211,7 @@ class TestRunDefaultSession:
     """Test run() creates default session when None."""
 
     def test_run_creates_default_session(self):
-        harness = MiMoHarness(max_steps=1, auto_approve=True, bare=True)
+        harness = AgentHub(max_steps=1, auto_approve=True, bare=True)
         result = harness.run("Say hello in one word.")
         assert len(result) > 0
 
@@ -221,8 +221,8 @@ class TestRunStopHook:
     """Test run() fires STOP hook on completion."""
 
     def test_run_fires_stop_hook(self):
-        from mimo_harness.hooks import HookRunner, HookEvent, HookConfig, HookDecision, HookResult
-        harness = MiMoHarness(max_steps=3, auto_approve=True, bare=True)
+        from agent_hub.hooks import HookRunner, HookEvent, HookConfig, HookDecision, HookResult
+        harness = AgentHub(max_steps=3, auto_approve=True, bare=True)
 
         # Track hook calls
         hook_calls = []
@@ -254,7 +254,7 @@ class TestRunSequentialToolCalls:
         monkeypatch.chdir(tmp_path)
         file_ops.set_file_ops_state(file_ops.FileOpsState())
 
-        harness = MiMoHarness(max_steps=5, auto_approve=True, bare=True)
+        harness = AgentHub(max_steps=5, auto_approve=True, bare=True)
         session = Session(session_id="seq-test")
         result = harness.run(
             f"Use the write_file tool to create a file at '{tmp_path / 'test.txt'}' with content 'hello world'.",
@@ -276,7 +276,7 @@ class TestHandleToolCallIntegration:
 
     def _make_harness(self, tmp_path):
         """Create a minimal harness with real tool registry for integration testing."""
-        harness = MiMoHarness.__new__(MiMoHarness)
+        harness = AgentHub.__new__(AgentHub)
         harness.model = "test"
         harness.deps = type("D", (), {"max_retries": 1, "base_retry_delay": 0.01})()
         harness.logger = type("L", (), {
@@ -300,8 +300,8 @@ class TestHandleToolCallIntegration:
         harness._checkpoint_manager = None
 
         # Use REAL tool registry with actual handlers
-        from mimo_harness.tools.registry import ToolRegistry
-        from mimo_harness.tools import (
+        from agent_hub.tools.registry import ToolRegistry
+        from agent_hub.tools import (
             file_ops as fo, shell, math_tools, web_tools,
             code_exec, doc_tools, interactive, monitor,
             notebook_tools, task_tools, plan_tools, lsp_tools, scheduler_tools,
@@ -463,7 +463,7 @@ class TestNonBareModeMemory:
         file_ops.set_file_ops_state(file_ops.FileOpsState())
         file_ops._ALLOWED_WRITE_DIR = tmp_path
 
-        harness = MiMoHarness(max_steps=1, auto_approve=True, bare=False)
+        harness = AgentHub(max_steps=1, auto_approve=True, bare=False)
         session = Session(session_id="memory-test")
         harness.run("Say hello.", session)
 
@@ -486,7 +486,7 @@ class TestNonBareModeMemory:
         file_ops.set_file_ops_state(file_ops.FileOpsState())
         file_ops._ALLOWED_WRITE_DIR = tmp_path
 
-        harness = MiMoHarness(max_steps=1, auto_approve=True, bare=True)
+        harness = AgentHub(max_steps=1, auto_approve=True, bare=True)
         session = Session(session_id="bare-test")
         harness.run("Say hello.", session)
 

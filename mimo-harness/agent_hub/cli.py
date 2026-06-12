@@ -22,7 +22,7 @@ import threading
 import json
 import subprocess
 import time
-from .agent import MiMoHarness
+from .agent import AgentHub
 from .config import MIMO_API_KEY, MIMO_MODEL
 from .permissions import PermissionRule
 from .context import Session, CheckpointManager, estimate_tokens, compact_context, cleanup_old_sessions, cleanup_old_spill_files, CONTEXT_WINDOW_TOKENS, LoadResult, _CORRUPT_THRESHOLD
@@ -257,7 +257,7 @@ def _resume_by_session_id(session_dir: str, session_id: str):
 def _build_parser():
     """Build the argument parser. Extracted for testability."""
     parser = argparse.ArgumentParser(
-        description="MiMo Harness - AI Agent powered by Xiaomi MiMo model"
+        description="Agent Hub - AI Agent powered by Xiaomi MiMo model"
     )
     parser.add_argument("--task", "-t", help="Run a single task and exit")
     parser.add_argument("--model", "-m", default=None, help=f"Model name (default: {MIMO_MODEL})")
@@ -305,7 +305,7 @@ def main():
     else:
         stream_enabled = config.get("stream", True)
 
-    harness = MiMoHarness(
+    harness = AgentHub(
         model=args.model or config.get("model"),
         auto_approve=args.auto_approve or config.get("auto_approve", False),
         dry_run=args.dry_run or config.get("dry_run", False),
@@ -1458,6 +1458,8 @@ def _handle_command(cmd, harness, session, memory_store, checkpoint_manager=None
                     }.get(task['state'], '?')
                     duration = f"{task['duration']:.1f}s" if task['duration'] > 0 else ""
                     _safe_print(f"  {state_icon} {_yellow(task['id'])} {task['description'][:40]}")
+                    if duration:
+                        _safe_print(f"    {_dim(duration)}")
                 print(f"\n  {_dim('Commands: /tasks list|show|cancel|cleanup [task-id]')}")
             else:
                 print_info("No background tasks")

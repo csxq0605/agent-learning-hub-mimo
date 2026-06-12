@@ -16,9 +16,16 @@ from dotenv import load_dotenv
 from tests.e2e_utils import E2E_MAX_RETRIES, _is_retryable
 
 
+def pytest_addoption(parser):
+    parser.addoption("--run-slow", action="store_true", default=False,
+                     help="Run slow tests (real API, multi-step, >30s)")
+
+
 def pytest_configure(config):
     """Register custom markers."""
-    config.addinivalue_line("markers", "slow: marks tests as slow (>30s, multi-step or API-heavy)")
+    config.addinivalue_line("markers", "fast: Fast tests — single API call or pure state, <5s each")
+    config.addinivalue_line("markers", "slow: Slow tests — multi-step, heavy API, >30s each")
+    config.addinivalue_line("markers", "e2e: End-to-end tests — real API + real tools")
 
 # Load .env BEFORE checking for real API key
 _env_path = Path.cwd() / ".env"
@@ -45,7 +52,7 @@ def _validate_api_connection() -> bool:
         return False
     try:
         from openai import OpenAI
-        from mimo_harness.config import MIMO_BASE_URL, MIMO_MODEL
+        from agent_hub.config import MIMO_BASE_URL, MIMO_MODEL
         client = OpenAI(api_key=api_key, base_url=MIMO_BASE_URL)
         client.chat.completions.create(
             model=MIMO_MODEL,
@@ -79,6 +86,16 @@ os.environ.setdefault("MIMO_SPILL_DIR", _test_spill_dir)
 def _cleanup_spill_dir():
     """Remove the temp spill directory when the test process exits."""
     shutil.rmtree(_test_spill_dir, ignore_errors=True)
+
+
+def pytest_collection_modifyitems(config, items):
+    """Skip slow tests unless --run-slow is passed."""
+    if config.getoption("--run-slow"):
+        return
+    skip_slow = pytest.mark.skip(reason="Slow test — pass --run-slow to enable")
+    for item in items:
+        if "slow" in item.keywords:
+            item.add_marker(skip_slow)
 
 
 @pytest.hookimpl(tryfirst=True)

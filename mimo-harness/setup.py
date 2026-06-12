@@ -1,9 +1,9 @@
 from setuptools import setup, find_packages
 
 setup(
-    name="mimo-harness",
-    version="0.3.0",
-    description="A production-grade AI agent harness powered by Xiaomi MiMo model, following Claude Code architecture patterns",
+    name="agent-hub",
+    version="0.4.0",
+    description="A production-grade model-agnostic AI agent harness, following Claude Code architecture patterns",
     long_description=open("README.md", encoding="utf-8").read(),
     long_description_content_type="text/markdown",
     author="Agent Learning Hub",
@@ -28,7 +28,7 @@ setup(
     },
     entry_points={
         "console_scripts": [
-            "mimo-harness=mimo_harness.cli:main",
+            "ah=agent_hub.cli:main",
         ],
     },
     classifiers=[

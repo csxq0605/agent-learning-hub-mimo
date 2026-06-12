@@ -8,7 +8,7 @@ import json
 import hashlib
 import pytest
 
-from mimo_harness.security_pipeline import (
+from agent_hub.security_pipeline import (
     sanitize_output,
     detect_sensitive_disclosure,
     detect_prompt_injection,
@@ -30,7 +30,7 @@ def _has_real_api_key():
 
 def _get_client():
     """Create a real OpenAI client for API tests."""
-    from mimo_harness.config import MIMO_BASE_URL, MIMO_MODEL, require_api_key
+    from agent_hub.config import MIMO_BASE_URL, MIMO_MODEL, require_api_key
     from openai import OpenAI
     api_key = require_api_key()
     return OpenAI(api_key=api_key, base_url=MIMO_BASE_URL), MIMO_MODEL
@@ -360,7 +360,7 @@ class TestClassifyActionModel:
     """Tests for classify_action_model with real MiMo API calls."""
 
     def setup_method(self):
-        from mimo_harness import security_pipeline
+        from agent_hub import security_pipeline
         security_pipeline._classifier_cache.clear()
 
     def test_model_returns_result_or_none(self):
@@ -387,7 +387,7 @@ class TestClassifyActionModel:
 
     def test_cache_hit(self):
         """Repeated identical calls should use cache."""
-        from mimo_harness import security_pipeline
+        from agent_hub import security_pipeline
         security_pipeline._classifier_cache.clear()
 
         client, model = _get_client()
@@ -433,7 +433,7 @@ class TestClassifyActionModelDriven:
     """Tests for the refactored classify_action model-driven flow."""
 
     def setup_method(self):
-        from mimo_harness import security_pipeline
+        from agent_hub import security_pipeline
         security_pipeline._classifier_cache.clear()
 
     def test_regex_hard_deny_still_blocks(self):
@@ -496,7 +496,7 @@ class TestReviewAction:
     """Tests for the review_action self-review mechanism."""
 
     def setup_method(self):
-        from mimo_harness import security_pipeline
+        from agent_hub import security_pipeline
         security_pipeline._review_cache.clear()
 
     def test_no_client_returns_none(self):
@@ -584,13 +584,13 @@ class TestReviewResult:
 
 class TestCacheEviction:
     def setup_method(self):
-        from mimo_harness import security_pipeline
+        from agent_hub import security_pipeline
         security_pipeline._classifier_cache.clear()
         security_pipeline._review_cache.clear()
 
     def test_classifier_cache_eviction(self):
         """Cache evicts expired entries when max size reached."""
-        from mimo_harness import security_pipeline
+        from agent_hub import security_pipeline
         # Fill cache with direct entries to test eviction logic
         security_pipeline._CLASSIFIER_CACHE_MAX_SIZE = 3
         now = __import__("time").time()
@@ -610,7 +610,7 @@ class TestCacheEviction:
 
     def test_review_cache_eviction(self):
         """Review cache evicts expired entries when max size reached."""
-        from mimo_harness import security_pipeline
+        from agent_hub import security_pipeline
         security_pipeline._REVIEW_CACHE_MAX_SIZE = 2
         now = __import__("time").time()
         # Insert expired entries
@@ -625,7 +625,7 @@ class TestCacheEviction:
 
 class TestEdgeCases:
     def setup_method(self):
-        from mimo_harness import security_pipeline
+        from agent_hub import security_pipeline
         security_pipeline._classifier_cache.clear()
 
     def test_classify_action_with_no_args(self):

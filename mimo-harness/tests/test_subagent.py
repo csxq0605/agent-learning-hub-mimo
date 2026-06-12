@@ -12,7 +12,7 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from mimo_harness.subagent import (
+from agent_hub.subagent import (
     SubAgent, SubAgentManager, SubAgentConfig, SubAgentResult,
     SubAgentState, SubAgentPriority, MessageChannel, ResourceLimits,
     create_subagent, run_parallel_tasks, run_pipeline_tasks,
@@ -294,7 +294,7 @@ class TestSubAgent:
     def setup_method(self):
         """Reset import cache before each test."""
         SubAgent._imports_cached = False
-        SubAgent._MiMoHarness = None
+        SubAgent._AgentHub = None
         SubAgent._AgentDeps = None
         SubAgent._Session = None
 
@@ -377,7 +377,7 @@ class TestSubAgentManager:
     def setup_method(self):
         """Reset import cache before each test."""
         SubAgent._imports_cached = False
-        SubAgent._MiMoHarness = None
+        SubAgent._AgentHub = None
         SubAgent._AgentDeps = None
         SubAgent._Session = None
 
@@ -670,7 +670,7 @@ class TestSubAgentE2E:
     def setup_method(self):
         """Reset import cache before each test to ensure real API usage."""
         SubAgent._imports_cached = False
-        SubAgent._MiMoHarness = None
+        SubAgent._AgentHub = None
         SubAgent._AgentDeps = None
         SubAgent._Session = None
 
@@ -696,7 +696,7 @@ class TestSubAgentE2E:
         """Test SubAgent using specific tools."""
         import shutil
         import uuid
-        from mimo_harness.tools import file_ops
+        from agent_hub.tools import file_ops
 
         # Reset file_ops sandbox state so it uses current CWD
         file_ops._ALLOWED_WRITE_DIR = None

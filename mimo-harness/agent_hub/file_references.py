@@ -221,3 +221,68 @@ class FileReferenceResolver:
     def has_references(cls, text: str) -> bool:
         """Check if text contains @ references."""
         return bool(FileReferenceParser.REFERENCE_PATTERN.search(text))
+
+
+def scan_completions(prefix: str, base_dir: str = '.', limit: int = 20) -> List[str]:
+    """Scan filesystem for @-completion candidates matching a prefix.
+
+    Used by both CLI (prompt_toolkit) and TUI (Textual) for interactive
+    @ file completion. Returns relative paths with '/' suffix for directories.
+
+    Args:
+        prefix: The text after @ (e.g. "src/ma" for "@src/ma")
+        base_dir: Base directory for relative paths
+        limit: Maximum number of results
+
+    Returns:
+        List of relative paths, directories end with '/'
+    """
+    base_dir = os.path.abspath(base_dir)
+
+    # Split into directory part and name prefix
+    if os.sep in prefix or '/' in prefix:
+        dir_part = os.path.dirname(prefix.replace('/', os.sep))
+        name_prefix = os.path.basename(prefix.replace('/', os.sep))
+        scan_dir = os.path.join(base_dir, dir_part) if dir_part else base_dir
+    else:
+        dir_part = ''
+        name_prefix = prefix
+        scan_dir = base_dir
+
+    scan_dir = os.path.abspath(scan_dir)
+
+    # Path traversal guard
+    try:
+        Path(scan_dir).relative_to(Path(base_dir))
+    except ValueError:
+        return []
+
+    if not os.path.isdir(scan_dir):
+        return []
+
+    results = []
+    try:
+        entries = sorted(os.listdir(scan_dir))
+    except OSError:
+        return []
+
+    for name in entries:
+        if name.startswith('.'):
+            continue  # Skip hidden files
+        if name_prefix and not name.lower().startswith(name_prefix.lower()):
+            continue
+
+        full = os.path.join(scan_dir, name)
+        if dir_part:
+            rel = os.path.join(dir_part, name).replace(os.sep, '/')
+        else:
+            rel = name
+
+        if os.path.isdir(full):
+            rel += '/'
+        results.append(rel)
+
+        if len(results) >= limit:
+            break
+
+    return results

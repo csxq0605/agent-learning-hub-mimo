@@ -1,4 +1,4 @@
-"""Structured CLI display module for MiMo Harness.
+"""Structured CLI display module for Agent Hub.
 
 Provides rich, structured output similar to Claude Code:
 - Conversation bubbles (user vs model visual distinction)
@@ -313,11 +313,11 @@ class StepInfo:
     effort: str = "medium"
 
 
-def print_banner(version: str = "0.3.0"):
+def print_banner(version: str = "0.4.0"):
     """Print the application banner with rich Panel."""
     content = (
-        f"[bold]MiMo Harness[/bold] [dim]v{version}[/dim]\n"
-        f"[dim]AI Agent powered by Xiaomi MiMo model[/dim]\n"
+        f"[bold]Agent Hub[/bold] [dim]v{version}[/dim]\n"
+        f"[dim]AI Agent Harness — model agnostic[/dim]\n"
         f"[dim]Claude Code architecture patterns[/dim]"
     )
     panel = Panel(

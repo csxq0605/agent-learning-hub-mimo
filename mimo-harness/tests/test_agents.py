@@ -10,7 +10,7 @@ from unittest.mock import patch, MagicMock
 import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from mimo_harness.agents import (
+from agent_hub.agents import (
     AgentParser, AgentDiscovery, AgentManager, AgentConfig
 )
 
