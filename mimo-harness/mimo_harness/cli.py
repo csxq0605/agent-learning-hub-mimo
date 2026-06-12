@@ -1250,29 +1250,44 @@ def _handle_command(cmd, harness, session, memory_store, checkpoint_manager=None
                 # Create new agent
                 if len(cmd) < 3:
                     print_warning("Usage: /agents create <name> [description]")
-                    print_info("Example: /agents create code-reviewer 'Reviews code for quality'")
+                    print_info("Quick: /agents create my-agent")
+                    print_info("Manual: /agents create my-agent 'Description here'")
                     print()
                     return "continue", session
                 name = cmd[2]
-                description = " ".join(cmd[3:]) if len(cmd) > 3 else f"Custom agent: {name}"
-                print_info(f"Creating agent '{name}'...")
-                print_info("Enter agent system prompt (empty line to finish):")
-                lines = []
-                while True:
-                    try:
-                        line = _rich_input("  > ")
-                        if not line:
+                description = " ".join(cmd[3:]) if len(cmd) > 3 else ""
+
+                # Quick create if no description provided
+                if not description:
+                    description = f"Custom agent: {name}"
+                    prompt = f"You are {name}. Complete the assigned tasks efficiently."
+                    filepath = harness._agent_manager.create_agent(
+                        name=name,
+                        description=description,
+                        prompt=prompt,
+                    )
+                    print_success(f"Agent '{name}' created (quick mode)")
+                    print_info(f"File: {filepath}")
+                else:
+                    # Manual create - ask for prompt
+                    print_info(f"Creating agent '{name}'...")
+                    print_info("Enter agent system prompt (empty line to finish):")
+                    lines = []
+                    while True:
+                        try:
+                            line = _rich_input("  > ")
+                            if not line:
+                                break
+                            lines.append(line)
+                        except (EOFError, KeyboardInterrupt):
                             break
-                        lines.append(line)
-                    except (EOFError, KeyboardInterrupt):
-                        break
-                prompt = "\n".join(lines) if lines else f"You are {name}."
-                filepath = harness._agent_manager.create_agent(
-                    name=name,
-                    description=description,
-                    prompt=prompt,
-                )
-                print_success(f"Agent '{name}' created at {filepath}")
+                    prompt = "\n".join(lines) if lines else f"You are {name}."
+                    filepath = harness._agent_manager.create_agent(
+                        name=name,
+                        description=description,
+                        prompt=prompt,
+                    )
+                    print_success(f"Agent '{name}' created at {filepath}")
                 print()
             elif subcmd == "delete":
                 # Delete agent

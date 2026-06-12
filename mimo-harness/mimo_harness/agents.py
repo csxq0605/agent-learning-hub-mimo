@@ -182,11 +182,6 @@ class AgentManager:
                      tools: List[str] = None, model: str = "inherit",
                      scope: str = "user") -> str:
         """Create a new agent definition file."""
-        # Validate name - only allow alphanumeric, hyphens, underscores
-        import re
-        if not re.match(r'^[a-zA-Z0-9_-]+$', name):
-            raise ValueError(f"Invalid agent name: {name}. Only alphanumeric, hyphens, and underscores allowed.")
-
         # Determine directory
         if scope == "project":
             agents_dir = os.path.join(self.project_root, '.mimo', 'agents')
@@ -209,8 +204,13 @@ class AgentManager:
         yaml_content = yaml.dump(frontmatter, default_flow_style=False)
         content = f"---\n{yaml_content}---\n\n{prompt}"
 
-        # Write file
+        # Write file - check path traversal
         filepath = os.path.join(agents_dir, f"{name}.md")
+        abs_filepath = os.path.abspath(filepath)
+        abs_agents_dir = os.path.abspath(agents_dir)
+        if not abs_filepath.startswith(abs_agents_dir):
+            raise ValueError(f"Invalid agent name: {name}. Path traversal detected.")
+
         try:
             with open(filepath, 'w', encoding='utf-8') as f:
                 f.write(content)
