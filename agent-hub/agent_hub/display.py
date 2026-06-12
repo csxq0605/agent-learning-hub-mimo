@@ -581,6 +581,7 @@ def print_help():
         ("/auto", "Toggle auto-approve mode"),
         ("/plan", "Toggle plan mode (read-only)"),
         ("/abort", "Stop current task"),
+        ("/btw <msg>", "Inject guidance message into context"),
         ("/memory", "List stored memories"),
         ("/remember", "Save current context as memory"),
         ("/hooks", "List registered hooks"),
@@ -627,6 +628,7 @@ def print_help():
     _console.print()
     _console.print("  [dim]Prefix with ! to run shell commands (e.g. !ls -la)[/dim]")
     _console.print("  [dim]Press Ctrl+C during execution to stop current task[/dim]")
+    _console.print("  [dim]Type /btw <msg> during execution to guide the agent[/dim]")
     _console.print()
 
 

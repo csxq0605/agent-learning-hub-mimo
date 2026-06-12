@@ -20,6 +20,8 @@ SLASH_COMMANDS = [
     "/tasks", "/tasks list", "/tasks show", "/tasks cancel", "/tasks cleanup",
     # Goal management
     "/goal", "/goal clear",
+    # In-flight guidance
+    "/btw",
     # Skills
     "/skills", "/skills install",
     # MCP
@@ -30,5 +32,5 @@ SLASH_COMMANDS = [
 SUGGEST_COMMANDS = [
     "/help", "/quit", "/exit", "/q", "/clear", "/tools",
     "/compact", "/context", "/memory",
-    "/agents", "/tasks", "/goal", "/skills", "/mcp",
+    "/agents", "/tasks", "/goal", "/skills", "/mcp", "/btw",
 ]

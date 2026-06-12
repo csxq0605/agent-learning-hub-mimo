@@ -142,6 +142,9 @@ class MiMoTUI(App):
         self.scheduled_lock = scheduled_lock
         self._agent_running = False
         self._streaming_text = ""  # accumulated streaming text
+        # Command queue: typed during agent execution, auto-runs when agent finishes
+        self._command_queue: list[str] = []
+        self._default_placeholder = "Type a message or /help..."
         # Input history
         self._history: list[str] = []
         self._history_idx = -1  # -1 = current (not browsing)
@@ -216,6 +219,10 @@ class MiMoTUI(App):
                     self._show_permission_prompt(desc, value)
         except queue.Empty:
             pass
+        except Exception:
+            # Prevent drain timer from dying on unexpected errors.
+            # If the timer stops, the TUI freezes permanently.
+            pass
         # Update status bar in real-time during agent execution
         if self._agent_running:
             self._update_status_bar()
@@ -286,11 +293,18 @@ class MiMoTUI(App):
         token_str = _format_tokens(tokens)
         max_str = _format_tokens(CONTEXT_WINDOW_TOKENS)
         msgs = len(self.session.messages)
+        queue_info = ""
+        if self._command_queue:
+            queue_info = (
+                f"  [dim]|[/dim]  [yellow]Queued[/yellow] "
+                f"{len(self._command_queue)}"
+            )
         status = self.query_one("#status-bar", Static)
         status.update(
             f"  [dim]Session[/dim] {self.session.session_id[:8]}  "
             f"[dim]|[/dim]  [dim]Tokens[/dim] {token_str}/{max_str}  "
             f"[dim]|[/dim]  [dim]Msgs[/dim] {msgs}"
+            f"{queue_info}"
         )
 
     # ── Input Handling ──────────────────────────────────────────
@@ -346,6 +360,11 @@ class MiMoTUI(App):
             else:
                 return
 
+        # ── Agent running: /btw injection or command queuing ──
+        if self._agent_running:
+            self._handle_during_agent(text)
+            return
+
         # Config hot-reload
         config_changed, new_config = self.config_watcher.check_for_changes()
         if config_changed:
@@ -384,9 +403,67 @@ class MiMoTUI(App):
 
         self._update_status_bar()
 
+    def _handle_during_agent(self, text: str) -> None:
+        """Handle input submitted while agent is running.
+
+        /btw <msg> — inject a user message into the running agent's context.
+        Anything else — queue for execution after agent finishes.
+        """
+        # /btw: inject guidance into the running agent's context
+        if text == "/btw" or text.startswith("/btw "):
+            btw_msg = text[4:].strip()
+            if not btw_msg:
+                self.write_output("[yellow]Usage: /btw <your guidance message>[/yellow]")
+                return
+            # Thread-safe: Session.add_message uses a lock
+            self.session.add_message("user", btw_msg)
+            self.write_output(
+                Panel(
+                    btw_msg,
+                    title="[green]> /btw (injected)[/green]",
+                    border_style="green",
+                    width=72,
+                    padding=(0, 1),
+                )
+            )
+            self._update_status_bar()
+            return
+
+        # Any other input: queue for later execution
+        self._command_queue.append(text)
+        queue_pos = len(self._command_queue)
+        self.write_output(
+            Panel(
+                text,
+                title=f"[yellow]> Queued #{queue_pos}[/yellow]",
+                border_style="yellow",
+                width=72,
+                padding=(0, 1),
+            )
+        )
+        self._update_status_bar()
+
     # ── Commands ────────────────────────────────────────────────
 
     def _handle_command(self, text: str) -> None:
+        # /btw when agent is idle: add message to session context for next turn
+        if text == "/btw" or text.startswith("/btw "):
+            btw_msg = text[4:].strip()
+            if btw_msg:
+                self.session.add_message("user", btw_msg)
+                self.write_output(
+                    Panel(
+                        btw_msg,
+                        title="[green]> /btw (context)[/green]",
+                        border_style="green",
+                        width=72,
+                        padding=(0, 1),
+                    )
+                )
+            else:
+                self.write_output("[yellow]Usage: /btw <message to add to context>[/yellow]")
+            return
+
         from .cli import _handle_command
         parts = text.split()
         cmd = [parts[0].lower()] + parts[1:]
@@ -438,7 +515,10 @@ class MiMoTUI(App):
 
     def _run_agent(self, task: str) -> None:
         self._agent_running = True
-        self._disable_input()
+        # Keep input enabled for /btw injection and command queuing
+        self._set_input_placeholder(
+            "Agent running — /btw to guide, or type to queue..."
+        )
 
         # Start streaming via queue
         _output_queue.put(("start_stream", None))
@@ -582,6 +662,35 @@ class MiMoTUI(App):
         self._agent_running = False
         self._permission_mode = False
         self._enable_input()
+
+        # Drain command queue: process slash commands until we find one
+        # that starts an agent (non-slash), or the queue is empty.
+        # Slash commands like /clear, /help don't start agents, so we
+        # must keep draining until a runnable command is found.
+        try:
+            while self._command_queue:
+                next_cmd = self._command_queue.pop(0)
+                remaining = len(self._command_queue)
+                suffix = f" ({remaining} remaining in queue)" if remaining else ""
+                self.write_output(
+                    f"[dim]Executing queued command{suffix}: {next_cmd}[/dim]"
+                )
+                try:
+                    if next_cmd.startswith("/"):
+                        self._handle_command(next_cmd)
+                    else:
+                        self._run_agent(next_cmd)
+                        break
+                except Exception as e:
+                    self.write_output(
+                        f"[red]Error executing queued command: {e}[/red]"
+                    )
+                    # Continue draining remaining queue items
+        except Exception as e:
+            # Catch-all: prevent drain timer from dying
+            self.write_output(f"[red]Queue drain error: {e}[/red]")
+
+        # Update after queue drain so status bar reflects final state
         self._update_status_bar()
 
     def _cleanup_interrupted_session(self) -> None:
@@ -649,6 +758,14 @@ class MiMoTUI(App):
         prompt_text.append("  (press key)", style="dim")
         self.write_output(prompt_text)
 
+    def _set_input_placeholder(self, text: str) -> None:
+        """Update the input box placeholder text."""
+        try:
+            inp = self.query_one("#input-area", Input)
+            inp.placeholder = text
+        except Exception:
+            pass
+
     def _disable_input(self) -> None:
         inp = self.query_one("#input-area", Input)
         inp.disabled = True
@@ -656,6 +773,7 @@ class MiMoTUI(App):
     def _enable_input(self) -> None:
         inp = self.query_one("#input-area", Input)
         inp.disabled = False
+        inp.placeholder = self._default_placeholder
         inp.focus()
 
     # ── Actions ─────────────────────────────────────────────────
@@ -671,7 +789,15 @@ class MiMoTUI(App):
         if self._agent_running:
             # Agent is running - interrupt it
             self.harness.graceful_abort.request()
-            self.write_output("[yellow]Interrupted - stopping current task...[/yellow]")
+            # Clear any queued commands
+            if self._command_queue:
+                n = len(self._command_queue)
+                self._command_queue.clear()
+                self.write_output(
+                    f"[yellow]Interrupted - cleared {n} queued command(s)[/yellow]"
+                )
+            else:
+                self.write_output("[yellow]Interrupted - stopping current task...[/yellow]")
         else:
             # Agent is not running
             try:
@@ -717,6 +843,7 @@ class MiMoTUI(App):
                 pass
         # Force-restore state even if thread doesn't die cleanly
         # Clear the output queue to avoid stale items
+        self._command_queue.clear()
         while not _output_queue.empty():
             try:
                 _output_queue.get_nowait()
