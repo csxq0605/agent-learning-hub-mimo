@@ -50,16 +50,28 @@ class FileReferenceParser:
         Returns:
             List of resolved file paths
         """
+        # Normalize base directory
+        base_dir = os.path.abspath(base_dir)
+
         # Handle absolute paths
         if os.path.isabs(ref_path):
-            if os.path.exists(ref_path):
-                return [ref_path]
+            # Check for path traversal - absolute paths must be within base_dir
+            abs_path = os.path.abspath(ref_path)
+            if not abs_path.startswith(base_dir):
+                return []  # Block path traversal
+            if os.path.exists(abs_path):
+                return [abs_path]
             # Try glob for wildcards
-            matches = glob.glob(ref_path)
-            return [m for m in matches if os.path.isfile(m)]
+            matches = glob.glob(abs_path)
+            return [m for m in matches if os.path.isfile(m) and m.startswith(base_dir)]
 
         # Handle relative paths
         full_path = os.path.join(base_dir, ref_path)
+
+        # Check for path traversal
+        abs_full_path = os.path.abspath(full_path)
+        if not abs_full_path.startswith(base_dir):
+            return []  # Block path traversal
 
         # Check if it's a directory
         if os.path.isdir(full_path):
@@ -71,9 +83,9 @@ class FileReferenceParser:
             return [full_path]
 
         # Try glob for wildcards
-        matches = glob.glob(full_path, recursive=True)
+        matches = glob.glob(abs_full_path, recursive=True)
         if matches:
-            return [m for m in matches if os.path.isfile(m)]
+            return [m for m in matches if os.path.isfile(m) and os.path.abspath(m).startswith(base_dir)]
 
         return []
 

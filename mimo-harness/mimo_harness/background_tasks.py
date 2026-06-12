@@ -80,7 +80,8 @@ class BackgroundTaskManager:
 
     def get_task(self, task_id: str) -> Optional[BackgroundTask]:
         """Get a task by ID."""
-        return self.tasks.get(task_id)
+        with self._lock:
+            return self.tasks.get(task_id)
 
     def list_tasks(self) -> List[Dict[str, Any]]:
         """List all tasks."""
@@ -97,21 +98,33 @@ class BackgroundTaskManager:
 
     def cancel_task(self, task_id: str) -> bool:
         """Cancel a running task."""
-        task = self.get_task(task_id)
-        if not task or task.state not in (TaskState.PENDING, TaskState.RUNNING):
-            return False
+        with self._lock:
+            task = self.tasks.get(task_id)
+            if not task or task.state not in (TaskState.PENDING, TaskState.RUNNING):
+                return False
 
-        task.cancel_event.set()
-        task.state = TaskState.CANCELLED
-        task.end_time = time.time()
-        return True
+            task.cancel_event.set()
+            task.state = TaskState.CANCELLED
+            task.end_time = time.time()
+            return True
 
     def get_task_output(self, task_id: str) -> Optional[str]:
         """Get task output."""
+        with self._lock:
+            task = self.tasks.get(task_id)
+            if not task:
+                return None
+            return task.output
+
+    def wait_for_task(self, task_id: str, timeout: float = None) -> bool:
+        """Wait for a task to complete."""
         task = self.get_task(task_id)
         if not task:
-            return None
-        return task.output
+            return False
+        if task.thread:
+            task.thread.join(timeout=timeout)
+            return task.state in (TaskState.COMPLETED, TaskState.FAILED, TaskState.CANCELLED)
+        return False
 
     def cleanup_completed(self):
         """Remove completed tasks."""

@@ -182,6 +182,11 @@ class AgentManager:
                      tools: List[str] = None, model: str = "inherit",
                      scope: str = "user") -> str:
         """Create a new agent definition file."""
+        # Validate name - only allow alphanumeric, hyphens, underscores
+        import re
+        if not re.match(r'^[a-zA-Z0-9_-]+$', name):
+            raise ValueError(f"Invalid agent name: {name}. Only alphanumeric, hyphens, and underscores allowed.")
+
         # Determine directory
         if scope == "project":
             agents_dir = os.path.join(self.project_root, '.mimo', 'agents')
@@ -206,8 +211,11 @@ class AgentManager:
 
         # Write file
         filepath = os.path.join(agents_dir, f"{name}.md")
-        with open(filepath, 'w', encoding='utf-8') as f:
-            f.write(content)
+        try:
+            with open(filepath, 'w', encoding='utf-8') as f:
+                f.write(content)
+        except (IOError, OSError) as e:
+            raise ValueError(f"Failed to create agent file: {e}")
 
         # Refresh agents
         self._refresh_agents()

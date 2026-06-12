@@ -109,7 +109,7 @@ class MiMoTUI(App):
     BINDINGS = [
         Binding("ctrl+c", "abort", "Abort", show=False, priority=True),
         Binding("ctrl+k", "force_kill", "Force Kill", show=False, priority=True),
-        Binding("escape", "interrupt", "Interrupt", show=False),
+        Binding("escape", "interrupt", "Interrupt", show=False, priority=True),
         Binding("up", "history_up", "History Up", show=False),
         Binding("down", "history_down", "History Down", show=False),
         Binding("tab", "tab_complete", "Tab Complete", show=False, priority=True),
@@ -308,7 +308,7 @@ class MiMoTUI(App):
             self._permission_mode = False
             self._permission_event.set()
             event.stop()
-        elif key == "n":
+        elif key == "n" or key == "escape":
             self._permission_result = False
             self._write_permission_response(False)
             self._permission_mode = False

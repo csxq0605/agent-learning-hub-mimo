@@ -44,7 +44,8 @@ class GoalManager:
 
     def get_goal(self) -> Optional[GoalState]:
         """Get the current goal."""
-        return self.goal
+        with self._lock:
+            return self.goal
 
     def clear_goal(self) -> None:
         """Clear the current goal."""
@@ -76,24 +77,26 @@ class GoalManager:
 
     def get_duration(self) -> float:
         """Get goal duration in seconds."""
-        if not self.goal or self.goal.start_time == 0:
-            return 0
-        return time.time() - self.goal.start_time
+        with self._lock:
+            if not self.goal or self.goal.start_time == 0:
+                return 0
+            return time.time() - self.goal.start_time
 
     def get_status(self) -> Dict[str, Any]:
         """Get goal status as dictionary."""
-        if not self.goal:
-            return {'active': False}
+        with self._lock:
+            if not self.goal:
+                return {'active': False}
 
-        return {
-            'active': self.goal.is_active,
-            'achieved': self.goal.is_achieved,
-            'condition': self.goal.condition,
-            'duration': self.get_duration(),
-            'turns': self.goal.turns_evaluated,
-            'tokens': self.goal.tokens_spent,
-            'reason': self.goal.last_reason,
-        }
+            return {
+                'active': self.goal.is_active,
+                'achieved': self.goal.is_achieved,
+                'condition': self.goal.condition,
+                'duration': time.time() - self.goal.start_time if self.goal.start_time > 0 else 0,
+                'turns': self.goal.turns_evaluated,
+                'tokens': self.goal.tokens_spent,
+                'reason': self.goal.last_reason,
+            }
 
 
 class GoalEvaluator:
