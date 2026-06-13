@@ -59,6 +59,8 @@ __all__ = [
     "detect_sensitive_disclosure",
     "detect_prompt_injection",
     "classify_action",
+    "classify_action_regex",
+    "classify_action_model",
     "review_action",
     "filter_tool_output",
     # SubAgent system

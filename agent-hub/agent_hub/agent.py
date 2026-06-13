@@ -15,7 +15,6 @@ import secrets
 import platform
 import queue
 import threading
-import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from enum import Enum
@@ -869,7 +868,7 @@ You help users with coding, file operations, web research, document creation, an
 
             # Warn user when context is large — let them decide to /compact
             conv_tokens = estimate_tokens(session.get_messages())
-            if conv_tokens >= COMPRESS_TRIGGER_TOKENS:
+            if conv_tokens >= COMPRESS_TRIGGER_TOKENS and self.token_budget.effective_max > 0:
                 pct = conv_tokens / self.token_budget.effective_max
                 if not self._compact_warned:
                     print_warning(f"Context at {pct:.0%} — consider /compact to free space")

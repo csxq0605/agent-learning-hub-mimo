@@ -606,18 +606,16 @@ class SubAgentManager:
         self.broadcast_channel = MessageChannel(channel_id="broadcast")
 
     def _check_resource_limits(self) -> Optional[str]:
-        """Check if hard resource limits are exceeded.
-
-        Hard limits (non-zero values in ResourceLimits) act as safety nets.
-        Soft warnings are handled by ResourceMonitor at 80% thresholds.
-
-        Returns:
-            Error message if hard limits exceeded, None otherwise
-        """
+        """Check if hard resource limits are exceeded (acquires lock)."""
         with self._lock:
-            elapsed = time.time() - self._start_time
-            subagent_count = len(self._subagents)
-            token_usage = self._total_tokens_used
+            return self._check_resource_limits_locked()
+
+    def _check_resource_limits_locked(self) -> Optional[str]:
+        """Check if hard resource limits are exceeded (caller must hold self._lock)."""
+        elapsed = time.time() - self._start_time
+        # Count active (non-terminal) subagents for limit check
+        subagent_count = sum(1 for sa in self._subagents.values() if not sa.is_terminal())
+        token_usage = self._total_tokens_used
 
         if not self.resource_limits.check_time_limit(elapsed):
             msg = f"Time limit exceeded ({elapsed:.1f}s >= {self.resource_limits.max_total_time}s)"
@@ -639,18 +637,17 @@ class SubAgentManager:
         Raises:
             RuntimeError: If resource limits are exceeded
         """
-        # Check resource limits before creating
-        limit_error = self._check_resource_limits()
-        if limit_error:
-            raise RuntimeError(f"Cannot create SubAgent: {limit_error}")
-
         subagent = SubAgent(
             config=config,
             parent_harness=self.parent_harness,
             logger=self.logger,
         )
 
+        # Atomic: check limits + register under single lock (prevents TOCTOU)
         with self._lock:
+            limit_error = self._check_resource_limits_locked()
+            if limit_error:
+                raise RuntimeError(f"Cannot create SubAgent: {limit_error}")
             self._subagents[subagent.subagent_id] = subagent
 
         self.logger.trace("subagent_created", {
@@ -742,13 +739,11 @@ class SubAgentManager:
 
         return results
 
-    def run_pipeline(self, configs: list[SubAgentConfig], max_context_length: int = 200_000) -> list[SubAgentResult]:
+    def run_pipeline(self, configs: list[SubAgentConfig]) -> list[SubAgentResult]:
         """Run SubAgents in pipeline mode (sequential, each gets previous results).
 
         Args:
             configs: List of SubAgentConfig for each stage
-            max_context_length: Max chars of previous context to pass forward (default 200K).
-                                Prevents unbounded prompt growth across stages.
 
         Returns:
             List of SubAgentResult for each stage
@@ -757,12 +752,9 @@ class SubAgentManager:
         previous_context = ""
 
         for idx, config in enumerate(configs):
-            # Add previous results to the task context (truncate if needed)
+            # Add previous results to the task context (monitor warns on size)
             if previous_context:
-                ctx = previous_context
-                if len(ctx) > max_context_length:
-                    ctx = ctx[:max_context_length] + f"\n... (truncated from {len(previous_context)} chars)"
-                enhanced_task = f"{config.task}\n\n## Previous Stage Results\n{ctx}"
+                enhanced_task = f"{config.task}\n\n## Previous Stage Results\n{previous_context}"
                 enhanced_config = replace(config, task=enhanced_task)
             else:
                 enhanced_config = config
@@ -778,6 +770,15 @@ class SubAgentManager:
                 previous_context = result.result
             else:
                 self.logger.warning(f"Pipeline stage {idx + 1} failed: {result.error}")
+                # Mark remaining stages as skipped (stale context is misleading)
+                for remaining_idx in range(idx + 1, len(configs)):
+                    results.append(SubAgentResult(
+                        subagent_id=f"skipped-{remaining_idx}",
+                        task=configs[remaining_idx].task,
+                        state=SubAgentState.FAILED,
+                        error=f"Skipped — stage {idx + 1} failed",
+                    ))
+                break
 
         return results
 
