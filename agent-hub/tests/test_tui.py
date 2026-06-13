@@ -10,6 +10,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from agent_hub.tui import MiMoTUI
+
 
 # ── Helpers ────────────────────────────────────────────────────
 
@@ -27,7 +29,6 @@ def _make_tui_app(tmp_path):
     session.messages = []
     session.get_messages.return_value = []
 
-    from agent_hub.tui import MiMoTUI
     app = MiMoTUI(
         harness=harness,
         session=session,
@@ -576,3 +577,80 @@ class TestTUIBehavior:
         # Should have tried /bad_cmd, then moved to "real task"
         assert call_count[0] == 1
         mock_run.assert_called_once_with("real task")
+
+    def test_btw_idle_adds_to_session_messages(self, tmp_path):
+        """/btw when idle actually appends to session.messages list."""
+        app = _make_tui_app(tmp_path)
+        app._agent_running = False
+        app.session.messages = []
+        # Use a real list for messages to verify actual append
+        def fake_add_message(role, content):
+            app.session.messages.append({"role": role, "content": content})
+        app.session.add_message = fake_add_message
+        app._handle_command("/btw context note")
+        assert len(app.session.messages) == 1
+        assert app.session.messages[0] == {"role": "user", "content": "context note"}
+
+    def test_btw_during_agent_adds_to_session_messages(self, tmp_path):
+        """/btw while agent runs actually appends to session.messages list."""
+        app = _make_tui_app(tmp_path)
+        app._agent_running = True
+        app.session.messages = []
+        def fake_add_message(role, content):
+            app.session.messages.append({"role": role, "content": content})
+        app.session.add_message = fake_add_message
+        app._handle_during_agent("/btw guidance here")
+        assert len(app.session.messages) == 1
+        assert app.session.messages[0] == {"role": "user", "content": "guidance here"}
+
+    def test_btw_with_multiple_spaces_parses_correctly(self, tmp_path):
+        """/btw followed by multiple spaces then content works correctly."""
+        app = _make_tui_app(tmp_path)
+        app._agent_running = True
+        app._handle_during_agent("/btw   hello world  ")
+        app.session.add_message.assert_called_once_with("user", "hello world")
+
+    def test_queue_size_limit_enforced(self, tmp_path):
+        """Queue rejects new items when at max capacity."""
+        from agent_hub.tui import _MAX_QUEUE_SIZE
+        app = _make_tui_app(tmp_path)
+        app._agent_running = True
+        app._command_queue = ["x"] * _MAX_QUEUE_SIZE
+        with patch.object(app, 'write_output') as mock_out:
+            app._handle_during_agent("one more")
+        assert len(app._command_queue) == _MAX_QUEUE_SIZE
+        call_args = str(mock_out.call_args)
+        assert "Queue full" in call_args
+
+    def test_parse_btw_returns_none_for_non_btw(self):
+        """_parse_btw returns None for non-/btw commands."""
+        assert MiMoTUI._parse_btw("hello") is None
+        assert MiMoTUI._parse_btw("/help") is None
+        assert MiMoTUI._parse_btw("/clear") is None
+
+    def test_parse_btw_returns_empty_for_bare_btw(self):
+        """_parse_btw returns empty string for bare /btw."""
+        assert MiMoTUI._parse_btw("/btw") == ""
+
+    def test_parse_btw_returns_content(self):
+        """_parse_btw returns stripped content for /btw with message."""
+        assert MiMoTUI._parse_btw("/btw hello") == "hello"
+        assert MiMoTUI._parse_btw("/btw   spaced   ") == "spaced"
+
+    def test_on_agent_done_run_agent_exception_preserves_queue(self, tmp_path):
+        """If _run_agent raises during drain, remaining queue items are preserved."""
+        app = _make_tui_app(tmp_path)
+        app._agent_running = True
+        app._command_queue = ["task1", "task2"]
+
+        def failing_run_agent(task):
+            raise RuntimeError("agent failed")
+
+        with patch.object(app, '_run_agent', side_effect=failing_run_agent):
+            with patch.object(app, 'write_output') as mock_out:
+                app._on_agent_done()
+        # task1 failed, task2 should remain in queue
+        assert app._command_queue == ["task2"]
+        # Error message should be displayed
+        error_calls = [str(c) for c in mock_out.call_args_list]
+        assert any("Error" in c for c in error_calls)

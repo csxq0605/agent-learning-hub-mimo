@@ -18,6 +18,7 @@ from contextlib import redirect_stdout
 from threading import Event
 
 _BTW_CMD = "/btw"
+_MAX_QUEUE_SIZE = 50    # max queued commands during agent run
 
 from rich.panel import Panel
 from rich.table import Table
@@ -406,6 +407,19 @@ class MiMoTUI(App):
 
         self._update_status_bar()
 
+    @staticmethod
+    def _parse_btw(text: str) -> str | None:
+        """Parse /btw command and return the message content.
+
+        Returns the stripped message if text is a valid /btw command,
+        None if it's not a /btw command, or "" if /btw has no content.
+        """
+        if text == _BTW_CMD:
+            return ""  # /btw with no message
+        if text.startswith(_BTW_CMD + " "):
+            return text[len(_BTW_CMD):].strip()
+        return None  # not a /btw command
+
     def _handle_during_agent(self, text: str) -> None:
         """Handle input submitted while agent is running.
 
@@ -413,8 +427,8 @@ class MiMoTUI(App):
         Anything else — queue for execution after agent finishes.
         """
         # /btw: inject guidance into the running agent's context
-        if text == _BTW_CMD or text.startswith(_BTW_CMD + " "):
-            btw_msg = text[len(_BTW_CMD):].strip()
+        btw_msg = self._parse_btw(text)
+        if btw_msg is not None:
             if not btw_msg:
                 self.write_output("[yellow]Usage: /btw <your guidance message>[/yellow]")
                 return
@@ -433,6 +447,11 @@ class MiMoTUI(App):
             return
 
         # Any other input: queue for later execution
+        if len(self._command_queue) >= _MAX_QUEUE_SIZE:
+            self.write_output(
+                f"[yellow]Queue full ({_MAX_QUEUE_SIZE} items). Wait for agent to finish.[/yellow]"
+            )
+            return
         self._command_queue.append(text)
         queue_pos = len(self._command_queue)
         self.write_output(
@@ -450,8 +469,8 @@ class MiMoTUI(App):
 
     def _handle_command(self, text: str) -> None:
         # /btw when agent is idle: add message to session context for next turn
-        if text == _BTW_CMD or text.startswith(_BTW_CMD + " "):
-            btw_msg = text[len(_BTW_CMD):].strip()
+        btw_msg = self._parse_btw(text)
+        if btw_msg is not None:
             if btw_msg:
                 self.session.add_message("user", btw_msg)
                 self.write_output(
@@ -480,8 +499,10 @@ class MiMoTUI(App):
                     self.checkpoint_manager, self.session_dir,
                 )
             self.session = new_session
-        except SystemExit:
-            action = "continue"
+        except SystemExit as e:
+            # In TUI mode, catch SystemExit from slash commands (e.g., /quit)
+            # and handle gracefully. The actual exit is done by _save_and_exit().
+            action = "continue" if e.code is None else "quit"
 
         output = buf.getvalue()
         if output.strip():
@@ -695,7 +716,11 @@ class MiMoTUI(App):
                     self.write_output(
                         f"[red]Error executing queued command: {e}[/red]"
                     )
-                    # Continue draining remaining queue items
+                    # Non-slash command failed — stop drain, preserve remaining
+                    # so user can fix the issue and retry.
+                    if not next_cmd.startswith("/"):
+                        break
+                    # Slash command error — continue draining
         except Exception as e:
             # Catch-all: prevent drain timer from dying
             self.write_output(f"[red]Queue drain error: {e}[/red]")
