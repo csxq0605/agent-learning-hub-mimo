@@ -209,6 +209,7 @@ class TokenBudget:
 # Retry with exponential backoff (Ch2: error recovery)
 # ---------------------------------------------------------------------------
 def retry_with_backoff(fn, max_retries: int = 3, base_delay: float = 1.0):
+    import random as _random
     last_error = None
     last_traceback = None
     # L10: Also retry on common network errors (no status_code attribute)
@@ -227,7 +228,11 @@ def retry_with_backoff(fn, max_retries: int = 3, base_delay: float = 1.0):
             if not is_retryable:
                 raise
             if attempt < max_retries - 1:
-                time.sleep(base_delay * (2 ** attempt))
+                delay = base_delay * (2 ** attempt)
+                # Add jitter to prevent thundering herd when multiple
+                # SubAgents retry simultaneously on 429/503
+                jitter = _random.uniform(0, delay * 0.5)
+                time.sleep(delay + jitter)
     raise last_error.with_traceback(last_traceback)
 
 
@@ -602,9 +607,12 @@ You help users with coding, file operations, web research, document creation, an
             def __init__(self, stream_iter):
                 self._queue = queue.Queue()
                 self._error = None
+                self._closed = False
                 def _read():
                     try:
                         for chunk in stream_iter:
+                            if self._closed:
+                                break
                             self._queue.put(chunk)
                     except Exception as e:
                         self._error = e
@@ -623,6 +631,16 @@ You help users with coding, file operations, web research, document creation, an
                         raise self._error
                     raise StopIteration
                 return item
+
+            def close(self):
+                """Signal the background thread to stop and drain the queue."""
+                self._closed = True
+                # Drain the queue so the background thread's put() doesn't block
+                while not self._queue.empty():
+                    try:
+                        self._queue.get_nowait()
+                    except queue.Empty:
+                        break
 
         def _create_and_consume_stream():
             """Create stream, wrap in _StreamReader for per-chunk timeout."""
@@ -698,6 +716,7 @@ You help users with coding, file operations, web research, document creation, an
                                 tool_calls_data[idx]["arguments"] += tc_chunk.function.arguments
         except (queue.Empty, TimeoutError):
             # Per-chunk timeout — API hung mid-stream
+            response_stream.close()  # Stop background thread from accumulating data
             print_streaming_end()
             raise TimeoutError("API stream timeout — no data received within 120s")
 

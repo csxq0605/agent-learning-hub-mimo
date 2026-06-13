@@ -762,7 +762,16 @@ class SubAgentManager:
             stage_label = config.description or config.task[:50] or "(unnamed)"
             self.logger.info(f"Pipeline stage {idx + 1}/{len(configs)}: {stage_label}")
 
-            result = self.run_single(enhanced_config)
+            try:
+                result = self.run_single(enhanced_config)
+            except Exception as e:
+                # Resource limit or other creation failure — treat as stage failure
+                result = SubAgentResult(
+                    subagent_id=f"error-{idx}",
+                    task=config.task,
+                    state=SubAgentState.FAILED,
+                    error=f"{type(e).__name__}: {e}",
+                )
             results.append(result)
 
             # Update context for next stage

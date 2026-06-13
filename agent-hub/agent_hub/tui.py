@@ -165,6 +165,10 @@ class MiMoTUI(App):
         self._permission_mode = False  # True when waiting for Y/n
         # Worker thread tracking for force-kill
         self._worker_thread: threading.Thread | None = None
+        # Generation counter to discard stale "done" signals from killed threads
+        self._agent_generation = 0
+        # Flag set by _save_and_exit to stop drain loop from starting new agents
+        self._exiting = False
 
     def compose(self) -> ComposeResult:
         yield RichLog(
@@ -219,7 +223,7 @@ class MiMoTUI(App):
                 elif kind == "end_stream":
                     self._end_streaming_internal()
                 elif kind == "done":
-                    self._on_agent_done()
+                    self._on_agent_done(data)
                 elif kind == "permission":
                     desc, value = data
                     self._show_permission_prompt(desc, value)
@@ -566,6 +570,9 @@ class MiMoTUI(App):
 
     def _run_agent(self, task: str) -> None:
         self._agent_running = True
+        # Increment generation so stale "done" from killed threads are discarded
+        self._agent_generation += 1
+        current_gen = self._agent_generation
         # Drain any stale warnings from previous runs
         while not self._monitor_warning_queue.empty():
             try:
@@ -636,7 +643,7 @@ class MiMoTUI(App):
             self._agent_worker(task, _display_mod,
                                _perm_mod, orig_perm_request,
                                orig_stdout, orig_stderr,
-                               orig_console_file),
+                               orig_console_file, current_gen),
             exclusive=True,
             thread=True,
         )
@@ -644,7 +651,7 @@ class MiMoTUI(App):
     def _agent_worker(self, task, display_mod,
                       perm_mod=None, orig_perm_request=None,
                       orig_stdout=None, orig_stderr=None,
-                      orig_console_file=None):
+                      orig_console_file=None, agent_gen=0):
         def worker():
             # Save thread reference for force-kill
             self._worker_thread = threading.current_thread()
@@ -716,11 +723,20 @@ class MiMoTUI(App):
                 if perm_mod is not None:
                     perm_mod._tui_permission_request = orig_perm_request
                 self._worker_thread = None
-                _output_queue.put(("done", None))
+                _output_queue.put(("done", agent_gen))
         return worker
 
-    def _on_agent_done(self) -> None:
-        """Called on main thread when agent finishes."""
+    def _on_agent_done(self, generation: int = 0) -> None:
+        """Called on main thread when agent finishes.
+
+        Args:
+            generation: The agent generation ID from the "done" signal.
+                If it doesn't match the current generation, the signal is
+                stale (from a force-killed thread) and is silently discarded.
+        """
+        # Discard stale "done" signals from force-killed threads
+        if generation and generation != self._agent_generation:
+            return
         self._end_streaming_internal()
         self._agent_running = False
         self._permission_mode = False
@@ -738,7 +754,7 @@ class MiMoTUI(App):
         # Slash commands like /clear, /help don't start agents, so we
         # must keep draining until a runnable command is found.
         try:
-            while self._command_queue:
+            while self._command_queue and not self._exiting:
                 next_cmd = self._command_queue.pop(0)
                 remaining = len(self._command_queue)
                 suffix = f" ({remaining} remaining in queue)" if remaining else ""
@@ -1056,6 +1072,7 @@ class MiMoTUI(App):
             self.write_output("  [dim]" + "  ".join(matches) + "[/dim]")
 
     def _save_and_exit(self) -> None:
+        self._exiting = True
         try:
             self.session.save_meta_to_jsonl()
         except OSError:
