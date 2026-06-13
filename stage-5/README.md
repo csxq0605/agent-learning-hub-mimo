@@ -1,63 +1,63 @@
-# Stage 5: Reusable Code Review Skill
+# Stage 5: 可复用代码审查 Skill
 
-## Deliverable
-A reusable `code-review` skill with SKILL.md, review script, and smoke test.
+## 交付物
+一个可复用的 `code-review` skill，包含 SKILL.md、审查脚本和冒烟测试。
 
 ## Skill vs Tool vs Prompt vs MCP
 
-| Concept | What It Is | Example |
-|---------|-----------|---------|
-| **Tool** | A callable API endpoint | `read_file(path)` returns file contents |
-| **Prompt** | A one-shot instruction | "Review this code for bugs" |
-| **Skill** | A reusable workflow with steps, scripts, templates, and acceptance criteria | This code-review skill |
-| **MCP** | A protocol to connect external tools/data sources | Jira MCP server for ticket access |
+| 概念 | 是什么 | 示例 |
+|------|--------|------|
+| **Tool** | 可调用的 API 端点 | `read_file(path)` 返回文件内容 |
+| **Prompt** | 一次性指令 | "审查这段代码的 bug" |
+| **Skill** | 可复用的工作流，包含步骤、脚本、模板和验收标准 | 这个 code-review skill |
+| **MCP** | 连接外部工具/数据源的协议 | Jira MCP 服务器用于工单访问 |
 
-A Skill is **more than a prompt**: it has:
-- Defined trigger conditions ("when to use")
-- Step-by-step workflow
-- Supporting scripts and templates
-- Acceptance criteria for success
-- A smoke test to verify it works
+Skill **不仅仅是 prompt**，它有：
+- 定义的触发条件（"何时使用"）
+- 分步骤工作流
+- 支持脚本和模板
+- 成功的验收标准
+- 验证其工作的冒烟测试
 
-## Skill Structure
+## Skill 结构
 
 ```
 code-review-skill/
-├── SKILL.md          # Skill definition (name, description, when to use, steps, acceptance criteria)
-└── review.py         # Entry point script with smoke test
+├── SKILL.md          # Skill 定义（名称、描述、使用时机、步骤、验收标准）
+└── review.py         # 入口脚本，带冒烟测试
 ```
 
-## How to Run
+## 运行方式
 
 ```bash
 pip install openai python-dotenv
 
-# Smoke test (verifies the skill works - tests SQL injection and hardcoded credential detection)
+# 冒烟测试（验证 skill 工作 - 测试 SQL 注入和硬编码凭据检测）
 python review.py --smoke-test
 
-# Review a file
+# 审查文件
 # 在 .env 中配置 MIMO_BASE_URL, MIMO_API_KEY, MIMO_MODEL
 python review.py src/auth.py
 
-# Review with specific focus (security, bug, style, performance)
+# 指定焦点审查（security, bug, style, performance）
 python review.py src/api.py --focus security
 ```
 
-## Review Output Format
+## 审查输出格式
 
-The review produces a structured JSON output with:
-- **issues**: Array of findings with severity (critical/warning/info), category, line number, description, and suggestion
-- **summary**: Files reviewed, issue counts by severity, overall quality rating
+审查产生结构化 JSON 输出：
+- **issues**：发现数组，包含严重性（critical/warning/info）、类别、行号、描述和建议
+- **summary**：审查文件数、按严重性统计的问题数、整体质量评级
 
-## Smoke Test
+## 冒烟测试
 
-The smoke test verifies:
-1. API connectivity to MiMo model
-2. JSON output parsing
-3. SQL injection detection in test code
-4. Hardcoded credential detection in test code
+冒烟测试验证：
+1. 到 MiMo 模型的 API 连通性
+2. JSON 输出解析
+3. 测试代码中的 SQL 注入检测
+4. 测试代码中的硬编码凭据检测
 
-## References
+## 参考资料
 - [Claude Code Skills](https://code.claude.com/docs/en/skills)
 - [OpenClaw Skills](https://github.com/openclaw/openclaw/blob/main/docs/tools/skills.md)
 - [SWE-Skills-Bench](https://arxiv.org/abs/2603.15401)

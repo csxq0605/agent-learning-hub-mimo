@@ -1,64 +1,64 @@
-# Stage 6: Browser Agent
+# Stage 6: 浏览器 Agent
 
-## Deliverable
-A browser agent that navigates web pages, extracts information, and generates summaries.
+## 交付物
+一个浏览器 agent，能够导航网页、提取信息并生成摘要。
 
-## Architecture
+## 架构
 
 ```
-User Query
+用户查询
     |
     v
 [Browser Agent]
     |
-    ├── navigate(url) ──> page metadata (title, status, ok)
-    ├── extract_text(selector) ──> page content (truncated to 5000 chars)
-    ├── extract_links() ──> link list (max 50, http only)
-    ├── click(selector) ──> interaction (with form safety check)
-    └── screenshot(path) ──> audit trail
+    ├── navigate(url) ──> 页面元数据（title, status, ok）
+    ├── extract_text(selector) ──> 页面内容（截断到 5000 字符）
+    ├── extract_links() ──> 链接列表（最多 50 个，仅 http）
+    ├── click(selector) ──> 交互（带表单安全检查）
+    └── screenshot(path) ──> 审计追踪
     |
     v
-[Research Summary]
+[研究摘要]
 ```
 
-## Safety Guards
+## 安全守卫
 
-| Guard | Implementation |
-|-------|---------------|
-| **URL validation** | Only http/https allowed (checked in `navigate()`) |
-| **No form submission** | `click()` refuses to submit `<form>` elements and submit buttons |
-| **Text truncation** | Extracted text capped at 5000 chars |
-| **Link limit** | Max 50 links per extraction, filtered to http only |
-| **Timeout** | 30s page load timeout (configurable) |
-| **Audit trail** | Every action logged with `_log()` method |
-| **Headless mode** | Default headless, no visible browser |
-| **User agent** | Custom user agent: "Mozilla/5.0 (compatible; ResearchBot/1.0)" |
+| 守卫 | 实现方式 |
+|------|---------|
+| **URL 验证** | 仅允许 http/https（在 `navigate()` 中检查） |
+| **禁止表单提交** | `click()` 拒绝提交 `<form>` 元素和提交按钮 |
+| **文本截断** | 提取文本上限 5000 字符 |
+| **链接限制** | 每次提取最多 50 个链接，仅 http |
+| **超时** | 30 秒页面加载超时（可配置） |
+| **审计追踪** | 每个操作通过 `_log()` 方法记录 |
+| **无头模式** | 默认无头，不显示浏览器 |
+| **用户代理** | 自定义用户代理：`"Mozilla/5.0 (compatible; ResearchBot/1.0)"` |
 
-## How to Run
+## 运行方式
 ```bash
 pip install playwright
 playwright install chromium
 python browser_agent.py
 ```
 
-## Key Methods
+## 关键方法
 
-| Method | Description | Returns |
-|--------|-------------|---------|
-| `navigate(url)` | Navigate to URL, wait for domcontentloaded | `{url, title, status, ok}` |
-| `extract_text(selector)` | Extract text from element (default: body) | `{text, length}` |
-| `extract_links()` | Extract all http links from page | `{links, count}` |
-| `click(selector)` | Click element (blocks form submits) | `{status, selector}` |
-| `screenshot(path)` | Take viewport screenshot | `{path, status}` |
+| 方法 | 描述 | 返回值 |
+|------|------|--------|
+| `navigate(url)` | 导航到 URL，等待 domcontentloaded | `{url, title, status, ok}` |
+| `extract_text(selector)` | 从元素提取文本（默认：body） | `{text, length}` |
+| `extract_links()` | 提取页面所有 http 链接 | `{links, count}` |
+| `click(selector)` | 点击元素（阻止表单提交） | `{status, selector}` |
+| `screenshot(path)` | 截取视口截图 | `{path, status}` |
 
-## Limitations
-- Uses Google search (may be blocked without proper headers)
-- No JavaScript-heavy SPA support (basic domcontentloaded)
-- No authentication or login (by design - safety)
-- Screenshots are viewport-only, not full-page
-- No cookie or session management
+## 限制
+- 使用 Google 搜索（可能被阻止，需要合适的 headers）
+- 不支持 JavaScript 重度 SPA（仅基础 domcontentloaded）
+- 不支持认证或登录（出于安全设计）
+- 截图仅限视口，非全页
+- 不支持 cookie 或会话管理
 
-## References
+## 参考资料
 - [browser-use](https://github.com/browser-use/browser-use)
 - [Playwright Docs](https://playwright.dev/python/)
 - [Claude Computer Use](https://docs.anthropic.com/en/docs/agents-and-tools/tool-use/computer-use-tool)

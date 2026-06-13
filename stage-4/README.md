@@ -1,72 +1,72 @@
-# Stage 4: Multi-Agent Writer
+# Stage 4: 多 Agent 写作系统
 
-## Deliverable
-A multi-agent pipeline: Research -> Write -> Review -> Revise
+## 交付物
+一个多 Agent 管线：研究 → 写作 → 审查 → 修改
 
-## Architecture
+## 架构
 
 ```
-User Topic
+用户主题
     |
     v
 [Supervisor] ──────────────────────────┐
     |                                   |
     v                                   |
-[Researcher] ──> key findings           |
+[Researcher] ──> 关键发现               |
     |                                   |
     v                                   |
-[Writer] ──> article draft              |
+[Writer] ──> 文章草稿                   |
     |                                   |
     v                                   |
-[Reviewer] ──> score + feedback         |
+[Reviewer] ──> 评分 + 反馈              |
     |                                   |
     v                                   |
-  score >= 7? ──YES──> [Done]           |
+  评分 >= 7? ──YES──> [完成]            |
     |                                   |
     NO                                  |
     |                                   |
     v                                   |
-[Reviser] ──> improved article          |
+[Reviser] ──> 改进文章                  |
     |                                   |
     v                                   |
-  (loop back to Reviewer, max 2x) ─────┘
+  （循环回 Reviewer，最多 2 次）─────────┘
 ```
 
-## Key Concepts
+## 关键概念
 
-### Role Separation
-Each agent has:
-- A specialized system prompt defining its expertise
-- A defined input schema (what it receives)
-- A defined output schema (what it produces)
+### 角色分离
+每个 agent 都有：
+- 专门的系统提示定义其专业领域
+- 定义的输入模式（接收什么）
+- 定义的输出模式（产出什么）
 
-### Supervisor Pattern
-The supervisor:
-- Delegates tasks to specialized agents
-- Aggregates results between steps
-- Controls the review-revise loop
-- Enforces stop conditions (max revisions, approval threshold)
+### Supervisor 模式
+Supervisor 负责：
+- 将任务委派给专门的 agent
+- 在步骤之间聚合结果
+- 控制审查-修改循环
+- 强制停止条件（最大修改次数、批准阈值）
 
-### Stop Conditions
-- `score >= 7`: article is good enough
-- `verdict == "approve"`: reviewer explicitly approves
-- `revision_count >= max_revisions`: prevent infinite loops
+### 停止条件
+- `score >= 7`：文章质量足够好
+- `verdict == "approve"`：审查者明确批准
+- `revision_count >= max_revisions`：防止无限循环
 
-### Structured I/O
-All agents communicate via JSON objects, enabling:
-- Programmatic aggregation
-- Quality gates (score thresholds)
-- Traceable data flow
+### 结构化 I/O
+所有 agent 通过 JSON 对象通信，支持：
+- 程序化聚合
+- 质量门（评分阈值）
+- 可追踪的数据流
 
-## How to Run
+## 运行方式
 ```bash
-# Use MiMo model via OpenAI-compatible API
-# Configure MIMO_BASE_URL, MIMO_API_KEY, MIMO_MODEL in .env
+# 使用 MiMo 模型（通过 OpenAI 兼容接口）
+# 在 .env 中配置 MIMO_BASE_URL, MIMO_API_KEY, MIMO_MODEL
 pip install openai python-dotenv
 python multi_agent_writer.py
 ```
 
-## References
+## 参考资料
 - [Claude Code Sub-agents](https://code.claude.com/docs/en/sub-agents)
 - [Google ADK](https://google.github.io/adk-docs/)
 - [Agent2Agent Protocol](https://google-a2a.github.io/A2A/specification/)

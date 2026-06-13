@@ -1,22 +1,22 @@
-# Stage 1: Minimal Agent Loop
+# Stage 1: 最小 Agent Loop
 
-## Deliverable
-A ~220-line Python agent that can select tools, execute them, and return final answers.
+## 交付物
+一个 ~220 行的 Python agent，能够选择工具、执行工具并返回最终答案。
 
-## What It Does
-1. Sends user message + tool definitions to LLM API (MiMo via OpenAI-compatible interface)
-2. LLM decides which tool(s) to call (or returns a final answer)
-3. If tool_use: executes the tool, feeds results back, loops
-4. If end_turn: returns the final text answer
-5. Has max_steps (10) and timeout (60s) safety guards
-6. Uses safe math evaluator (AST-based) instead of `eval()` for security
+## 功能说明
+1. 将用户消息 + 工具定义发送到 LLM API（MiMo，通过 OpenAI 兼容接口）
+2. LLM 决定调用哪个工具（或返回最终答案）
+3. 如果是 tool_use：执行工具，将结果反馈，循环
+4. 如果是 end_turn：返回最终文本答案
+5. 具有 max_steps（10）和 timeout（60s）安全守卫
+6. 使用安全数学求值器（基于 AST）替代 `eval()` 以确保安全
 
-## Tools Available
-- `calculator` -- evaluates math expressions using safe AST-based evaluator
-- `search` -- placeholder for search API (simulated results)
-- `read_file` -- reads local files with path traversal protection
+## 可用工具
+- `calculator` — 使用安全 AST 求值器计算数学表达式
+- `search` — 搜索 API 占位符（模拟结果）
+- `read_file` — 读取本地文件，具有路径遍历保护
 
-## How to Run
+## 运行方式
 ```bash
 # 使用 MiMo 模型（通过 OpenAI 兼容接口）
 # 在 .env 中配置 MIMO_BASE_URL, MIMO_API_KEY, MIMO_MODEL
@@ -24,12 +24,12 @@ pip install openai python-dotenv
 python minimal_agent.py
 ```
 
-## Key Concepts Learned
-- **Structured JSON output**: LLM tool_use response is already structured JSON
-- **Tool call parsing**: The API returns tool call blocks with `name`, `arguments`, and `id`
-- **Agent loop**: observe (user input) -> think (LLM decides) -> act (tool execution) -> observe (tool result)
-- **Safety**: max_steps prevents infinite loops, timeout prevents hangs, error handling catches tool failures
+## 关键概念
+- **结构化 JSON 输出**：LLM tool_use 响应已经是结构化 JSON
+- **工具调用解析**：API 返回包含 `name`、`arguments` 和 `id` 的工具调用块
+- **Agent Loop**：observe（用户输入）→ think（LLM 决策）→ act（工具执行）→ observe（工具结果）
+- **安全性**：max_steps 防止无限循环，timeout 防止挂起，错误处理捕获工具失败
 
-## References
+## 参考资料
 - [Claude Tool Use](https://docs.anthropic.com/en/docs/agents-and-tools/tool-use/overview)
 - [OpenAI Function Calling](https://platform.openai.com/docs/guides/function-calling)
