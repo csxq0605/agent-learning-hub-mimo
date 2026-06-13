@@ -5,7 +5,6 @@ E2E tests (test_e2e.py) use the real API from .env — skip mock overrides.
 
 import os
 import time
-import atexit
 import shutil
 import tempfile
 from pathlib import Path
@@ -76,15 +75,29 @@ def is_api_available() -> bool:
     return _API_VALIDATED
 
 
+# Clean up any leftover spill directories from previous test runs
+def _cleanup_old_spill_dirs():
+    """Remove old mimo_test_spill_* directories from temp."""
+    temp_dir = tempfile.gettempdir()
+    for item in os.listdir(temp_dir):
+        if item.startswith("mimo_test_spill_"):
+            item_path = os.path.join(temp_dir, item)
+            if os.path.isdir(item_path):
+                shutil.rmtree(item_path, ignore_errors=True)
+
+# Clean up old spill dirs before creating new one
+_cleanup_old_spill_dirs()
+
 # Redirect spill files to a temp directory during tests to prevent
 # test artifacts from accumulating in .mimo/outputs/
 _test_spill_dir = tempfile.mkdtemp(prefix="mimo_test_spill_")
 os.environ.setdefault("MIMO_SPILL_DIR", _test_spill_dir)
 
 
-@atexit.register
+@pytest.fixture(autouse=True, scope="session")
 def _cleanup_spill_dir():
-    """Remove the temp spill directory when the test process exits."""
+    """Remove the temp spill directory when the test session ends."""
+    yield
     shutil.rmtree(_test_spill_dir, ignore_errors=True)
 
 
