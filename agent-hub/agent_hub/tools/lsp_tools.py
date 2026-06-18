@@ -43,13 +43,20 @@ LSP_SERVERS = {
 class LSPClient:
     """Minimal LSP client for tool integration."""
 
+    MAX_CONTENT_LENGTH = 10 * 1024 * 1024  # 10MB max response size
+
     def __init__(self):
         self._process: Optional[subprocess.Popen] = None
         self._request_id = 0
         self._responses: dict[int, dict] = {}
+        self._response_events: dict[int, threading.Event] = {}
         self._reader_thread: Optional[threading.Thread] = None
         self._lock = threading.Lock()
         self._server_name = ""
+
+    def __del__(self):
+        """Cleanup on garbage collection."""
+        self.shutdown()
 
     def _find_server_for_file(self, file_path: str) -> Optional[dict]:
         """Find the appropriate LSP server for a file."""
@@ -91,6 +98,12 @@ class LSPClient:
                         break
                     if line.startswith(b"Content-Length:"):
                         length = int(line.split(b":")[1].strip())
+                        # Validate Content-Length to prevent memory exhaustion
+                        if length > self.MAX_CONTENT_LENGTH:
+                            # Skip this oversized message
+                            self._process.stdout.readline()  # skip empty line
+                            self._process.stdout.read(min(length, self.MAX_CONTENT_LENGTH))
+                            continue
                         # Read empty line
                         self._process.stdout.readline()
                         # Read body
@@ -100,6 +113,10 @@ class LSPClient:
                             msg_id = msg.get("id")
                             if msg_id is not None:
                                 self._responses[msg_id] = msg
+                                # Signal waiting thread
+                                event = self._response_events.get(msg_id)
+                                if event:
+                                    event.set()
                 except Exception:
                     break
 
@@ -130,13 +147,14 @@ class LSPClient:
         except Exception:
             return None
 
-        # Wait for response
-        deadline = time.time() + timeout
-        while time.time() < deadline:
-            if req_id in self._responses:
-                return self._responses.pop(req_id)
-            time.sleep(0.05)
-        return None
+        # Wait for response using event (no busy-wait)
+        event = threading.Event()
+        self._response_events[req_id] = event
+        try:
+            event.wait(timeout=timeout)
+            return self._responses.pop(req_id, None)
+        finally:
+            self._response_events.pop(req_id, None)
 
     def _send_notification(self, method: str, params: dict):
         """Send an LSP notification (no response expected)."""

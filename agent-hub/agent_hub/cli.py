@@ -439,9 +439,9 @@ def main():
     def _on_scheduled_prompt(prompt):
         with _scheduled_lock:
             if len(_scheduled_prompts) >= _MAX_SCHEDULED_PROMPTS:
-                _scheduled_prompts.pop(0)  # Drop oldest to prevent unbounded growth
+                dropped = _scheduled_prompts.pop(0)  # Drop oldest to prevent unbounded growth
+                # Don't print from background thread — would corrupt terminal
             _scheduled_prompts.append(prompt)
-        print(f"\n[Scheduled] {prompt[:60]}...")
     scheduler = Scheduler(callback=_on_scheduled_prompt)
     set_scheduler(scheduler)
     scheduler.start_background_checker(interval=30.0)
@@ -473,14 +473,18 @@ def main():
         print_info("Type /help for commands, or just start chatting.")
         print()
 
+    _context_warned = False
     while True:
         # Show token count in prompt with structured format
         tokens = estimate_tokens(session.messages)
         token_str = _format_tokens(tokens)
         max_str = _format_tokens(CONTEXT_WINDOW_TOKENS)
-        # Warn user when context is getting full
-        if CONTEXT_WINDOW_TOKENS > 0 and tokens / CONTEXT_WINDOW_TOKENS > 0.85:
+        # Warn user when context is getting full (only once per threshold crossing)
+        if not _context_warned and CONTEXT_WINDOW_TOKENS > 0 and tokens / CONTEXT_WINDOW_TOKENS > 0.85:
             print_warning(f"Context at {tokens/CONTEXT_WINDOW_TOKENS:.0%} — consider /compact to free space")
+            _context_warned = True
+        elif _context_warned and CONTEXT_WINDOW_TOKENS > 0 and tokens / CONTEXT_WINDOW_TOKENS <= 0.85:
+            _context_warned = False
         try:
             # Styled prompt with input box using prompt_toolkit FormattedText
             from prompt_toolkit.formatted_text import FormattedText
@@ -529,11 +533,25 @@ def main():
                 from .hooks import HookRunner
                 harness._hook_runner = HookRunner()
                 harness._hook_runner.load_from_config(new_config)
-            # Reload permission rules
+            # Reload permission rules (load first, swap on success to avoid wiping on error)
             rules_path = new_config.get("rules_file")
             if rules_path:
-                harness.perms.rules.clear()
-                harness.perms.load_rules_from_file(rules_path)
+                try:
+                    from .permissions import PermissionRule
+                    import json as _json
+                    with open(rules_path, "r", encoding="utf-8") as _f:
+                        _config = _json.load(_f)
+                    _perms = _config.get("permissions", {})
+                    _new_rules = []
+                    for _action in ("allow", "deny", "ask"):
+                        for _pattern in _perms.get(_action, []):
+                            _new_rules.append(PermissionRule(
+                                tool_pattern=_pattern, action=_action, source="config",
+                            ))
+                    harness.perms.rules.clear()
+                    harness.perms.rules.extend(_new_rules)
+                except Exception as e:
+                    print_warning(f"Failed to reload rules: {e}")
             print_info("Config reloaded")
 
         # Handle commands
@@ -623,12 +641,18 @@ def _handle_command(cmd, harness, session, memory_store, checkpoint_manager=None
         display_help()
     elif cmd[0] == "/clear":
         session.messages.clear()
+        session.compaction_count = 0
         # Also truncate the JSONL file so cleared state persists
         if session.auto_save_dir:
             jsonl_path = os.path.join(session.auto_save_dir, f"{session.session_id}.jsonl")
             try:
                 with open(jsonl_path, "w", encoding="utf-8"):
                     pass
+            except OSError:
+                pass
+            # Re-save session metadata so name/compaction_count persist
+            try:
+                session.save_meta_to_jsonl()
             except OSError:
                 pass
         print_success("Session cleared.")
@@ -755,6 +779,7 @@ def _handle_command(cmd, harness, session, memory_store, checkpoint_manager=None
                 print_success(f"Done: {_format_tokens(tokens_before)} {ARROW_ICON} {_format_tokens(tokens_after)} tokens")
             except Exception as e:
                 # No API available, use snip + microcompact
+                print_warning(f"LLM compression failed ({e}), falling back to local compression...")
                 compacted = microcompact(snip_compress(session.messages))
                 session.messages = compacted
                 session.compaction_count += 1
@@ -936,8 +961,11 @@ def _handle_command(cmd, harness, session, memory_store, checkpoint_manager=None
             print()
             return "continue", session
         try:
-            session.save(cmd[1])
-            print_success(f"Session saved to {cmd[1]}")
+            save_path = cmd[1]
+            if os.path.isabs(save_path):
+                print_warning("Saving to absolute path — ensure this is intended")
+            session.save(save_path)
+            print_success(f"Session saved to {save_path}")
         except Exception as e:
             print_error(str(e))
     elif cmd[0] == "/load":
@@ -1010,6 +1038,17 @@ def _handle_command(cmd, harness, session, memory_store, checkpoint_manager=None
                 import shutil
                 # Extract repo name from URL
                 repo_name = url.rstrip('/').split('/')[-1].replace('.git', '')
+                # Validate repo name to prevent path traversal
+                if not repo_name or '..' in repo_name or '/' in repo_name or '\\' in repo_name:
+                    print_error("Invalid repository name derived from URL")
+                    print()
+                    return "continue", session
+                # Additional sanitization: only allow alphanumeric, dash, underscore, dot
+                import re as _re
+                if not _re.match(r'^[\w\-.]+$', repo_name):
+                    print_error(f"Invalid repository name: {repo_name}")
+                    print()
+                    return "continue", session
                 skill_dir = os.path.join(os.path.expanduser('~'), '.mimo', 'skills', repo_name)
                 os.makedirs(skill_dir, exist_ok=True)
                 # Clone to temp dir
@@ -1128,6 +1167,11 @@ def _handle_command(cmd, harness, session, memory_store, checkpoint_manager=None
                         import tempfile
                         import zipfile
                         server_name = package.split('/')[-1]
+                        # Validate server name to prevent path traversal
+                        if not server_name or '..' in server_name or '/' in server_name or '\\' in server_name:
+                            print_error("Invalid server name derived from package")
+                            print()
+                            return "continue", session
                         install_dir = os.path.join(os.path.expanduser('~'), '.mimo', 'mcp-servers', server_name)
                         os.makedirs(install_dir, exist_ok=True)
                         tmp_path = os.path.join(tempfile.gettempdir(), f'{server_name}.zip')
@@ -1135,6 +1179,12 @@ def _handle_command(cmd, harness, session, memory_store, checkpoint_manager=None
                             subprocess.run(['curl', '-L', '-o', tmp_path, download_url],
                                            capture_output=True, check=True)
                             with zipfile.ZipFile(tmp_path, 'r') as zf:
+                                # Validate member paths to prevent zip slip
+                                real_install_dir = os.path.realpath(install_dir)
+                                for member in zf.infolist():
+                                    member_path = os.path.realpath(os.path.join(install_dir, member.filename))
+                                    if not member_path.startswith(real_install_dir + os.sep) and member_path != real_install_dir:
+                                        raise RuntimeError(f"Zip slip detected: {member.filename}")
                                 zf.extractall(install_dir)
                         finally:
                             if os.path.exists(tmp_path):

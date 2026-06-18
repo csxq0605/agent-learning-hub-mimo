@@ -167,6 +167,8 @@ class MiMoTUI(App):
         self._worker_thread: threading.Thread | None = None
         # Generation counter to discard stale "done" signals from killed threads
         self._agent_generation = 0
+        # Token estimate cache to avoid recomputing every 50ms
+        self._token_cache: tuple[int, int] = (0, 0)  # (msg_count, token_estimate)
         # Flag set by _save_and_exit to stop drain loop from starting new agents
         self._exiting = False
 
@@ -307,10 +309,16 @@ class MiMoTUI(App):
     def _update_status_bar(self) -> None:
         from .context import estimate_tokens, CONTEXT_WINDOW_TOKENS
         from .display import _format_tokens
-        tokens = estimate_tokens(self.session.messages)
+        # Use cached token estimate if message count hasn't changed
+        msgs = len(self.session.messages)
+        cached_msgs, cached_tokens = self._token_cache
+        if msgs == cached_msgs:
+            tokens = cached_tokens
+        else:
+            tokens = estimate_tokens(self.session.messages)
+            self._token_cache = (msgs, tokens)
         token_str = _format_tokens(tokens)
         max_str = _format_tokens(CONTEXT_WINDOW_TOKENS)
-        msgs = len(self.session.messages)
         queue_info = ""
         if self._command_queue:
             queue_info = (
@@ -364,10 +372,18 @@ class MiMoTUI(App):
 
     def _write_permission_response(self, approved: bool) -> None:
         """Show the user's Y/n response in the output area."""
-        if approved:
-            _output_queue.put(("write", "  [green bold]Y[/green bold] — Allowed"))
-        else:
-            _output_queue.put(("write", "  [red bold]n[/red bold] — Denied"))
+        try:
+            log = self.query_one("#output", RichLog)
+            if approved:
+                log.write("  [green bold]Y[/green bold] — Allowed")
+            else:
+                log.write("  [red bold]n[/red bold] — Denied")
+        except Exception:
+            # Fallback to queue if direct write fails
+            if approved:
+                _output_queue.put(("write", "  [green bold]Y[/green bold] — Allowed"))
+            else:
+                _output_queue.put(("write", "  [red bold]n[/red bold] — Denied"))
 
     def on_input_changed(self, event: Input.Changed) -> None:
         """Reset tab completion state when user types."""
@@ -704,25 +720,29 @@ class MiMoTUI(App):
                 _output_queue.put(("end_stream", None))
                 _output_queue.put(("write", f"[red]Error: {e}[/red]"))
             finally:
-                # Restore builtins.print
-                builtins.print = orig_builtins_print
-                # Restore stdout/stderr
-                sys.stdout = orig_stdout or sys.__stdout__
-                sys.stderr = orig_stderr or sys.__stderr__
-                # Restore _console.file (was set to StringIO to suppress direct writes)
-                display_mod._console.file = orig_console_file or sys.__stdout__
-                # Clear ALL display override callbacks
-                display_mod._tui_stream_token = None
-                display_mod._tui_stream_end = None
-                display_mod._tui_print = None
-                display_mod._tui_model_output_start = None
-                display_mod._tui_model_output_end = None
-                display_mod._tui_tool_call_collapsible = None
-                display_mod._tui_tool_call_result = None
-                # Restore permission callback
-                if perm_mod is not None:
-                    perm_mod._tui_permission_request = orig_perm_request
-                self._worker_thread = None
+                # Only clear callbacks if this is still the current agent generation.
+                # A force-killed thread's finally block may run after a new agent
+                # has already started and set its own callbacks.
+                if agent_gen == self._agent_generation:
+                    # Restore builtins.print
+                    builtins.print = orig_builtins_print
+                    # Restore stdout/stderr
+                    sys.stdout = orig_stdout or sys.__stdout__
+                    sys.stderr = orig_stderr or sys.__stderr__
+                    # Restore _console.file (was set to StringIO to suppress direct writes)
+                    display_mod._console.file = orig_console_file or sys.__stdout__
+                    # Clear ALL display override callbacks
+                    display_mod._tui_stream_token = None
+                    display_mod._tui_stream_end = None
+                    display_mod._tui_print = None
+                    display_mod._tui_model_output_start = None
+                    display_mod._tui_model_output_end = None
+                    display_mod._tui_tool_call_collapsible = None
+                    display_mod._tui_tool_call_result = None
+                    # Restore permission callback
+                    if perm_mod is not None:
+                        perm_mod._tui_permission_request = orig_perm_request
+                    self._worker_thread = None
                 _output_queue.put(("done", agent_gen))
         return worker
 

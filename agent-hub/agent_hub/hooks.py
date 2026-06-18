@@ -16,6 +16,13 @@ import platform
 import threading
 
 _logger = logging.getLogger("agent-hub.hooks")
+
+
+class _SafeDict(dict):
+    """Dict subclass for str.format_map: returns '' for missing keys instead of raising KeyError."""
+
+    def __missing__(self, key):
+        return ""
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional, Callable
@@ -369,12 +376,12 @@ class HookRunner:
         Used for auto-mode safety checks (Claude Code's classifier pattern).
         """
         # Build the prompt with context
-        prompt_text = config.prompt.format(
+        prompt_text = config.prompt.format_map(_SafeDict(
             tool_name=tool_name,
             tool_input=json.dumps(tool_input or {}, ensure_ascii=False)[:2000],
             tool_result=tool_result[:2000],
             event=config.event.value,
-        )
+        ))
 
         # Try to use the LLM client if available
         llm_client = getattr(self, '_llm_client', None)

@@ -11,10 +11,13 @@ Implements Ch6 patterns:
 import os
 import re
 import time
+import logging
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import Optional
+
+_logger = logging.getLogger(__name__)
 
 
 class MemoryType(Enum):
@@ -160,10 +163,10 @@ metadata:
                 continue
 
         # Ch6: dual capacity protection
-        # First: line limit (200 lines)
+        # First: line limit
         if len(entries) > MEMORY_INDEX_MAX_LINES:
             entries = entries[:MEMORY_INDEX_MAX_LINES]
-            entries.append("... [truncated to 200 entries]")
+            entries.append(f"... [truncated to {MEMORY_INDEX_MAX_LINES} entries]")
 
         # Write index
         index_content = "# Memory Index\n\n" + "\n".join(entries) + "\n"
@@ -179,7 +182,7 @@ metadata:
                     lo = mid
                 else:
                     hi = mid - 1
-            index_content = index_content[:lo] + "\n... [truncated to 25KB]\n"
+            index_content = index_content[:lo] + f"\n... [truncated to {MEMORY_INDEX_MAX_BYTES // 1024}KB]\n"
 
         with open(self.index_path, "w", encoding="utf-8") as f:
             f.write(index_content)
@@ -192,11 +195,19 @@ metadata:
                 frontmatter = parts[1].strip()
                 name = filename.replace(".md", "")
                 description = ""
-                for line in frontmatter.split("\n"):
-                    if line.startswith("name:"):
-                        name = line.split(":", 1)[1].strip()
-                    elif line.startswith("description:"):
-                        description = line.split(":", 1)[1].strip()
+                try:
+                    import yaml
+                    data = yaml.safe_load(frontmatter)
+                    if isinstance(data, dict):
+                        name = str(data.get("name", name))
+                        description = str(data.get("description", ""))
+                except Exception:
+                    # Fallback to simple line-by-line parsing
+                    for line in frontmatter.split("\n"):
+                        if line.startswith("name:"):
+                            name = line.split(":", 1)[1].strip().strip('"').strip("'")
+                        elif line.startswith("description:"):
+                            description = line.split(":", 1)[1].strip().strip('"').strip("'")
                 return name, description
         return filename.replace(".md", ""), ""
 

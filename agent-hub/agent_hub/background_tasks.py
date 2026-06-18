@@ -60,26 +60,32 @@ class BackgroundTaskManager:
 
         # Start task in background thread
         def run_task():
-            task.state = TaskState.RUNNING
+            with self._lock:
+                task.state = TaskState.RUNNING
             task.start_time = time.time()
             try:
                 # Check cancellation before starting
                 if task.cancel_event.is_set():
-                    task.state = TaskState.CANCELLED
+                    with self._lock:
+                        task.state = TaskState.CANCELLED
                     return
                 result = func(*args, **kwargs)
-                # Check cancellation after completion
+                # Check cancellation after completion — cancel wins over completed
                 if task.cancel_event.is_set():
-                    task.state = TaskState.CANCELLED
+                    with self._lock:
+                        task.state = TaskState.CANCELLED
                 else:
                     task.output = str(result) if result is not None else ""
-                    task.state = TaskState.COMPLETED
+                    with self._lock:
+                        task.state = TaskState.COMPLETED
             except Exception as e:
                 if task.cancel_event.is_set():
-                    task.state = TaskState.CANCELLED
+                    with self._lock:
+                        task.state = TaskState.CANCELLED
                 else:
                     task.error = str(e)
-                    task.state = TaskState.FAILED
+                    with self._lock:
+                        task.state = TaskState.FAILED
             finally:
                 task.end_time = time.time()
 

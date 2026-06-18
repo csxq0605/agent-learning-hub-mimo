@@ -30,7 +30,6 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.syntax import Syntax
 from rich.markdown import Markdown
-from rich.table import Table
 from rich import box
 
 # Optional syntax highlighting (graceful fallback if pygments not installed)
@@ -150,14 +149,7 @@ def _safe_print(*args, **kwargs):
         return
 
     try:
-        # Convert string args to rich Text to avoid markup interpretation
-        text_args = []
-        for a in args:
-            if isinstance(a, str):
-                text_args.append(a)
-            else:
-                text_args.append(a)
-        _console.print(*text_args, **kwargs, highlight=False, soft_wrap=True)
+        _console.print(*args, **kwargs, highlight=False, soft_wrap=True)
     except Exception:
         # Ultimate fallback
         try:

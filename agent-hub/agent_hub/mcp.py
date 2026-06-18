@@ -15,12 +15,15 @@ import json
 import subprocess
 import threading
 import time
+import logging
 import asyncio
 from dataclasses import dataclass, field
 from typing import Optional, Dict, List, Any, Callable
 from pathlib import Path
 from enum import Enum
 import uuid
+
+_logger = logging.getLogger(__name__)
 
 
 class MCPTransport(Enum):
@@ -294,8 +297,9 @@ class MCPConnection:
 
         # TODO: Implement HTTP/SSE connection
         # This requires async HTTP client (aiohttp or httpx)
-        self.server.status = MCPServerStatus.CONNECTED
-        return True
+        self.server.status = MCPServerStatus.FAILED
+        self.server.last_error = "HTTP/SSE transport not yet implemented"
+        return False
 
     def _connect_websocket(self) -> bool:
         """Connect via WebSocket transport."""
@@ -305,8 +309,9 @@ class MCPConnection:
             return False
 
         # TODO: Implement WebSocket connection
-        self.server.status = MCPServerStatus.CONNECTED
-        return True
+        self.server.status = MCPServerStatus.FAILED
+        self.server.last_error = "WebSocket transport not yet implemented"
+        return False
 
     def _initialize_session(self) -> bool:
         """Initialize MCP session with handshake."""
@@ -386,6 +391,26 @@ class MCPConnection:
 
         self.server.process.stdin.flush()
 
+    def _readline_with_timeout(self, timeout: float = 10.0) -> Optional[bytes]:
+        """Read a line from stdout with timeout to prevent permanent blocking."""
+        import threading as _threading
+        result = [None]
+        error = [None]
+        def _read():
+            try:
+                result[0] = self.server.process.stdout.readline()
+            except Exception as e:
+                error[0] = e
+        t = _threading.Thread(target=_read, daemon=True)
+        t.start()
+        t.join(timeout=timeout)
+        if t.is_alive():
+            # Thread still running — readline is blocked
+            return None
+        if error[0]:
+            raise error[0]
+        return result[0]
+
     def _receive_message(self) -> Optional[Dict[str, Any]]:
         """Receive a JSON-RPC message from the server.
 
@@ -396,8 +421,8 @@ class MCPConnection:
         if not self.server.process or not self.server.process.stdout:
             raise Exception("Server process not running")
 
-        # Read first line to detect format
-        first_line = self.server.process.stdout.readline()
+        # Read first line to detect format (with timeout to prevent hanging)
+        first_line = self._readline_with_timeout(timeout=10.0)
         if not first_line:
             return None
 
@@ -410,7 +435,7 @@ class MCPConnection:
 
             # Read remaining headers until empty line
             while True:
-                line = self.server.process.stdout.readline()
+                line = self._readline_with_timeout(timeout=10.0)
                 if not line or line.strip() == b'':
                     break
 
@@ -470,8 +495,13 @@ class MCPConnection:
 
     def call_tool(self, tool_name: str, arguments: Dict[str, Any]) -> Any:
         """Call a tool on the server."""
-        if self.server.status != MCPServerStatus.CONNECTED:
-            return {'error': f"Server {self.config.name} is not connected"}
+        # Use local reference to avoid race with disconnect()
+        with self._lock:
+            if self.server.status != MCPServerStatus.CONNECTED:
+                return {'error': f"Server {self.config.name} is not connected"}
+            process = self.server.process
+        if not process:
+            return {'error': f"Server {self.config.name} process not running"}
 
         if tool_name not in self.server.tools:
             return {'error': f"Tool {tool_name} not found on server {self.config.name}"}
@@ -514,10 +544,10 @@ class MCPConnection:
             try:
                 self.server.process.terminate()
                 self.server.process.wait(timeout=5)
-            except:
+            except Exception:
                 try:
                     self.server.process.kill()
-                except:
+                except Exception:
                     pass
             self.server.process = None
 
@@ -603,10 +633,18 @@ class MCPManager:
 
     def call_tool(self, tool_name: str, arguments: Dict[str, Any]) -> Any:
         """Call a tool on the appropriate server."""
+        found_count = 0
+        result = None
         for connection in self.connections.values():
             if tool_name in connection.server.tools:
-                return connection.call_tool(tool_name, arguments)
-
+                found_count += 1
+                if found_count == 1:
+                    result = connection.call_tool(tool_name, arguments)
+                else:
+                    _logger.warning("Tool name collision: '%s' found on multiple MCP servers", tool_name)
+                    break
+        if result is not None:
+            return result
         return {'error': f"Tool {tool_name} not found on any connected server"}
 
     def get_all_resources(self) -> List[MCPResource]:
@@ -629,25 +667,28 @@ class MCPManager:
         protocol = match.group(2)
         path = match.group(3)
 
+        # Look up connection under lock, then release before I/O
+        connection = None
         with self._lock:
             if server_name in self.connections:
                 connection = self.connections[server_name]
-                if connection.server.status == MCPServerStatus.CONNECTED:
-                    # Call resource read
-                    request = {
-                        'jsonrpc': '2.0',
-                        'id': str(uuid.uuid4()),
-                        'method': 'resources/read',
-                        'params': {
-                            'uri': f'{protocol}://{path}',
-                        },
-                    }
-                    try:
-                        connection._send_message(request)
-                        response = connection._receive_message()
-                        if response and 'result' in response:
-                            return response['result']
-                    except Exception as e:
-                        return {'error': f"Failed to resolve resource: {e}"}
+
+        if connection and connection.server.status == MCPServerStatus.CONNECTED:
+            # Call resource read (outside manager lock to avoid blocking other operations)
+            request = {
+                'jsonrpc': '2.0',
+                'id': str(uuid.uuid4()),
+                'method': 'resources/read',
+                'params': {
+                    'uri': f'{protocol}://{path}',
+                },
+            }
+            try:
+                connection._send_message(request)
+                response = connection._receive_message()
+                if response and 'result' in response:
+                    return response['result']
+            except Exception as e:
+                return {'error': f"Failed to resolve resource: {e}"}
 
         return None

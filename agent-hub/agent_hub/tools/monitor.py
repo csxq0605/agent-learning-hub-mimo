@@ -49,6 +49,9 @@ class MonitorJob:
     def start(self):
         """Start the background process and monitoring thread."""
         try:
+            # Scrub credential environment variables
+            from .shell import _scrub_env
+            env = _scrub_env()
             if platform.system() == "Windows":
                 self.process = subprocess.Popen(
                     self.command,
@@ -59,6 +62,7 @@ class MonitorJob:
                     encoding="utf-8",
                     errors="replace",
                     creationflags=subprocess.CREATE_NO_WINDOW,
+                    env=env,
                 )
             else:
                 self.process = subprocess.Popen(
@@ -67,6 +71,7 @@ class MonitorJob:
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
                     text=True,
+                    env=env,
                 )
             self.status = "running"
             self.thread = threading.Thread(

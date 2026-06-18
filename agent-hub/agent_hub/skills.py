@@ -233,9 +233,37 @@ class SkillSubstitutor:
 
         return content
 
+    # Module-level flag: when True, skip interactive confirmation for shell commands.
+    # Auto-detects non-interactive environments (no TTY, pytest, etc.).
+    _auto_approve_shell: bool = False
+
+    @classmethod
+    def _should_confirm(cls) -> bool:
+        """Return True if interactive confirmation is needed."""
+        if cls._auto_approve_shell:
+            return False
+        import sys
+        # Skip confirmation when stdin is not a real interactive TTY
+        if not hasattr(sys.stdin, 'isatty') or not sys.stdin.isatty():
+            return False
+        # Skip confirmation when running under pytest (output capture breaks input())
+        if os.environ.get('PYTEST_CURRENT_TEST'):
+            return False
+        return True
+
     @classmethod
     def _execute_shell(cls, command: str) -> str:
         """Execute a shell command and return output."""
+        # Require user confirmation before running any shell command (interactive TTY only)
+        if cls._should_confirm():
+            print(f"\n[Skill shell command]: {command}")
+            try:
+                response = input("Execute this command? [y/N] ").strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                return "[command declined by user]"
+            if response not in ('y', 'yes'):
+                return "[command declined by user]"
+
         try:
             result = subprocess.run(
                 command,
@@ -271,14 +299,21 @@ class SkillDiscovery:
         """Discover all available skills."""
         skills = {}
 
+        # Build skill directories from project_root (not CWD)
+        skill_dirs = [
+            Path.home() / '.mimo' / 'skills',   # Personal
+            Path(project_root) / '.mimo' / 'skills',  # Project
+        ]
+
         # Scan skill directories
-        for skill_dir in cls.SKILL_DIRS:
+        for idx, skill_dir in enumerate(skill_dirs):
             if skill_dir.exists():
+                source_type = 'personal' if idx == 0 else 'project'
                 for skill_path in skill_dir.iterdir():
                     if skill_path.is_dir():
                         skill_md = skill_path / 'SKILL.md'
                         if skill_md.exists():
-                            skill = cls._load_skill(skill_md, 'project' if '.claude' in str(skill_dir) else 'personal')
+                            skill = cls._load_skill(skill_md, source_type)
                             if skill:
                                 skills[skill.name] = skill
 

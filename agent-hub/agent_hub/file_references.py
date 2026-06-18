@@ -19,8 +19,9 @@ class FileReferenceParser:
 
     # Pattern to match @ references
     # Matches: @filename, @folder/, @*.ext, @path/to/file
+    # Uses lookbehind to avoid matching email addresses (user@domain)
     REFERENCE_PATTERN = re.compile(
-        r'@(?:'
+        r'(?:(?<=\s)|(?<=^))@(?:'
         r'(?:[^\s*?\[\]]+)'  # Normal path
         r'|(?:[^\s*?\[\]]*[*?][^\s*?\[\]]*)'  # Wildcard path
         r')'
@@ -269,6 +270,8 @@ def scan_completions(prefix: str, base_dir: str = '.', limit: int = 20) -> List[
     for name in entries:
         if name.startswith('.'):
             continue  # Skip hidden files
+        if name in ('node_modules', '__pycache__', 'venv', '.venv', 'dist', 'build'):
+            continue  # Skip heavy directories for performance
         if name_prefix and not name.lower().startswith(name_prefix.lower()):
             continue
 

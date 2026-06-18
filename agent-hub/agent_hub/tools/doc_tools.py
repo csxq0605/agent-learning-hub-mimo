@@ -12,14 +12,22 @@ from datetime import datetime
 from .registry import ToolDef
 from ..permissions import Permission
 
-_ALLOWED_WRITE_DIR = Path.cwd().resolve()
+_ALLOWED_WRITE_DIR = None  # Lazily initialized to CWD
+
+
+def _get_allowed_write_dir() -> Path:
+    """Return the allowed write directory, lazily initialized to CWD."""
+    global _ALLOWED_WRITE_DIR
+    if _ALLOWED_WRITE_DIR is None:
+        _ALLOWED_WRITE_DIR = Path.cwd().resolve()
+    return _ALLOWED_WRITE_DIR
 
 
 def _validate_output_dir(output_dir: str) -> str | None:
     """Return error message if output directory is outside allowed path."""
     try:
         resolved = Path(output_dir).resolve()
-        if not resolved.is_relative_to(_ALLOWED_WRITE_DIR):
+        if not resolved.is_relative_to(_get_allowed_write_dir()):
             return f"Output directory '{output_dir}' is outside allowed directory"
         return None
     except Exception as e:

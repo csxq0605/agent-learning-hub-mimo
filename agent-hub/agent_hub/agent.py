@@ -298,6 +298,7 @@ You help users with coding, file operations, web research, document creation, an
         fallback_model: str = None,
         bare: bool = False,
         effort: str = "medium",
+        max_tokens: int = DEFAULT_MAX_CONTEXT_TOKENS,
     ):
         self.model = model or MIMO_MODEL
         self.fallback_model = fallback_model
@@ -312,7 +313,7 @@ You help users with coding, file operations, web research, document creation, an
         )
         self.registry = ToolRegistry()
         self.circuit_breaker = CircuitBreaker()
-        self.token_budget = TokenBudget(model=self.model)
+        self.token_budget = TokenBudget(max_tokens=max_tokens, model=self.model)
         self.graceful_abort = GracefulAbort()
         self.stream = stream
         self.bare = bare
@@ -716,9 +717,11 @@ You help users with coding, file operations, web research, document creation, an
                                 tool_calls_data[idx]["arguments"] += tc_chunk.function.arguments
         except (queue.Empty, TimeoutError):
             # Per-chunk timeout — API hung mid-stream
-            response_stream.close()  # Stop background thread from accumulating data
             print_streaming_end()
             raise TimeoutError("API stream timeout — no data received within 120s")
+        finally:
+            # Always close the stream to prevent thread/connection leaks
+            response_stream.close()
 
         if full_content or tool_calls_data:
             print_streaming_end()
@@ -854,276 +857,239 @@ You help users with coding, file operations, web research, document creation, an
         self._compaction_failures = 0
 
         step = 0
-        while True:
-            step += 1
+        try:
+            while True:
+                step += 1
 
-            # Termination check: graceful abort (Esc / Ctrl+C during execution)
-            if self.graceful_abort.is_requested():
-                self.logger.info("[ABORT] Graceful abort requested by user")
-                self.graceful_abort.reset()
-                self._last_session = session
-                return "[ABORTED] Stopped by user request."
+                # Termination check: graceful abort (Esc / Ctrl+C during execution)
+                if self.graceful_abort.is_requested():
+                    self.logger.info("[ABORT] Graceful abort requested by user")
+                    self.graceful_abort.reset()
+                    self._last_session = session
+                    return "[ABORTED] Stopped by user request."
 
-            # Termination check: time limit
-            if self.max_duration > 0 and time.time() - start_time > self.max_duration:
-                self.logger.info(f"[LIMIT] Time limit exceeded ({self.max_duration}s)")
-                self._last_session = session
-                return "[LIMIT] Time limit exceeded"
+                # Termination check: time limit
+                if self.max_duration > 0 and time.time() - start_time > self.max_duration:
+                    self.logger.info(f"[LIMIT] Time limit exceeded ({self.max_duration}s)")
+                    self._last_session = session
+                    return "[LIMIT] Time limit exceeded"
 
-            # Termination check: circuit breaker (Ch7)
-            if self.circuit_breaker.check():
-                self.logger.error(
-                    f"[CIRCUIT_BREAKER] {self.circuit_breaker.consecutive_failures} "
-                    f"consecutive failures. Stopping."
+                # Termination check: circuit breaker (Ch7)
+                if self.circuit_breaker.check():
+                    self.logger.error(
+                        f"[CIRCUIT_BREAKER] {self.circuit_breaker.consecutive_failures} "
+                        f"consecutive failures. Stopping."
+                    )
+                    self._last_session = session
+                    return "[ERROR] Circuit breaker open — too many consecutive failures"
+
+                # Termination check: max_steps (only if explicitly set, 0 = unlimited)
+                if self.max_steps > 0 and step > self.max_steps:
+                    self.logger.info(f"[LIMIT] Max steps exceeded ({self.max_steps})")
+                    self._last_session = session
+                    return "[LIMIT] Max steps exceeded"
+
+                # Warn user when context is large — let them decide to /compact
+                conv_tokens = estimate_tokens(session.get_messages())
+                if conv_tokens >= COMPRESS_TRIGGER_TOKENS and self.token_budget.effective_max > 0:
+                    pct = conv_tokens / self.token_budget.effective_max
+                    if not self._compact_warned:
+                        print_warning(f"Context at {pct:.0%} — consider /compact to free space")
+                        self._compact_warned = True
+                messages = [system_msg] + session.get_messages()
+                self.token_budget.update(messages)
+
+                self.logger.trace(
+                    "llm_call_start",
+                    {"step": step, "model": self.model},
                 )
-                self._last_session = session
-                return "[ERROR] Circuit breaker open — too many consecutive failures"
 
-            # Termination check: max_steps (only if explicitly set, 0 = unlimited)
-            if self.max_steps > 0 and step > self.max_steps:
-                self.logger.info(f"[LIMIT] Max steps exceeded ({self.max_steps})")
-                self._last_session = session
-                return "[LIMIT] Max steps exceeded"
+                # Display step header and thinking indicator
+                step_info = StepInfo(
+                    current=step,
+                    max_steps=self.max_steps,
+                    model=self.model,
+                    effort=self.effort,
+                )
+                print_step_header(step_info)
+                print_thinking_indicator()
+                # Update status bar
+                status_bar = get_status_bar()
+                status_bar.set_thinking(self.model)
 
-            # Warn user when context is large — let them decide to /compact
-            conv_tokens = estimate_tokens(session.get_messages())
-            if conv_tokens >= COMPRESS_TRIGGER_TOKENS and self.token_budget.effective_max > 0:
-                pct = conv_tokens / self.token_budget.effective_max
-                if not self._compact_warned:
-                    print_warning(f"Context at {pct:.0%} — consider /compact to free space")
-                    self._compact_warned = True
-            messages = [system_msg] + session.get_messages()
-            self.token_budget.update(messages)
-
-            self.logger.trace(
-                "llm_call_start",
-                {"step": step + 1, "model": self.model},
-            )
-
-            # Display step header and thinking indicator
-            step_info = StepInfo(
-                current=step + 1,
-                max_steps=self.max_steps,
-                model=self.model,
-                effort=self.effort,
-            )
-            print_step_header(step_info)
-            print_thinking_indicator()
-            # Update status bar
-            status_bar = get_status_bar()
-            status_bar.set_thinking(self.model)
-
-            # API call with retry (Ch2: error recovery)
-            try:
-                if self.stream:
-                    response = self._stream_llm_call(
-                        client, messages, tools_schema
-                    )
-                else:
-                    response = self._call_llm(
-                        client, messages, tools_schema,
-                        temperature=effort_params["temperature"],
-                    )
-                self.circuit_breaker.record_success()
-            except Exception as e:
-                # S16: Fallback model on 429/503 errors
-                status = getattr(e, "status_code", None)
-                if self.fallback_model and status in (429, 503):
-                    self.logger.info(
-                        f"Primary model failed ({status}), trying fallback: {self.fallback_model}"
-                    )
-                    try:
-                        response = retry_with_backoff(
-                            lambda: client.chat.completions.create(
-                                model=self.fallback_model,
-                                messages=messages,
-                                tools=tools_schema,
-                                tool_choice="auto",
-                                temperature=effort_params["temperature"],
-                                top_p=0.9,
-                                            ),
-                            max_retries=self.deps.max_retries,
-                            base_delay=self.deps.base_retry_delay,
-                        )
-                        self.circuit_breaker.record_success()
-                    except Exception as fallback_err:
-                        self.circuit_breaker.record_failure()
-                        self.logger.error(f"Fallback model also failed: {fallback_err}")
-                        status_bar.set_error(str(fallback_err)[:60])
-                        if self.circuit_breaker.check():
-                            return f"[ERROR] Circuit breaker open after repeated failures: {fallback_err}"
-                        continue
-                else:
-                    self.circuit_breaker.record_failure()
-                    self.logger.error(f"LLM call failed: {e}")
-                    status_bar.set_error(str(e)[:60])
-                    if self.circuit_breaker.check():
-                        return f"[ERROR] Circuit breaker open after repeated failures: {e}"
-                    continue  # Retry in next loop iteration
-
-            choice = response.choices[0]
-            message = choice.message
-
-            # Termination: no tool calls → final response (Ch2: normal completion)
-            if not message.tool_calls:
-                final = message.content or "[No response]"
-                session.add_message("assistant", final)
-                if not self.stream:
-                    # Display the response in model output container
-                    print()
-                    print_model_output_start(self.model)
-                    print(final)
-                    print_model_output_end()
-                # Set status bar to idle after completion
-                get_status_bar().set_idle()
-                # Ch8: Fire Stop hook
-                hook_runner = getattr(self, '_hook_runner', None)
-                if hook_runner:
-                    hook_runner.run_hooks(HookEvent.STOP, tool_result=final[:2000])
-                # Update token stats
-                stats = self.token_budget.get_stats()
-                stats.total_tokens = self.token_budget.estimated_tokens
-                self.logger.session_summary({
-                    "steps": step + 1,
-                    "duration": round(time.time() - start_time, 2),
-                    "reason": TerminationReason.COMPLETED.value,
-                    "token_usage": round(self.token_budget.usage_ratio(), 2),
-                    "token_stats": stats.to_dict(),
-                })
-                self._last_session = session
-                self._last_steps = step + 1
-                return final
-
-            # Process tool calls (Ch3: tool dispatch with fail-closed defaults)
-            try:
-                msg_dict = message.model_dump()
-            except Exception:
-                self.logger.error("[MODEL_ERROR] Failed to serialize response")
-                self.circuit_breaker.record_failure()
-                continue
-            if msg_dict.get("content") is None:
-                msg_dict["content"] = ""
-
-            # Validate and sanitize tool calls before adding to session.
-            # Malformed (truncated) tool arguments cause 400 errors on
-            # subsequent API calls because the invalid JSON is embedded in
-            # the conversation history sent back to the model.
-            if msg_dict.get("tool_calls"):
-                for tc_dict in msg_dict["tool_calls"]:
-                    func = tc_dict.get("function", {})
-                    args_str = func.get("arguments", "{}")
-                    try:
-                        json.loads(args_str)
-                    except (json.JSONDecodeError, TypeError):
-                        # Replace malformed arguments with valid JSON so
-                        # the session history remains well-formed.
-                        func["arguments"] = json.dumps({
-                            "error": "Malformed tool arguments (truncated output)",
-                            "hint": "Please retry with shorter content.",
-                        })
-                        self.logger.trace("sanitized_malformed_tool_args", {
-                            "tool": func.get("name", "unknown"),
-                        })
-
-            # MiMo API requires reasoning_content to be passed back in
-            # subsequent requests when tool_calls are present.  Missing it
-            # causes a 400 error.  See:
-            # https://platform.xiaomimimo.com/docs/zh-CN/usage-guide/passing-back-reasoning_content
-            extra_kwargs = {}
-            if msg_dict.get("reasoning_content"):
-                extra_kwargs["reasoning_content"] = msg_dict["reasoning_content"]
-            session.add_message(msg_dict["role"], msg_dict["content"],
-                              tool_calls=msg_dict.get("tool_calls"),
-                              **extra_kwargs)
-
-            # Update token stats for assistant message
-            stats = self.token_budget.get_stats()
-            stats.input_tokens += self.token_budget.estimated_tokens
-            stats.message_count += 1
-            if message.tool_calls:
-                stats.tool_call_count += len(message.tool_calls)
-
-            # Group tool calls into concurrency-safe and sequential
-            # Also collect parsed args for display (avoid double parsing)
-            safe_calls = []
-            sequential_calls = []
-            all_calls_parsed = []  # (func_name, func_args) for display
-            total_tool_calls = len(message.tool_calls)
-            for tc in message.tool_calls:
-                func_name = tc.function.name
+                # API call with retry (Ch2: error recovery)
                 try:
-                    func_args = json.loads(tc.function.arguments)
-                except json.JSONDecodeError:
-                    func_args = {"_parse_error": True, "raw": tc.function.arguments}
-                tool_def = self.registry.get(func_name)
-                if tool_def and tool_def.is_concurrency_safe:
-                    safe_calls.append((tc, func_name, func_args))
-                else:
-                    sequential_calls.append((tc, func_name, func_args))
-                # Store for display (use clean args without _parse_error)
-                display_args = {k: v for k, v in func_args.items() if k != "_parse_error"}
-                all_calls_parsed.append((func_name, display_args))
-
-            # Display all tool calls before execution (collapsible format)
-            print()
-            status_bar = get_status_bar()
-            for i, (func_name, func_args) in enumerate(all_calls_parsed):
-                print_tool_call_collapsible(
-                    func_name, func_args, i, total_tool_calls, collapsed=True
-                )
-                status_bar.set_executing(func_name)
-
-            # Execute concurrency-safe tools in parallel (preserving order)
-            if safe_calls:
-                with ThreadPoolExecutor(max_workers=min(len(safe_calls), 8)) as executor:
-                    # Submit in original order
-                    futures = [
-                        executor.submit(self._handle_tool_call, fn, fa, tc.id, session)
-                        for tc, fn, fa in safe_calls
-                    ]
-                    # Collect results in submission order (not completion order)
-                    for (tc, func_name, _), future in zip(safe_calls, futures):
-                        tool_start = time.time()
+                    if self.stream:
+                        response = self._stream_llm_call(
+                            client, messages, tools_schema
+                        )
+                    else:
+                        response = self._call_llm(
+                            client, messages, tools_schema,
+                            temperature=effort_params["temperature"],
+                        )
+                    self.circuit_breaker.record_success()
+                except Exception as e:
+                    # S16: Fallback model on 429/503 errors
+                    status = getattr(e, "status_code", None)
+                    if self.fallback_model and status in (429, 503):
+                        self.logger.info(
+                            f"Primary model failed ({status}), trying fallback: {self.fallback_model}"
+                        )
                         try:
-                            result = future.result()
-                            duration = time.time() - tool_start
-                            success, error_msg, preview = _parse_tool_result(result)
-                            print_tool_call_result(func_name, success, duration, preview, error_msg)
-                        except Exception as e:
-                            duration = time.time() - tool_start
-                            result = json.dumps({"error": str(e)})
-                            print_tool_call_result(func_name, False, duration, error=str(e))
-                        session.add_message("tool", result, tool_call_id=tc.id)
+                            response = retry_with_backoff(
+                                lambda: client.chat.completions.create(
+                                    model=self.fallback_model,
+                                    messages=messages,
+                                    tools=tools_schema,
+                                    tool_choice="auto",
+                                    temperature=effort_params["temperature"],
+                                    top_p=0.9,
+                                                ),
+                                max_retries=self.deps.max_retries,
+                                base_delay=self.deps.base_retry_delay,
+                            )
+                            self.circuit_breaker.record_success()
+                        except Exception as fallback_err:
+                            self.circuit_breaker.record_failure()
+                            self.logger.error(f"Fallback model also failed: {fallback_err}")
+                            status_bar.set_error(str(fallback_err)[:60])
+                            if self.circuit_breaker.check():
+                                return f"[ERROR] Circuit breaker open after repeated failures: {fallback_err}"
+                            continue
+                    else:
+                        self.circuit_breaker.record_failure()
+                        self.logger.error(f"LLM call failed: {e}")
+                        status_bar.set_error(str(e)[:60])
+                        if self.circuit_breaker.check():
+                            return f"[ERROR] Circuit breaker open after repeated failures: {e}"
+                        continue  # Retry in next loop iteration
+
+                choice = response.choices[0]
+                message = choice.message
+
+                # Termination: no tool calls → final response (Ch2: normal completion)
+                if not message.tool_calls:
+                    final = message.content or "[No response]"
+                    session.add_message("assistant", final)
+                    if not self.stream:
+                        # Display the response in model output container
+                        print()
+                        print_model_output_start(self.model)
+                        print(final)
+                        print_model_output_end()
+                    # Set status bar to idle after completion
+                    get_status_bar().set_idle()
+                    # Ch8: Fire Stop hook
+                    hook_runner = getattr(self, '_hook_runner', None)
+                    if hook_runner:
+                        hook_runner.run_hooks(HookEvent.STOP, tool_result=final[:2000])
+                    # Update token stats
+                    stats = self.token_budget.get_stats()
+                    stats.total_tokens = self.token_budget.estimated_tokens
+                    self.logger.session_summary({
+                        "steps": step,
+                        "duration": round(time.time() - start_time, 2),
+                        "reason": TerminationReason.COMPLETED.value,
+                        "token_usage": round(self.token_budget.usage_ratio(), 2),
+                        "token_stats": stats.to_dict(),
+                    })
+                    self._last_session = session
+                    self._last_steps = step
+                    return final
+
+                # Process tool calls (Ch3: tool dispatch with fail-closed defaults)
+                try:
+                    msg_dict = message.model_dump()
+                except Exception:
+                    self.logger.error("[MODEL_ERROR] Failed to serialize response")
+                    self.circuit_breaker.record_failure()
+                    continue
+                if msg_dict.get("content") is None:
+                    msg_dict["content"] = ""
+
+                # Validate and sanitize tool calls before adding to session.
+                if msg_dict.get("tool_calls"):
+                    for tc_dict in msg_dict["tool_calls"]:
+                        func = tc_dict.get("function", {})
+                        args_str = func.get("arguments", "{}")
+                        try:
+                            json.loads(args_str)
+                        except (json.JSONDecodeError, TypeError):
+                            func["arguments"] = json.dumps({
+                                "error": "Malformed tool arguments (truncated output)",
+                                "hint": "Please retry with shorter content.",
+                            })
+                            self.logger.trace("sanitized_malformed_tool_args", {
+                                "tool": func.get("name", "unknown"),
+                            })
+
+                extra_kwargs = {}
+                if msg_dict.get("reasoning_content"):
+                    extra_kwargs["reasoning_content"] = msg_dict["reasoning_content"]
+                session.add_message(msg_dict["role"], msg_dict["content"],
+                                  tool_calls=msg_dict.get("tool_calls"),
+                                  **extra_kwargs)
+
+                stats = self.token_budget.get_stats()
+                stats.input_tokens += self.token_budget.estimated_tokens
+                stats.message_count += 1
+                if message.tool_calls:
+                    stats.tool_call_count += len(message.tool_calls)
+
+                safe_calls = []
+                sequential_calls = []
+                all_calls_parsed = []
+                total_tool_calls = len(message.tool_calls)
+                for tc in message.tool_calls:
+                    func_name = tc.function.name
+                    try:
+                        func_args = json.loads(tc.function.arguments)
+                    except json.JSONDecodeError:
+                        func_args = {"_parse_error": True, "raw": tc.function.arguments}
+                    tool_def = self.registry.get(func_name)
+                    if tool_def and tool_def.is_concurrency_safe:
+                        safe_calls.append((tc, func_name, func_args))
+                    else:
+                        sequential_calls.append((tc, func_name, func_args))
+                    display_args = {k: v for k, v in func_args.items() if k != "_parse_error"}
+                    all_calls_parsed.append((func_name, display_args))
+
+                print()
+                status_bar = get_status_bar()
+                for i, (func_name, func_args) in enumerate(all_calls_parsed):
+                    print_tool_call_collapsible(
+                        func_name, func_args, i, total_tool_calls, collapsed=True
+                    )
+                    status_bar.set_executing(func_name)
+
+                if safe_calls:
+                    with ThreadPoolExecutor(max_workers=min(len(safe_calls), 8)) as executor:
+                        futures = [
+                            executor.submit(self._handle_tool_call, fn, fa, tc.id, session)
+                            for tc, fn, fa in safe_calls
+                        ]
+                        for (tc, func_name, _), future in zip(safe_calls, futures):
+                            tool_start = time.time()
+                            try:
+                                result = future.result()
+                                duration = time.time() - tool_start
+                                success, error_msg, preview = _parse_tool_result(result)
+                                print_tool_call_result(func_name, success, duration, preview, error_msg)
+                            except Exception as e:
+                                duration = time.time() - tool_start
+                                result = json.dumps({"error": str(e)})
+                                print_tool_call_result(func_name, False, duration, error=str(e))
+                            session.add_message("tool", result, tool_call_id=tc.id)
                 # Update status bar after parallel execution
                 status_bar.set_thinking(self.model)
 
-            # X2: Batch related edit/write operations together
-            edit_calls = [(tc, fn, fa) for tc, fn, fa in sequential_calls if fn in ("edit_file", "write_file")]
-            other_calls = [(tc, fn, fa) for tc, fn, fa in sequential_calls if fn not in ("edit_file", "write_file")]
+                # X2: Batch related edit/write operations together
+                edit_calls = [(tc, fn, fa) for tc, fn, fa in sequential_calls if fn in ("edit_file", "write_file")]
+                other_calls = [(tc, fn, fa) for tc, fn, fa in sequential_calls if fn not in ("edit_file", "write_file")]
 
-            # Execute other sequential tools first
-            for tc, func_name, func_args in other_calls:
-                status_bar.set_executing(func_name)
-                tool_start = time.time()
-                try:
-                    result = self._handle_tool_call(
-                        func_name, func_args, tc.id, session
-                    )
-                    duration = time.time() - tool_start
-                    success, error_msg, preview = _parse_tool_result(result)
-                    print_tool_call_result(func_name, success, duration, preview, error_msg)
-                except Exception as e:
-                    duration = time.time() - tool_start
-                    result = json.dumps({"error": str(e)})
-                    print_tool_call_result(func_name, False, duration, error=str(e))
-                session.add_message("tool", result, tool_call_id=tc.id)
-
-            # Execute edit/write tools as a batch if checkpoint manager available
-            if edit_calls:
-                checkpoint_mgr = getattr(self, "_checkpoint_manager", None)
-                if checkpoint_mgr and len(edit_calls) > 1:
-                    checkpoint_mgr.begin_batch()
-                for tc, func_name, func_args in edit_calls:
+                # Execute other sequential tools first
+                for tc, func_name, func_args in other_calls:
                     status_bar.set_executing(func_name)
                     tool_start = time.time()
                     try:
@@ -1138,10 +1104,39 @@ You help users with coding, file operations, web research, document creation, an
                         result = json.dumps({"error": str(e)})
                         print_tool_call_result(func_name, False, duration, error=str(e))
                     session.add_message("tool", result, tool_call_id=tc.id)
-                if checkpoint_mgr and len(edit_calls) > 1:
-                    checkpoint_mgr.end_batch()
-                # Update status bar after all tools executed
-                status_bar.set_thinking(self.model)
+
+                # Execute edit/write tools as a batch if checkpoint manager available
+                if edit_calls:
+                    checkpoint_mgr = getattr(self, "_checkpoint_manager", None)
+                    if checkpoint_mgr and len(edit_calls) > 1:
+                        checkpoint_mgr.begin_batch()
+                    try:
+                        for tc, func_name, func_args in edit_calls:
+                            status_bar.set_executing(func_name)
+                            tool_start = time.time()
+                            try:
+                                result = self._handle_tool_call(
+                                    func_name, func_args, tc.id, session
+                                )
+                                duration = time.time() - tool_start
+                                success, error_msg, preview = _parse_tool_result(result)
+                                print_tool_call_result(func_name, success, duration, preview, error_msg)
+                            except Exception as e:
+                                duration = time.time() - tool_start
+                                result = json.dumps({"error": str(e)})
+                                print_tool_call_result(func_name, False, duration, error=str(e))
+                            session.add_message("tool", result, tool_call_id=tc.id)
+                    finally:
+                        if checkpoint_mgr and len(edit_calls) > 1:
+                            checkpoint_mgr.end_batch()
+                    status_bar.set_thinking(self.model)
+        finally:
+            # Ensure session and status bar are always cleaned up
+            self._last_session = session
+            try:
+                status_bar.set_idle()
+            except Exception:
+                pass
 
     # -----------------------------------------------------------------------
     # SubAgent Management

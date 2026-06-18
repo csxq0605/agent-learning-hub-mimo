@@ -383,13 +383,16 @@ class PermissionGate:
             import re as _re
             redirects = _re.findall(r'>+\s*([^\s;|&]+)', command)
             for target in redirects:
+                # Strip quotes from redirect targets (e.g., > ".env" -> .env)
+                target = target.strip('"').strip("'")
                 if _is_protected_path(target):
                     return True
             # Check arguments using shlex to handle quoted strings correctly
             # (e.g., `cp file .env` is blocked, but `git commit -m "update .env"` is not)
             import shlex
             try:
-                parts = shlex.split(command)
+                # On Windows, don't treat backslashes as escape characters
+                parts = shlex.split(command, posix=(platform.system() != "Windows"))
             except ValueError:
                 parts = command.split()
             for part in parts[1:]:  # skip the command name
@@ -462,6 +465,14 @@ class PermissionGate:
         desc = re.sub(r'(?:[A-Za-z]:)?(?:/|\\)[^\s,;\)]{10,}', '[REDACTED_PATH]', desc)
         # Mask tokens/keys/secrets in args
         desc = re.sub(r'(?i)(token|key|secret|password|auth)[=:]\s*\S+', r'\1=[REDACTED]', desc)
+        # Mask known credential patterns (same as security_pipeline._SENSITIVE_PATTERNS)
+        desc = re.sub(r'\btp-[a-zA-Z0-9]{20,}\b', '[REDACTED_API_KEY]', desc)
+        desc = re.sub(r'\bsk-[a-zA-Z0-9]{20,}\b', '[REDACTED_API_KEY]', desc)
+        desc = re.sub(r'\bghp_[a-zA-Z0-9]{30,}\b', '[REDACTED_GITHUB_TOKEN]', desc)
+        desc = re.sub(r'\bgho_[a-zA-Z0-9]{30,}\b', '[REDACTED_GITHUB_TOKEN]', desc)
+        desc = re.sub(r'\bAKIA[A-Z0-9]{16,}\b', '[REDACTED_AWS_KEY]', desc)
+        desc = re.sub(r'(?i)Bearer\s+[A-Za-z0-9_\-\.]{20,}', 'Bearer [REDACTED]', desc)
+        desc = re.sub(r'-----BEGIN\s+(RSA\s+)?PRIVATE KEY-----', '[REDACTED_PRIVATE_KEY]', desc)
         return desc
 
     def _log(self, perm: Permission, desc: str, result: str,

@@ -40,7 +40,7 @@ class SettingsManager:
         try:
             with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-        except (FileNotFoundError, json.JSONDecodeError):
+        except (FileNotFoundError, PermissionError, json.JSONDecodeError, OSError):
             return
 
         for key, value in data.items():

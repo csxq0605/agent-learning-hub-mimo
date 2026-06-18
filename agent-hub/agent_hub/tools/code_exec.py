@@ -54,7 +54,7 @@ def get_tools() -> list[ToolDef]:
                 "type": "object",
                 "properties": {
                     "code": {"type": "string", "description": "Python code to execute"},
-                    "timeout": {"type": "integer", "description": "Timeout in seconds (default 30)"},
+                    "timeout": {"type": "integer", "description": "Timeout in seconds (default 60)"},
                 },
                 "required": ["code"]
             },

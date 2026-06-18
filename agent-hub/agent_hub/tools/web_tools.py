@@ -21,6 +21,7 @@ MAX_RESPONSE_BYTES = 10 * 1024 * 1024
 # S14: Response cache for web_fetch
 _fetch_cache: dict[str, tuple[float, str]] = {}
 CACHE_TTL = 900  # 15 minutes
+MAX_CACHE_SIZE = 500  # Maximum cache entries
 
 
 def _evict_expired_cache():
@@ -29,6 +30,11 @@ def _evict_expired_cache():
     expired = [k for k, (ts, _) in _fetch_cache.items() if now - ts >= CACHE_TTL]
     for k in expired:
         del _fetch_cache[k]
+    # Also enforce max size by removing oldest entries
+    if len(_fetch_cache) > MAX_CACHE_SIZE:
+        sorted_keys = sorted(_fetch_cache, key=lambda k: _fetch_cache[k][0])
+        for k in sorted_keys[:len(_fetch_cache) - MAX_CACHE_SIZE]:
+            del _fetch_cache[k]
 
 # Blocked internal hostnames
 _BLOCKED_HOSTNAMES = frozenset({
@@ -229,14 +235,19 @@ def web_fetch(params: dict) -> str:
             except (socket.gaierror, OSError):
                 pass  # DNS failure after request is less concerning
         # Read with size limit to prevent memory exhaustion
-        content_bytes = b""
+        content_chunks = []
+        total_size = 0
+        truncated = False
         for chunk in resp.iter_content(chunk_size=8192):
-            content_bytes += chunk
-            if len(content_bytes) > MAX_RESPONSE_BYTES:
-                content_bytes += b"\n... [truncated: response too large]"
+            content_chunks.append(chunk)
+            total_size += len(chunk)
+            if total_size > MAX_RESPONSE_BYTES:
+                truncated = True
                 break
         resp.close()
-        content = content_bytes.decode("utf-8", errors="replace")
+        if truncated:
+            content_chunks.append(b"\n... [truncated: response too large]")
+        content = b"".join(content_chunks).decode("utf-8", errors="replace")
         text = re.sub(r'<script[^>]*>.*?</script>', '', content, flags=re.DOTALL)
         text = re.sub(r'<style[^>]*>.*?</style>', '', text, flags=re.DOTALL)
         text = re.sub(r'<[^>]+>', ' ', text)

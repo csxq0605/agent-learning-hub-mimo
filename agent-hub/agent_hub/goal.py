@@ -150,12 +150,17 @@ class GoalEvaluator:
 # Global goal manager instances per session
 _goal_managers: Dict[str, GoalManager] = {}
 _goal_lock = threading.Lock()
+_MAX_GOAL_MANAGERS = 100  # Prevent unbounded growth
 
 
 def get_goal_manager(session_id: str = 'default') -> GoalManager:
     """Get or create a goal manager for a session."""
     with _goal_lock:
         if session_id not in _goal_managers:
+            # Evict oldest entries if we've exceeded the limit
+            if len(_goal_managers) >= _MAX_GOAL_MANAGERS:
+                oldest_key = next(iter(_goal_managers))
+                del _goal_managers[oldest_key]
             _goal_managers[session_id] = GoalManager()
         return _goal_managers[session_id]
 

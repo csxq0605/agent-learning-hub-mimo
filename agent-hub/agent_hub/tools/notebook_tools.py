@@ -103,7 +103,7 @@ def get_tools() -> list[ToolDef]:
                     "cell_id": {"type": "string", "description": "Cell ID or index"},
                     "new_source": {"type": "string", "description": "New cell source content"},
                     "cell_type": {"type": "string", "description": "Cell type: code or markdown"},
-                    "edit_mode": {"type": "string", "description": "replace, insert, or delete"},
+                    "edit_mode": {"type": "string", "description": "replace, insert, or delete", "enum": ["replace", "insert", "delete"]},
                 },
                 "required": ["notebook_path", "new_source"]
             },

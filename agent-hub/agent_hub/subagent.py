@@ -386,7 +386,16 @@ class SubAgent:
                 stream=False,
                 bare=True,  # Skip memory loading for subagents
                 effort=self.config.effort,
+                max_tokens=self.config.max_tokens,
             )
+
+            # Initialize isolated FileOpsState for subagent (prevent inheriting stale state)
+            try:
+                from .tools.file_ops import FileOpsState, set_file_ops_state
+                child_harness._file_ops_state = FileOpsState()
+                set_file_ops_state(child_harness._file_ops_state)
+            except ImportError:
+                pass
 
             # Filter tools if allowed_tools is specified
             if self.config.allowed_tools is not None:
@@ -533,6 +542,8 @@ class SubAgent:
         filtered_registry = ToolRegistry()
         for tool_name in allowed_tools:
             tool_def = harness.registry.get(tool_name)
+            if not tool_def:
+                self.logger.warning("Tool '%s' not found in registry, skipping", tool_name)
             if tool_def:
                 filtered_registry.register(tool_def)
         harness.registry = filtered_registry
@@ -884,6 +895,9 @@ class SubAgentManager:
         """
         with self._lock:
             results = list(self._results.values())
+            total_tokens = self._total_tokens_used
+            total_time = self._total_time_elapsed
+            start_time = self._start_time
 
         if not results:
             return {"message": "No SubAgent results available"}
@@ -925,9 +939,9 @@ class SubAgentManager:
                 "p99": round(percentile(tokens, 99)),
             },
             "resource_usage": {
-                "total_tokens": self._total_tokens_used,
-                "total_time": round(self._total_time_elapsed, 2),
-                "elapsed_since_start": round(time.time() - self._start_time, 2),
+                "total_tokens": total_tokens,
+                "total_time": round(total_time, 2),
+                "elapsed_since_start": round(time.time() - start_time, 2),
             },
         }
 

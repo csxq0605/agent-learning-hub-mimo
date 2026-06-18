@@ -63,6 +63,7 @@ class Session:
     auto_save_dir: str = ""
     name: str = ""
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+    _last_saved_idx: int = field(default=0, repr=False)
 
     def add_message(self, role: str, content, **kwargs):
         msg = {"role": role, "content": content}
@@ -77,30 +78,46 @@ class Session:
             return list(self.messages)
 
     def _auto_save_unlocked(self):
-        """Append the latest message as a JSONL line (must hold lock)."""
+        """Append unsaved messages as JSONL lines (must hold lock)."""
         if not self.auto_save_dir or not self.messages:
             return
         os.makedirs(self.auto_save_dir, exist_ok=True)
         path = os.path.join(self.auto_save_dir, f"{self.session_id}.jsonl")
         with open(path, "a", encoding="utf-8") as f:
-            f.write(json.dumps(self.messages[-1], ensure_ascii=False) + "\n")
+            for i in range(self._last_saved_idx, len(self.messages)):
+                f.write(json.dumps(self.messages[i], ensure_ascii=False) + "\n")
+        self._last_saved_idx = len(self.messages)
 
     def auto_save(self):
-        """Append the latest message as a JSONL line to the session file."""
+        """Append unsaved messages as JSONL lines to the session file."""
         with self._lock:
             self._auto_save_unlocked()
 
     def save(self, path: str):
         with self._lock:
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump({
-                    "session_id": self.session_id,
-                    "messages": self.messages,
-                    "created_at": self.created_at,
-                    "working_dir": self.working_dir,
-                    "compaction_count": self.compaction_count,
-                    "name": self.name,
-                }, f, ensure_ascii=False, indent=2)
+            data = {
+                "session_id": self.session_id,
+                "messages": self.messages,
+                "created_at": self.created_at,
+                "working_dir": self.working_dir,
+                "compaction_count": self.compaction_count,
+                "name": self.name,
+            }
+            # Atomic write: write to temp file, flush, then replace
+            tmp_path = path + ".tmp"
+            try:
+                with open(tmp_path, "w", encoding="utf-8") as f:
+                    json.dump(data, f, ensure_ascii=False, indent=2)
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.replace(tmp_path, path)
+            except BaseException:
+                # Clean up temp file on failure
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+                raise
 
     @classmethod
     def load(cls, path: str) -> "Session":
@@ -173,11 +190,12 @@ class Session:
         session = cls(
             session_id=session_id,
             messages=messages,
-            created_at=created_at,
+            created_at=session_meta.get("created_at", created_at),
             name=session_meta.get("name", ""),
             compaction_count=session_meta.get("compaction_count", 0),
             working_dir=session_meta.get("working_dir", ""),
         )
+        session._last_saved_idx = len(messages)
         return LoadResult(session=session, skipped=skipped)
 
     def save_meta_to_jsonl(self):
@@ -187,18 +205,20 @@ class Session:
         """
         if not self.auto_save_dir:
             return
-        os.makedirs(self.auto_save_dir, exist_ok=True)
-        path = os.path.join(self.auto_save_dir, f"{self.session_id}.jsonl")
-        meta_msg = {
-            "role": "__session_meta__",
-            "meta": {
-                "name": self.name,
-                "compaction_count": self.compaction_count,
-                "working_dir": self.working_dir,
-            },
-        }
-        with open(path, "a", encoding="utf-8") as f:
-            f.write(json.dumps(meta_msg, ensure_ascii=False) + "\n")
+        with self._lock:
+            os.makedirs(self.auto_save_dir, exist_ok=True)
+            path = os.path.join(self.auto_save_dir, f"{self.session_id}.jsonl")
+            meta_msg = {
+                "role": "__session_meta__",
+                "meta": {
+                    "name": self.name,
+                    "compaction_count": self.compaction_count,
+                    "working_dir": self.working_dir,
+                    "created_at": self.created_at,
+                },
+            }
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(meta_msg, ensure_ascii=False) + "\n")
 
 
 # ---------------------------------------------------------------------------
@@ -212,11 +232,14 @@ class CheckpointManager:
         self._seq = 0
         self._restored_seqs: set = set()  # L12: Track restored checkpoints
         self._batch_dir: Optional[str] = None
+        self._lock = threading.Lock()
 
     def snapshot(self, file_path: str) -> str:
         """H3: Save a copy of file before edit using relative path to avoid collisions."""
-        self._seq += 1
-        dest_dir = os.path.join(self.checkpoint_dir, str(self._seq))
+        with self._lock:
+            self._seq += 1
+            seq = self._seq
+        dest_dir = os.path.join(self.checkpoint_dir, str(seq))
         os.makedirs(dest_dir, exist_ok=True)
         # H3: Use sanitized relative path to avoid cross-directory collisions
         abs_path = os.path.abspath(file_path)
@@ -237,12 +260,14 @@ class CheckpointManager:
 
     def restore_last(self) -> list[str]:
         """Restore all files from the latest checkpoint. Returns list of restored paths."""
-        if self._seq == 0:
-            return []
-        # L12: Guard against double-restore of the same checkpoint
-        if self._seq in self._restored_seqs:
-            return []
-        checkpoint_path = os.path.join(self.checkpoint_dir, str(self._seq))
+        with self._lock:
+            if self._seq == 0:
+                return []
+            # L12: Guard against double-restore of the same checkpoint
+            if self._seq in self._restored_seqs:
+                return []
+            seq = self._seq
+        checkpoint_path = os.path.join(self.checkpoint_dir, str(seq))
         if not os.path.isdir(checkpoint_path):
             return []
         restored = []
@@ -276,18 +301,21 @@ class CheckpointManager:
                 os.makedirs(os.path.dirname(os.path.abspath(dest)), exist_ok=True)
                 shutil.copy2(src, dest)
                 restored.append(dest)
-        self._restored_seqs.add(self._seq)  # L12: Mark as restored
-        self._seq -= 1
+        with self._lock:
+            self._restored_seqs.add(seq)  # L12: Mark as restored
+            self._seq -= 1
         return restored
 
     # -- Batch support (X2: Multi-File Checkpoint Batch) --
 
     def begin_batch(self) -> str:
         """Start a new batch checkpoint. Returns the batch directory path."""
-        self._seq += 1
-        self._batch_dir = os.path.join(self.checkpoint_dir, str(self._seq))
-        os.makedirs(self._batch_dir, exist_ok=True)
-        return self._batch_dir
+        with self._lock:
+            self._seq += 1
+            self._batch_dir = os.path.join(self.checkpoint_dir, str(self._seq))
+            batch_dir = self._batch_dir
+        os.makedirs(batch_dir, exist_ok=True)
+        return batch_dir
 
     def snapshot_to_batch(self, file_path: str) -> str:
         """Save a file snapshot into the current batch directory."""
@@ -321,7 +349,8 @@ class CheckpointManager:
 
     def end_batch(self):
         """Finalize the current batch."""
-        self._batch_dir = None
+        with self._lock:
+            self._batch_dir = None
 
 
 # ---------------------------------------------------------------------------
@@ -474,6 +503,10 @@ def llm_compress(
 def _filter_orphan_tool_results(messages: list) -> list:
     """Remove tool results that don't have matching tool_calls in the window.
 
+    Also removes tool_calls from assistant messages whose corresponding
+    tool results were dropped (reverse direction), which is required by
+    the OpenAI-compatible API.
+
     Preserves tool results that were already snipped/compressed by context
     compression — their parent assistant message may have been dropped, but
     the snipped result is still needed to maintain message chain continuity.
@@ -487,6 +520,14 @@ def _filter_orphan_tool_results(messages: list) -> list:
                 if tc_id:
                     valid_ids.add(tc_id)
 
+    # Collect tool_call_ids that have matching tool results
+    result_ids = set()
+    for msg in messages:
+        if isinstance(msg, dict) and msg.get("role") == "tool":
+            tc_id = msg.get("tool_call_id")
+            if tc_id:
+                result_ids.add(tc_id)
+
     result = []
     for msg in messages:
         if isinstance(msg, dict) and msg.get("role") == "tool":
@@ -499,6 +540,23 @@ def _filter_orphan_tool_results(messages: list) -> list:
             elif tc_id in valid_ids:
                 result.append(msg)
             # else: truly orphan, skip
+        elif isinstance(msg, dict) and msg.get("role") == "assistant" and msg.get("tool_calls"):
+            # Reverse direction: remove tool_calls whose results were dropped
+            filtered_tcs = []
+            for tc in (msg.get("tool_calls") or []):
+                tc_id = tc.get("id") if isinstance(tc, dict) else getattr(tc, "id", None)
+                if tc_id in result_ids:
+                    filtered_tcs.append(tc)
+            if filtered_tcs:
+                new_msg = dict(msg)
+                new_msg["tool_calls"] = filtered_tcs
+                result.append(new_msg)
+            elif msg.get("content"):
+                # Keep assistant message with content but strip empty tool_calls
+                new_msg = dict(msg)
+                new_msg["tool_calls"] = []
+                result.append(new_msg)
+            # else: assistant message with only orphaned tool_calls and no content, skip
         else:
             result.append(msg)
     return result
@@ -606,10 +664,14 @@ def compact_context(
             "role": "system",
             "content": f"[Context compacted: {len(messages)} messages, ~{tokens} tokens reduced to this summary]"
         })
+        # Pick the LAST system message (most recent context), not the first
+        # (which may be a stale compaction summary from a previous round)
+        last_system = None
         for msg in messages:
             if isinstance(msg, dict) and msg.get("role") == "system":
-                result.append(msg)
-                break
+                last_system = msg
+        if last_system:
+            result.append(last_system)
         KEEP_RECENT = 15
         recent_msgs = [m for m in messages if isinstance(m, dict) and m.get("role") != "system"]
         for msg in recent_msgs[-KEEP_RECENT:]:
@@ -706,9 +768,9 @@ def _resolve_imports(content: str, base_dir: str, depth: int = 0) -> str:
         rel_path = match.group(1)
         abs_path = os.path.normpath(os.path.join(base_dir, rel_path))
         # Security: ensure resolved path stays within base_dir
-        base_abs = os.path.normpath(os.path.abspath(base_dir))
+        base_abs = os.path.normpath(os.path.realpath(base_dir))
         try:
-            resolved = os.path.abspath(abs_path)
+            resolved = os.path.realpath(abs_path)
         except (ValueError, OSError):
             return match.group(0)
         # Case-insensitive comparison on Windows for path traversal check

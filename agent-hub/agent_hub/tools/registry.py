@@ -98,6 +98,12 @@ class ToolRegistry:
             if req not in params:
                 return f"Missing required parameter: {req}"
 
+        # Check for unknown parameters (warn but don't reject — LLM may pass extras)
+        unknown = set(params.keys()) - set(properties.keys())
+        if unknown:
+            import logging
+            logging.getLogger(__name__).debug("Unknown parameters for tool: %s", unknown)
+
         # Check parameter types (basic validation)
         for key, value in params.items():
             if key in properties:

@@ -42,12 +42,20 @@ def _parse_cron_field(field_val: str, min_val: int, max_val: int) -> set[int]:
             values.update(range(min_val, max_val + 1))
         elif part.startswith("*/"):
             step = int(part[2:])
+            if step <= 0:
+                raise ValueError(f"Invalid cron step: {part}")
             values.update(range(min_val, max_val + 1, step))
         elif "-" in part:
             start, end = part.split("-", 1)
-            values.update(range(int(start), int(end) + 1))
+            start_val, end_val = int(start), int(end)
+            if start_val < min_val or end_val > max_val:
+                raise ValueError(f"Cron range {part} out of bounds [{min_val}-{max_val}]")
+            values.update(range(start_val, end_val + 1))
         else:
-            values.add(int(part))
+            val = int(part)
+            if val < min_val or val > max_val:
+                raise ValueError(f"Cron value {val} out of bounds [{min_val}-{max_val}]")
+            values.add(val)
     return values
 
 
@@ -171,8 +179,9 @@ class Scheduler:
             if self._callback:
                 try:
                     self._callback(job.prompt)
-                except Exception:
-                    pass
+                except Exception as e:
+                    import logging
+                    logging.getLogger(__name__).warning("Scheduler callback failed for job %s: %s", job.job_id, e)
 
     def start_background_checker(self, interval: float = 30.0):
         """Start a background thread that checks for due jobs."""

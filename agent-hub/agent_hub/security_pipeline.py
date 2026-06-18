@@ -112,16 +112,17 @@ _INJECTION_PATTERNS = [
 
 # Hard deny patterns — always block (circuit breaker, even in bypass mode)
 _HARD_DENY_PATTERNS = [
-    # Case-insensitive rm -rf patterns (re.IGNORECASE handles -Rf, -rF, -RF, etc.)
-    (re.compile(r'\brm\s+.*-[^\s]*r[^\s]*f[^\s]*\s+/(?:\s|\)|$)', re.IGNORECASE), "rm -rf / destroys the filesystem"),
-    (re.compile(r'\brm\s+.*-[^\s]*r[^\s]*f[^\s]*\s+~', re.IGNORECASE), "rm -rf ~ destroys home directory"),
-    (re.compile(r'\brm\s+.*-[^\s]*r[^\s]*f[^\s]*\s+\*', re.IGNORECASE), "rm -rf * destroys all files"),
-    (re.compile(r'\brm\s+.*-[^\s]*r[^\s]*f[^\s]*\s+\.', re.IGNORECASE), "rm -rf . destroys current directory"),
+    # Case-insensitive rm -rf patterns: lookahead catches both -rf and -fr orderings
+    (re.compile(r'\brm\s+.*-(?=[^\s]*r)(?=[^\s]*f)[^\s]*\s+/(?:\s|\.|/|\)|$)', re.IGNORECASE), "rm -rf / destroys the filesystem"),
+    (re.compile(r'\brm\s+.*-(?=[^\s]*r)(?=[^\s]*f)[^\s]*\s+~', re.IGNORECASE), "rm -rf ~ destroys home directory"),
+    (re.compile(r'\brm\s+.*-(?=[^\s]*r)(?=[^\s]*f)[^\s]*\s+\*', re.IGNORECASE), "rm -rf * destroys all files"),
+    (re.compile(r'\brm\s+.*-(?=[^\s]*r)(?=[^\s]*f)[^\s]*\s+\.', re.IGNORECASE), "rm -rf . destroys current directory"),
     # Long flag forms and mixed short/long forms
     (re.compile(r'\brm\s+.*--recursive\s+.*--force\s+', re.IGNORECASE), "rm --recursive --force is dangerous"),
     (re.compile(r'\brm\s+.*--force\s+.*--recursive\s+', re.IGNORECASE), "rm --force --recursive is dangerous"),
     (re.compile(r'\brm\s+.*--recursive\b.*-[^\s]*f', re.IGNORECASE), "rm --recursive -f is dangerous"),
     (re.compile(r'\brm\s+.*-[^\s]*r\b.*--force\b', re.IGNORECASE), "rm -r --force is dangerous"),
+    (re.compile(r'\brm\s+.*--force\b.*-[^\s]*r\b', re.IGNORECASE), "rm --force -r is dangerous"),
     (re.compile(r'\bmkfs\b', re.IGNORECASE), "mkfs formats a filesystem"),
     (re.compile(r'\bdd\s+if=.*of=/dev/', re.IGNORECASE), "dd to device overwrites disk"),
     (re.compile(r':\(\)\s*\{.*:\|:.*\}'), "fork bomb detected"),
@@ -132,14 +133,13 @@ _HARD_DENY_PATTERNS = [
     (re.compile(r'\b(curl|wget)\s+.*\|\s*(bash|sh|zsh)\b', re.IGNORECASE), "download-and-execute via pipe is dangerous"),
     (re.compile(r'\b(curl|wget)\s+.*-o\s+\S+.*&&\s*(bash|sh|zsh)\b', re.IGNORECASE), "download-then-execute is dangerous"),
     (re.compile(r'\b(curl|wget)\s+.*&&\s*(bash|sh|zsh)\s+\S+', re.IGNORECASE), "download-then-execute is dangerous"),
-    (re.compile(r'\b(curl|wget)\s+.*\b(ENV|env|\.env|credentials|\.ssh)\b', re.IGNORECASE), "potential credential exfiltration"),
     (re.compile(r'\b(curl|wget)\s+.*-d\s+.*\b(key|token|secret|password)\b', re.IGNORECASE),
      "sending credentials to external endpoint"),
 ]
 
 # Soft deny patterns
 _SOFT_DENY_PATTERNS = [
-    (re.compile(r'\bgit\s+push\s+.*--force\b'), "force push can overwrite history"),
+    (re.compile(r'\bgit\s+push\s+.*--force(?=\s|$)'), "force push can overwrite history"),
     (re.compile(r'\bgit\s+push\s+.*-f\b'), "force push can overwrite history"),
     (re.compile(r'\bgit\s+push\s+.*\b(origin|upstream)\s+(main|master)\b'),
      "pushing directly to main/master"),
@@ -158,6 +158,8 @@ _SOFT_DENY_PATTERNS = [
     (re.compile(r'\bcat\s+.*\.gnupg/'), "accessing GPG keys"),
     (re.compile(r'\b(grep|findstr)\s+.*\b(token|secret|key|password|credential)\b.*\b(env|ENV|\.env|config)\b'),
      "credential exploration pattern"),
+    (re.compile(r'\b(curl|wget)\s+.*\b(ENV|env|\.env|credentials|\.ssh)\b', re.IGNORECASE),
+     "potential credential exfiltration"),
 ]
 
 
