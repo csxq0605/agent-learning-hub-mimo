@@ -1,4 +1,4 @@
-# Nexgent
+﻿# Nexgent
 
 基于 [Agent Learning Hub](https://github.com/datawhalechina/Agent-Learning-Hub) 学习路线，完成 Stage 0-8 实践。此外，按学习经验构建生产级 Agent Harness。
 
@@ -23,13 +23,13 @@
 | 7 | 评估框架 | [评估运行器](stage-7/) | 双层判定、失败分类、回归测试 |
 | 8 | 生产级 DevOps Agent | [DevOps agent](stage-8/) | 可观测性、成本追踪、权限门 |
 
-## Agent Hub
+## Nexgent
 
 基于 Stage 0-8 经验构建的生产级模型无关 Agent Harness，参考 Claude Code 架构。
 
 **核心特性**：Agent Loop、33 个工具、权限管线、安全管线、上下文管理、记忆系统、会话管理、Hook 系统、SubAgent、Skills、MCP 支持、TUI、CLI、自定义智能体、后台任务、@文件引用、目标管理
 
-详见 [agent-hub/README.md](agent-hub/README.md)。
+详见 [nexgent/README.md](nexgent/README.md)。
 
 ## 快速开始
 
@@ -42,7 +42,7 @@ pip install -e .
 cp .env.example .env
 # 编辑 .env 填入你的 API_KEY
 
-ah          # 进入交互模式
+nexgent          # 进入交互模式
 ```
 
 ## 测试
