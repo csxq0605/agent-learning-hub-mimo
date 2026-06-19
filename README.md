@@ -1,10 +1,10 @@
-# Agent Learning Hub - MiMo
+# Nexgent
 
-基于 [Agent Learning Hub](https://github.com/datawhalechina/Agent-Learning-Hub) 学习路线，使用小米 MiMo 模型完成 Stage 0-8 实践，并构建生产级 Agent Harness。
+基于 [Agent Learning Hub](https://github.com/datawhalechina/Agent-Learning-Hub) 学习路线，完成 Stage 0-8 实践。此外，按学习经验构建生产级 Agent Harness。
 
 ## 模型配置
 
-| 配置项 | 值 |
+| 配置项 | 值（以MiMo为例） |
 |--------|-----|
 | Base URL | `https://token-plan-cn.xiaomimimo.com/v1` |
 | Model | `mimo-v2.5-pro` |
@@ -34,13 +34,13 @@
 ## 快速开始
 
 ```bash
-git clone https://github.com/csxq0605/Agent-Learning-Hub-MiMo.git
-cd Agent-Learning-Hub-MiMo/agent-hub
+git clone https://github.com/csxq0605/Nexgent.git
+cd Nexgent/nexgent
 pip install -e .
 
 # 配置 .env
 cp .env.example .env
-# 编辑 .env 填入你的 MIMO_API_KEY
+# 编辑 .env 填入你的 API_KEY
 
 ah          # 进入交互模式
 ```
@@ -54,7 +54,7 @@ ah          # 进入交互模式
 | Stage 测试 | 67 |
 
 ```bash
-cd agent-hub
+cd nexgent
 pip install -e ".[dev]"
 python -m pytest tests/ --ignore=tests/test_e2e.py -v  # 单元测试
 python -m pytest tests/test_e2e.py -v                    # E2E fast
@@ -73,10 +73,10 @@ GitHub Actions 自动化测试：
 ## 项目结构
 
 ```
-Agent-Learning-Hub-MiMo/
+Nexgent/
 ├── stage-0/ ~ stage-8/    # 学习阶段交付物
-├── agent-hub/             # 生产级 Agent Harness（主要交付物）
-│   ├── agent_hub/         # Python 包（核心代码）
+├── nexgent/             # 生产级 Agent Harness（主要交付物）
+│   ├── nexgent/         # Python 包（核心代码）
 │   │   ├── agent.py       # 核心 Agent Loop
 │   │   ├── cli.py         # REPL + 斜杠命令
 │   │   ├── tui.py         # 全屏 TUI 界面
