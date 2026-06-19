@@ -393,13 +393,13 @@ class SubAgent:
             if self.parent_harness and hasattr(self.parent_harness, '_hook_runner'):
                 child_harness._hook_runner = self.parent_harness._hook_runner
 
-            # Initialize isolated FileOpsState for subagent (prevent inheriting stale state)
+            # Save parent's FileOpsState so we can restore it after the child runs.
+            # child_harness.run() will create its own isolated FileOpsState.
             try:
-                from .tools.file_ops import FileOpsState, set_file_ops_state
-                child_harness._file_ops_state = FileOpsState()
-                set_file_ops_state(child_harness._file_ops_state)
+                from .tools.file_ops import FileOpsState, get_file_ops_state, set_file_ops_state
+                _parent_file_ops_state = get_file_ops_state()
             except ImportError:
-                pass
+                _parent_file_ops_state = None
 
             # Filter tools if allowed_tools is specified
             if self.config.allowed_tools is not None:
@@ -433,14 +433,19 @@ class SubAgent:
                 self.state = SubAgentState.CANCELLED
                 return self.result
 
-            # Run the task
-            result_text = child_harness.run(self.config.task, session)
+            # Run the task, then restore parent's FileOpsState
+            try:
+                result_text = child_harness.run(self.config.task, session)
+            finally:
+                if _parent_file_ops_state is not None:
+                    set_file_ops_state(_parent_file_ops_state)
 
             # Determine success based on result
             is_success = (
                 result_text is not None
                 and not result_text.startswith("[ERROR]")
                 and not result_text.startswith("[ABORTED]")
+                and not result_text.startswith("[LIMIT]")
             )
 
             self.result = SubAgentResult(

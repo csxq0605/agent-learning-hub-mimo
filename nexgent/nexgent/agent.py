@@ -318,6 +318,7 @@ You help users with coding, file operations, web research, document creation, an
         self.stream = stream
         self.bare = bare
         self.effort = effort
+        self._last_steps = 0
         self._system_prompt_cache: Optional[str] = None
         # A8: Thrashing protection counters
         self._compaction_attempts = 0
@@ -816,6 +817,7 @@ You help users with coding, file operations, web research, document creation, an
 
         # Dry-run: skip LLM call, memory injection, and API key check entirely
         if self.perms.dry_run:
+            session.add_message("user", task)
             self._last_session = session
             self._last_steps = 0
             self.logger.trace("task_start", {"task": task[:200], "session": self.logger.session_id, "dry_run": True})
@@ -874,12 +876,14 @@ You help users with coding, file operations, web research, document creation, an
                     self.logger.info("[ABORT] Graceful abort requested by user")
                     self.graceful_abort.reset()
                     self._last_session = session
+                    self._last_steps = step
                     return "[ABORTED] Stopped by user request."
 
                 # Termination check: time limit
                 if self.max_duration > 0 and time.time() - start_time > self.max_duration:
                     self.logger.info(f"[LIMIT] Time limit exceeded ({self.max_duration}s)")
                     self._last_session = session
+                    self._last_steps = step
                     return "[LIMIT] Time limit exceeded"
 
                 # Termination check: circuit breaker (Ch7)
@@ -889,12 +893,14 @@ You help users with coding, file operations, web research, document creation, an
                         f"consecutive failures. Stopping."
                     )
                     self._last_session = session
+                    self._last_steps = step
                     return "[ERROR] Circuit breaker open — too many consecutive failures"
 
                 # Termination check: max_steps (only if explicitly set, 0 = unlimited)
                 if self.max_steps > 0 and step > self.max_steps:
                     self.logger.info(f"[LIMIT] Max steps exceeded ({self.max_steps})")
                     self._last_session = session
+                    self._last_steps = step
                     return "[LIMIT] Max steps exceeded"
 
                 # Warn user when context is large — let them decide to /compact
