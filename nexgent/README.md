@@ -1,13 +1,14 @@
-﻿# Nexgent
+# Nexgent
 
 基于 Claude Code 架构的生产级模型无关 AI Agent Harness。
 
-版本：`0.4.0` | Python：`>=3.10` | License：MIT
+版本：`0.5.0` | Python：`>=3.10` | License：MIT
 
 ## 核心特性
 
 - **Agent Loop**: 依赖注入、熔断器（CircuitBreaker）、Token 预算、并行工具调度、流式输出、指数退避重试、优雅中断
-- **33 个工具**（14 个模块）: 文件操作、Shell、代码执行、Web 搜索/抓取、文档创建、数学计算、笔记本编辑、任务管理、LSP 集成、调度器、计划模式、进程监控、交互提示、子代理
+- **38 个工具**（14 个模块）: 文件操作、Shell、代码执行、Web 搜索/抓取、文档创建、数学计算、笔记本编辑、任务管理、LSP 集成、调度器、计划模式、进程监控、交互提示、子代理
+- **MCP 工具桥接**: MCP 服务器的工具自动注入 ToolRegistry，与内置工具统一调用
 - **权限管线**: 6 种模式（DEFAULT/PLAN/AUTO/ACCEPT_EDITS/DONT_ASK/BYPASS），4 阶段管线（验证→规则匹配→上下文评估→用户提示），规则优先级 deny > ask > allow
 - **安全管线**: 2 层防御（regex 预过滤 + 模型分类器），敏感数据自动脱敏，提示注入检测
 - **上下文管理**: 1M token 窗口，4 级渐进压缩（snip → microcompact → collapse → autocompact），85% 阈值触发
@@ -15,11 +16,15 @@
 - **会话管理**: JSONL 自动保存、检查点回滚、会话分叉、会话恢复、自动清理
 - **Hook 系统**: 18 种生命周期事件，3 种 Hook 类型（command/HTTP/prompt），优先级排序，超时管理
 - **SubAgent**: 并行/Pipeline 执行，生命周期管理，资源限制（最大步数/时长/token）
+- **工作流引擎**: Python 脚本编排多代理，pipeline/parallel/phase 编排，Token 预算控制，可恢复/可保存，对标 Claude Code Dynamic Workflows
+- **多模型配置**: `models.json` 统一管理多个 LLM 提供商，通过 `${VAR}` 引用 `.env` 中的密钥，支持为主对话/子代理/快速任务分别设置默认模型，运行时 `/model` 切换
+- **插件系统**: `plugin.json` 清单、自动发现/加载/注册、工具注入到 ToolRegistry、技能/代理贡献、生命周期管理
+- **Web 搜索**: Tavily API（结构化结果+AI 摘要）+ Bing/DuckDuckGo 双后端降级
+- **MCP**: Model Context Protocol 集成，stdio 协议，工具自动桥接到内置注册表
 - **Skills**: SKILL.md 格式、动态上下文注入、参数替换、GitHub URL 安装
-- **MCP**: Model Context Protocol 集成，多协议支持（stdio/HTTP/SSE/WebSocket），OAuth 认证
 - **TUI**: 全屏 Textual 界面，固定输入区 + 滚动输出，队列架构，斜杠命令自动补全
-- **CLI**: 34 个斜杠命令，管道输入，3 种输出格式（text/json/stream-json），配置热重载
-- **自定义智能体**: YAML frontmatter 定义，项目级/用户级，6 个预设模板（code-reviewer/researcher/debugger/writer/tester/planner）
+- **CLI**: 38 个斜杠命令，管道输入，3 种输出格式（text/json/stream-json），配置热重载
+- **自定义智能体**: YAML frontmatter 定义，项目级/用户级，6 个预设模板
 - **后台任务**: 异步执行、状态跟踪、取消、自动清理
 - **@文件引用**: `@file`、`@folder/`、`@*.ext` 语法，自动注入上下文，路径遍历保护
 - **目标管理**: `/goal` 设置完成条件，自动评估，持续工作直到满足
@@ -30,18 +35,53 @@
 
 ```bash
 pip install -e .
-cp .env.example .env  # 配置 API key
+cp .env.example .env      # 填入 API 密钥
+cp models.json.example models.json  # 配置模型（可选，有默认值）
 nexgent                   # 交互模式（TUI）
 ```
 
-## 环境变量
-
-在 `nexgent/.env` 中配置（以MiMo为例）：
+## 配置体系
 
 ```
-MIMO_BASE_URL=https://token-plan-cn.xiaomimimo.com/v1
-MIMO_API_KEY=your-api-key-here
-MIMO_MODEL=mimo-v2.5-pro
+models.json         ← 模型配置（提供商、模型名、base_url、defaults）
+                      API key 通过 ${VAR} 引用 .env
+.env                ← 所有密钥（MIMO_API_KEY、DEEPSEEK_API_KEY、GITHUB_TOKEN、TAVILY_API_KEY）
+.nexgent/           ← 项目级配置
+  ├── mcp.json      ← MCP 服务器配置
+  ├── permissions.json
+  └── settings.json
+~/.nexgent/         ← 用户级配置
+  ├── settings.json
+  ├── skills/
+  └── agents/
+```
+
+**models.json 示例**：
+
+```json
+{
+  "providers": {
+    "mimo": {
+      "base_url": "https://token-plan-cn.xiaomimimo.com/v1",
+      "api_key": "${MIMO_API_KEY}",
+      "models": {
+        "mimo-v2.5-pro": {"description": "MiMo Pro", "tags": ["smart", "default"]}
+      }
+    },
+    "deepseek": {
+      "base_url": "https://api.deepseek.com/v1",
+      "api_key": "${DEEPSEEK_API_KEY}",
+      "models": {
+        "deepseek-chat": {"description": "DeepSeek V3", "tags": ["code"]}
+      }
+    }
+  },
+  "defaults": {
+    "main": "mimo/mimo-v2.5-pro",
+    "subagent": "mimo/mimo-v2.5-pro",
+    "fast": "mimo/mimo-v2.5-pro"
+  }
+}
 ```
 
 ## 常用命令
@@ -94,6 +134,14 @@ nexgent --output-format stream-json      # 流式 JSON 输出
 | `/goal <condition>` | 设置目标条件 |
 | `/skills` | 查看/安装 Skills |
 | `/mcp` | MCP 服务器管理 |
+| `/workflow run <script>` | 运行工作流脚本 |
+| `/workflow list\|status\|resume\|save` | 工作流管理 |
+| `/model` | 列出可用模型 |
+| `/model set <id>` | 切换主对话模型 |
+| `/model default <role> <id>` | 设置默认模型（main/subagent/fast） |
+| `/plugin list` | 列出已安装插件 |
+| `/plugin load <path>` | 加载插件 |
+| `/plugin unload <name>` | 卸载插件 |
 | `/btw` | 注入运行中指导 |
 | `@file` | 引用文件内容 |
 | `!<cmd>` | 执行 shell |
@@ -105,6 +153,9 @@ nexgent --output-format stream-json      # 流式 JSON 输出
 nexgent/
 ├── agent.py              # 核心循环（NexgentAgent、AgentDeps、CircuitBreaker、TokenBudget）
 ├── cli.py                # REPL 入口、斜杠命令处理
+├── workflow.py           # 工作流引擎（pipeline/parallel/phase 编排、预算控制、可恢复）
+├── models.py             # 多模型配置（ModelRegistry、ModelProfile）
+├── plugins.py            # 插件系统（PluginManager、发现/加载/注册）
 ├── context.py            # 会话管理 + 渐进压缩
 ├── permissions.py        # 4 阶段权限管线
 ├── security_pipeline.py  # 2 层安全防御
@@ -112,7 +163,7 @@ nexgent/
 ├── hooks.py              # 18 种生命周期 Hook
 ├── subagent.py           # SubAgent 生命周期管理
 ├── skills.py             # Skills 系统
-├── mcp.py                # MCP 支持
+├── mcp.py                # MCP 支持（工具自动桥接到 ToolRegistry）
 ├── tui.py                # 全屏 TUI 界面
 ├── display.py            # 显示层（Rich 输出、对话气泡、语法高亮）
 ├── commands.py           # 命令定义（单一来源）
@@ -121,7 +172,7 @@ nexgent/
 ├── file_references.py    # @文件引用
 ├── goal.py               # 目标管理
 ├── settings.py           # 4 级层级设置
-├── config.py             # 配置加载
+├── config.py             # 配置加载（models.json → .env 链式加载）
 ├── token_counter.py      # tiktoken 精确计数
 ├── project_scanner.py    # 项目分析 + AGENTS.md 生成
 ├── input_utils.py        # prompt_toolkit 集成
@@ -130,7 +181,7 @@ nexgent/
     ├── file_ops.py       # read_file, write_file, edit_file, glob_files, grep_files
     ├── shell.py          # run_command（后台任务支持、只读自动检测）
     ├── code_exec.py      # execute_python
-    ├── web_tools.py      # web_search, web_fetch（SSRF 防护、响应缓存）
+    ├── web_tools.py      # web_search（Tavily+降级）, web_fetch（SSRF 防护）
     ├── doc_tools.py      # 文档创建
     ├── math_tools.py     # 数学计算
     ├── interactive.py    # 交互提示
@@ -141,6 +192,7 @@ nexgent/
     ├── lsp_tools.py      # LSP 集成
     ├── scheduler_tools.py # Cron 调度器
     ├── subagent_tools.py # 子代理工具
+    ├── workflow_tools.py # 工作流工具（run/list/status/save/resume）
     └── registry.py       # 工具注册 + 分发
 ```
 
@@ -148,9 +200,9 @@ nexgent/
 
 ```bash
 pip install -e ".[dev]"
-python -m pytest tests/ --ignore=tests/test_e2e.py -v  # 单元测试（984 个）
-python -m pytest tests/test_e2e.py -v                    # E2E fast（63 个）
-python -m pytest tests/test_e2e.py -v --run-slow         # E2E fast + slow（73 个）
+python -m pytest tests/ --ignore=tests/test_e2e.py -v  # 单元测试
+python -m pytest tests/test_e2e.py -v                    # E2E fast
+python -m pytest tests/test_e2e.py -v --run-slow         # E2E fast + slow
 python run_tests.py --all                                 # 全部
 ```
 
@@ -162,32 +214,18 @@ python run_tests.py --all                                 # 全部
 ## Python API
 
 ```python
-from nexgent import NexgentAgent, Session
+from nexgent.agent import NexgentAgent
 
-harness = NexgentAgent(model="mimo-v2.5-pro", auto_approve=True)
-session = Session(session_id="test")
-result = harness.run("What is 2+2?", session=session)
+harness = NexgentAgent(auto_approve=True)
+result = harness.run("分析 src/ 的架构")
 
 # 子代理
-result = harness.run_subagent("Analyze codebase")
 results = harness.run_parallel_subagents(["Task 1", "Task 2"])
-results = harness.run_pipeline_subagents([{"task": "Research"}, {"task": "Write"}])
+
+# 工作流
+runner = harness.workflow_runner
+run = runner.run(script_source="async def main(ctx, args): ...")
 ```
-
-## 配置文件
-
-| 文件 | 位置 | 说明 |
-|------|------|------|
-| `.env` | nexgent/ | API 凭据 |
-| `.mimo/config.json` | 项目根 | 运行时配置 |
-| `.mimo/permissions.json` | 项目根 | 权限规则 |
-| `.mimo/settings.json` | 项目根 | 项目级设置 |
-| `.mimo/settings.local.json` | 项目根 | 本地设置（gitignore） |
-| `.mimo/managed.json` | 项目根 | 企业级设置（不可覆盖） |
-| `~/.mimo/settings.json` | 用户目录 | 用户级设置 |
-| `~/.mimo/sessions/*.jsonl` | 用户目录 | 会话存储 |
-| `~/.mimo/skills/*/SKILL.md` | 用户目录 | 已安装 Skills |
-| `~/.mimo/agents/*.md` | 用户目录 | 自定义智能体 |
 
 ## 设计模式
 
@@ -206,13 +244,13 @@ results = harness.run_pipeline_subagents([{"task": "Research"}, {"task": "Write"
 11. **流式分块超时** — `_StreamReader` 后台线程，120s 分块超时
 12. **优雅中断** — `GracefulAbort` 使用 `threading.Event` 协作取消
 13. **并发工具执行** — `is_concurrency_safe=True` 的工具通过 `ThreadPoolExecutor` 并行
-14. **磁盘溢出** — 超过 10K token 的工具结果溢出到 `.mimo/outputs/`
-15. **配置热重载** — `ConfigWatcher` 监控 `.mimo/config.json` 变更
+14. **磁盘溢出** — 超过 10K token 的工具结果溢出到 `.nexgent/outputs/`
+15. **配置热重载** — `ConfigWatcher` 监控配置变更
 16. **层级设置** — 4 级配置，deny 规则累积不可覆盖
 17. **2 层安全防御** — regex 预过滤 + 模型分类器
 18. **合成响应对象** — `_AttrBag` 替代 `MagicMock` 构建流式响应
 19. **Unicode/ASCII 自动降级** — 检测终端编码支持，自动切换
-20. **磁盘溢出阈值** — SPILL_THRESHOLD_TOKENS=10000，MAX_RESULT_TOKENS=50000
+20. **MCP 工具桥接** — MCP 服务器工具自动注入内置 ToolRegistry
 
 ## License
 

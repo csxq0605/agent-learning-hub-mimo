@@ -4,9 +4,15 @@ Ch3 markers:
 - web_search: read-only, concurrency-safe
 - web_fetch: read-only, concurrency-safe
 - Both have SSRF protection
+
+Search providers (priority order):
+1. Tavily API (if TAVILY_API_KEY set) — structured JSON, best quality
+2. Bing HTML scraping — fallback
+3. DuckDuckGo HTML scraping — fallback
 """
 
 import json
+import os
 import re
 import socket
 import threading
@@ -92,6 +98,49 @@ _SEARCH_BACKENDS = [
 ]
 
 
+def _tavily_search(query: str, max_results: int = 10) -> dict | None:
+    """Search using Tavily API. Returns parsed result dict or None on failure.
+
+    Tavily returns structured JSON — no HTML parsing needed.
+    Requires TAVILY_API_KEY environment variable.
+    """
+    api_key = os.environ.get("TAVILY_API_KEY", "")
+    if not api_key:
+        return None
+    try:
+        import requests
+        resp = requests.post(
+            "https://api.tavily.com/search",
+            json={
+                "api_key": api_key,
+                "query": query,
+                "max_results": max_results,
+                "search_depth": "basic",
+                "include_answer": True,
+            },
+            timeout=15,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        results = []
+        for item in data.get("results", []):
+            results.append({
+                "title": item.get("title", ""),
+                "url": item.get("url", ""),
+                "snippet": item.get("content", "")[:300],
+            })
+        answer = data.get("answer", "")
+        return {
+            "query": query,
+            "results": results,
+            "count": len(results),
+            "answer": answer,
+            "provider": "tavily",
+        }
+    except Exception:
+        return None
+
+
 def _parse_ddg_html(html: str, max_results: int = 10) -> list[dict]:
     """Parse DuckDuckGo HTML search results."""
     results = []
@@ -155,6 +204,13 @@ def web_search(params: dict) -> str:
     max_results = params.get("max_results", 10)
     try:
         import requests
+
+        # Priority 1: Tavily API (if key configured)
+        tavily_result = _tavily_search(query, max_results)
+        if tavily_result:
+            return json.dumps(tavily_result, ensure_ascii=False)
+
+        # Priority 2: Bing/DDG HTML scraping fallback
         last_error = None
         for backend_url, backend_name in _SEARCH_BACKENDS:
             try:
@@ -271,7 +327,7 @@ def get_tools() -> list[ToolDef]:
     return [
         ToolDef(
             name="web_search",
-            description="Search the web using DuckDuckGo. Returns top results with titles, URLs, and snippets.",
+            description="Search the web. Uses Tavily API (if TAVILY_API_KEY set) for structured results with AI answer, falls back to Bing/DuckDuckGo. Returns results with titles, URLs, and snippets.",
             parameters={
                 "type": "object",
                 "properties": {

@@ -18,10 +18,10 @@ from nexgent.context import (
 def _real_llm_client():
     """Create a real OpenAI client from env vars. Skip test if unavailable."""
     from openai import OpenAI
-    from nexgent.config import MIMO_API_KEY, MIMO_BASE_URL, MIMO_MODEL
-    if not MIMO_API_KEY or MIMO_API_KEY == "test-key-for-testing":
-        pytest.skip("Real MIMO_API_KEY not set")
-    return OpenAI(api_key=MIMO_API_KEY, base_url=MIMO_BASE_URL), MIMO_MODEL
+    from nexgent.config import NEXGENT_API_KEY, NEXGENT_BASE_URL, NEXGENT_MODEL
+    if not NEXGENT_API_KEY or NEXGENT_API_KEY == "test-key-for-testing":
+        pytest.skip("Real NEXGENT_API_KEY not set")
+    return OpenAI(api_key=NEXGENT_API_KEY, base_url=NEXGENT_BASE_URL), NEXGENT_MODEL
 
 
 class TestSession:
@@ -410,7 +410,7 @@ class TestLoadPathScopedRulesForFile:
     """Tests for lazy-loading path-scoped rules on demand."""
 
     def test_loads_matching_rules(self, tmp_path):
-        rules_dir = tmp_path / ".mimo" / "rules"
+        rules_dir = tmp_path / ".nexgent" / "rules"
         rules_dir.mkdir(parents=True)
         (rules_dir / "python.md").write_text('---\npaths: ["*.py"]\n---\nUse type hints.')
         result = load_path_scoped_rules_for_file(str(tmp_path), "main.py")
@@ -418,14 +418,14 @@ class TestLoadPathScopedRulesForFile:
         assert "type hints" in result[0]
 
     def test_skips_non_matching_rules(self, tmp_path):
-        rules_dir = tmp_path / ".mimo" / "rules"
+        rules_dir = tmp_path / ".nexgent" / "rules"
         rules_dir.mkdir(parents=True)
         (rules_dir / "python.md").write_text('---\npaths: ["*.py"]\n---\nUse type hints.')
         result = load_path_scoped_rules_for_file(str(tmp_path), "readme.md")
         assert len(result) == 0
 
     def test_empty_current_file_returns_empty(self, tmp_path):
-        rules_dir = tmp_path / ".mimo" / "rules"
+        rules_dir = tmp_path / ".nexgent" / "rules"
         rules_dir.mkdir(parents=True)
         (rules_dir / "python.md").write_text('---\npaths: ["*.py"]\n---\nUse type hints.')
         result = load_path_scoped_rules_for_file(str(tmp_path), "")
@@ -756,7 +756,7 @@ class TestLoadTopicOnDemand:
     def test_loads_existing_topic(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         # Create memory structure
-        memory_dir = tmp_path / ".mimo" / "memory"
+        memory_dir = tmp_path / ".nexgent" / "memory"
         memory_dir.mkdir(parents=True)
         (memory_dir / "my_topic.md").write_text(
             "---\nname: my_topic\n---\nTopic body", encoding="utf-8"
@@ -769,7 +769,7 @@ class TestLoadTopicOnDemand:
         assert result == ""
 
     def test_auto_appends_md(self, tmp_path):
-        memory_dir = tmp_path / ".mimo" / "memory"
+        memory_dir = tmp_path / ".nexgent" / "memory"
         memory_dir.mkdir(parents=True)
         (memory_dir / "test.md").write_text("content", encoding="utf-8")
         result = load_topic_on_demand("test", project_dir=str(tmp_path))

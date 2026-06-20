@@ -22,12 +22,13 @@ from typing import Callable, Optional
 
 from openai import OpenAI
 
-from .config import MIMO_BASE_URL, MIMO_API_KEY, MIMO_MODEL, require_api_key
+from .config import NEXGENT_BASE_URL, NEXGENT_API_KEY, NEXGENT_MODEL, require_api_key
 from .logging_utils import TraceLogger
 from .permissions import Permission, PermissionGate, PermissionMode
 from .context import Session, load_memory, estimate_tokens, load_topic_on_demand, COMPRESS_TRIGGER_TOKENS
 from .tools.registry import ToolRegistry, ToolDef
-from .tools import file_ops, shell, code_exec, web_tools, doc_tools, math_tools, interactive, monitor, notebook_tools, task_tools, plan_tools, lsp_tools, scheduler_tools, subagent_tools
+from .tools import file_ops, shell, code_exec, web_tools, doc_tools, math_tools, interactive, monitor, notebook_tools, task_tools, plan_tools, lsp_tools, scheduler_tools, subagent_tools, workflow_tools
+from .plugins import get_plugin_manager
 from .tools.file_ops import FileOpsState, set_file_ops_state
 from .security_pipeline import filter_tool_output, SAFETY_SYSTEM_PROMPT_ADDITION
 from .hooks import HookRunner, HookEvent, HookResult
@@ -300,7 +301,7 @@ You help users with coding, file operations, web research, document creation, an
         effort: str = "medium",
         max_tokens: int = DEFAULT_MAX_CONTEXT_TOKENS,
     ):
-        self.model = model or MIMO_MODEL
+        self.model = model or NEXGENT_MODEL
         self.fallback_model = fallback_model
         self.max_steps = max_steps
         self.max_duration = max_duration
@@ -328,6 +329,7 @@ You help users with coding, file operations, web research, document creation, an
         self._compact_warned = False
         # SubAgent management (lazy-initialized)
         self._subagent_manager = None
+        self._workflow_runner = None
         self._register_tools()
 
     def _register_tools(self):
@@ -346,8 +348,88 @@ You help users with coding, file operations, web research, document creation, an
             + lsp_tools.get_tools()
             + scheduler_tools.get_tools()
             + subagent_tools.get_tools(self)
+            + workflow_tools.get_tools(self)
         )
         self.registry.register_many(all_tools)
+
+        # Load and register plugin tools
+        try:
+            plugin_mgr = get_plugin_manager()
+            plugin_mgr.load_all()
+            plugin_tools = plugin_mgr.get_all_tools()
+            if plugin_tools:
+                self.registry.register_many(plugin_tools)
+                self.logger.info(f"Loaded {len(plugin_tools)} tools from plugins")
+        except Exception as e:
+            self.logger.warning(f"Plugin loading failed: {e}")
+
+        # Bridge MCP tools into ToolRegistry
+        try:
+            from .mcp import MCPManager
+            self._mcp_manager = MCPManager()
+            self._mcp_manager.load_configurations()
+            self._mcp_manager.connect_all()
+            # Give MCP servers a moment to connect (in background threads)
+            import time as _time
+            _time.sleep(2)
+            mcp_tools = self._bridge_mcp_tools()
+            if mcp_tools:
+                self.registry.register_many(mcp_tools)
+                self.logger.info(f"Bridged {len(mcp_tools)} MCP tools into registry")
+        except Exception as e:
+            self.logger.warning(f"MCP bridge failed: {e}")
+
+    def _bridge_mcp_tools(self) -> list:
+        """Wrap MCP tools as ToolDef objects and register them.
+
+        Bridges the gap between MCPManager's tool storage and the ToolRegistry
+        so MCP tools appear alongside built-in tools to the agent.
+        """
+        if not hasattr(self, '_mcp_manager') or not self._mcp_manager:
+            return []
+
+        from .permissions import Permission
+
+        bridged = []
+        mcp_tools = self._mcp_manager.get_all_tools()
+
+        for mcp_tool in mcp_tools:
+            # Create a closure that captures the tool name for dispatch
+            def _make_handler(tool_name):
+                def _handler(params: dict) -> str:
+                    import json
+                    try:
+                        result = self._mcp_manager.call_tool(tool_name, params)
+                        if isinstance(result, str):
+                            return result
+                        return json.dumps(result, ensure_ascii=False, default=str)
+                    except Exception as e:
+                        return json.dumps({"error": f"MCP tool {tool_name} failed: {e}"})
+                return _handler
+
+            tool_def = ToolDef(
+                name=f"mcp_{mcp_tool.name}",
+                description=f"[MCP:{mcp_tool.server_name}] {mcp_tool.description}",
+                parameters=mcp_tool.parameters or {"type": "object", "properties": {}},
+                handler=_make_handler(mcp_tool.name),
+                permission=Permission.WRITE,  # MCP tools default to write permission
+                is_read_only=False,
+                is_concurrency_safe=False,
+            )
+            bridged.append(tool_def)
+
+        return bridged
+
+    @property
+    def workflow_runner(self):
+        """Lazy-initialized WorkflowRunner."""
+        if self._workflow_runner is None:
+            from .workflow import WorkflowRunner
+            self._workflow_runner = WorkflowRunner(
+                parent_harness=self,
+                logger=self.logger,
+            )
+        return self._workflow_runner
 
     def _build_system_prompt(self) -> str:
         """Build and cache system prompt (Ch6: prompt stability for cache hits).
@@ -825,7 +907,7 @@ You help users with coding, file operations, web research, document creation, an
 
         api_key = require_api_key()
         client = self.deps.llm_client_factory(
-            api_key=api_key, base_url=MIMO_BASE_URL,
+            api_key=api_key, base_url=NEXGENT_BASE_URL,
         )
         self._llm_client = client  # Store for security pipeline model classifier
         # Set LLM client on permission gate for model-driven classification

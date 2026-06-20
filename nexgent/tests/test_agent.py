@@ -14,13 +14,13 @@ from nexgent.tools import file_ops
 
 # Helper to check if real API key is available
 def _has_real_api_key():
-    api_key = os.environ.get("MIMO_API_KEY", "")
+    api_key = os.environ.get("NEXGENT_API_KEY", "")
     return api_key and api_key != "test-key-for-testing"
 
 # Decorator for tests that require real API key
 requires_api = pytest.mark.skipif(
     not _has_real_api_key(),
-    reason="Real MIMO_API_KEY not set — agent tests skipped",
+    reason="Real NEXGENT_API_KEY not set — agent tests skipped",
 )
 
 
@@ -456,8 +456,8 @@ class TestNonBareModeMemory:
     def test_non_bare_injects_memory_message(self, monkeypatch, tmp_path):
         """Non-bare mode should add a '## Project Memory' user message to session."""
         monkeypatch.chdir(tmp_path)
-        # Create a .mimo/memory/MEMORY.md file with test content
-        memory_dir = tmp_path / ".mimo" / "memory"
+        # Create a .nexgent/memory/MEMORY.md file with test content
+        memory_dir = tmp_path / ".nexgent" / "memory"
         memory_dir.mkdir(parents=True)
         (memory_dir / "MEMORY.md").write_text("# Test Memory\nThis is a test memory entry.\n")
         file_ops.set_file_ops_state(file_ops.FileOpsState())
@@ -480,7 +480,7 @@ class TestNonBareModeMemory:
     def test_bare_mode_no_memory_message(self, monkeypatch, tmp_path):
         """Bare mode should NOT inject memory messages."""
         monkeypatch.chdir(tmp_path)
-        memory_dir = tmp_path / ".mimo" / "memory"
+        memory_dir = tmp_path / ".nexgent" / "memory"
         memory_dir.mkdir(parents=True)
         (memory_dir / "MEMORY.md").write_text("# Test Memory\nShould not appear.\n")
         file_ops.set_file_ops_state(file_ops.FileOpsState())

@@ -228,7 +228,7 @@ class CheckpointManager:
     """Manages file snapshots for session-level undo/rewind."""
 
     def __init__(self, session_id: str):
-        self.checkpoint_dir = os.path.join(".mimo", "checkpoints", session_id)
+        self.checkpoint_dir = os.path.join(".nexgent", "checkpoints", session_id)
         self._seq = 0
         self._restored_seqs: set = set()  # L12: Track restored checkpoints
         self._batch_dir: Optional[str] = None
@@ -712,10 +712,10 @@ def cleanup_old_sessions(session_dir: str, max_age_days: int = 30) -> int:
     return deleted
 
 
-def cleanup_old_spill_files(spill_dir: str = ".mimo/outputs", max_age_days: int = 7) -> int:
+def cleanup_old_spill_files(spill_dir: str = ".nexgent/outputs", max_age_days: int = 7) -> int:
     """Delete old tool output spill files.
 
-    Large tool results are spilled to .mimo/outputs/ as .txt files.
+    Large tool results are spilled to .nexgent/outputs/ as .txt files.
     These are ephemeral artifacts that accumulate over time.
     Default cleanup age: 7 days (shorter than sessions since these
     are intermediate results, not conversation history).
@@ -744,7 +744,7 @@ def cleanup_old_spill_files(spill_dir: str = ".mimo/outputs", max_age_days: int 
 
 
 # ---------------------------------------------------------------------------
-# Memory loader (Ch6: MEMORY.md, CLAUDE.md, .mimo/memory.md)
+# Memory loader (Ch6: MEMORY.md, CLAUDE.md, .nexgent/memory.md)
 # ---------------------------------------------------------------------------
 _IMPORT_PATTERN = re.compile(r"@([\w./\\-]+)")
 
@@ -823,11 +823,11 @@ def _parse_frontmatter(content: str) -> tuple[dict, str]:
 
 
 def _load_path_scoped_rules(project_dir: str) -> list[tuple[list[str], str]]:
-    """Scan .mimo/rules/*.md for path-scoped rules (A5).
+    """Scan .nexgent/rules/*.md for path-scoped rules (A5).
 
     Returns list of (paths_patterns, rule_content) tuples.
     """
-    rules_dir = os.path.join(project_dir, ".mimo", "rules")
+    rules_dir = os.path.join(project_dir, ".nexgent", "rules")
     if not os.path.isdir(rules_dir):
         return []
     rules = []
@@ -848,10 +848,10 @@ def _load_path_scoped_rules(project_dir: str) -> list[tuple[list[str], str]]:
 def _load_global_rules(project_dir: str) -> list[str]:
     """Load non-path-scoped rules (always injected at startup).
 
-    Only loads rules from .mimo/rules/*.md that have NO paths: field.
+    Only loads rules from .nexgent/rules/*.md that have NO paths: field.
     Path-scoped rules are loaded lazily via load_path_scoped_rules_for_file().
     """
-    rules_dir = os.path.join(project_dir, ".mimo", "rules")
+    rules_dir = os.path.join(project_dir, ".nexgent", "rules")
     if not os.path.isdir(rules_dir):
         return []
     global_rules = []
@@ -879,7 +879,7 @@ def load_path_scoped_rules_for_file(project_dir: str, current_file: str) -> list
     if not current_file:
         return []
     import fnmatch
-    rules_dir = os.path.join(project_dir, ".mimo", "rules")
+    rules_dir = os.path.join(project_dir, ".nexgent", "rules")
     if not os.path.isdir(rules_dir):
         return []
     matched = []
@@ -966,7 +966,7 @@ def load_memory(project_dir: str) -> str:
 
     # 1. Load MEMORY.md index ONLY (not topic files — tiered loading)
     from .memory import MEMORY_INDEX_MAX_LINES
-    memory_index_path = os.path.join(project_dir, ".mimo", "memory", "MEMORY.md")
+    memory_index_path = os.path.join(project_dir, ".nexgent", "memory", "MEMORY.md")
     if os.path.exists(memory_index_path):
         try:
             with open(memory_index_path, "r", encoding="utf-8") as f:
@@ -981,8 +981,8 @@ def load_memory(project_dir: str) -> str:
         except Exception:
             pass
 
-    # 2. Load AGENTS.md and .mimo/memory.md from project root
-    for name in ["AGENTS.md", ".mimo/memory.md"]:
+    # 2. Load AGENTS.md and .nexgent/memory.md from project root
+    for name in ["AGENTS.md", ".nexgent/memory.md"]:
         path = os.path.join(project_dir, name)
         if os.path.exists(path):
             try:
@@ -1005,7 +1005,7 @@ def load_memory(project_dir: str) -> str:
         if content:
             memory_parts.append(f"### {name}\n{content}")
 
-    # 4. Load global (non-path-scoped) rules from .mimo/rules/*.md
+    # 4. Load global (non-path-scoped) rules from .nexgent/rules/*.md
     global_rules = _load_global_rules(project_dir)
     if global_rules:
         memory_parts.append("### Global Rules\n" + "\n\n".join(global_rules))

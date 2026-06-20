@@ -11,6 +11,7 @@ Implements Claude Code-style MCP support:
 """
 
 import os
+import sys
 import json
 import re
 import subprocess
@@ -177,8 +178,8 @@ class MCPConfigParser:
         """Load all MCP configurations."""
         configs = {}
 
-        # Project-level .mimo/mcp.json
-        project_mcp = os.path.join(project_root, '.mimo', 'mcp.json')
+        # Project-level .nexgent/mcp.json
+        project_mcp = os.path.join(project_root, '.nexgent', 'mcp.json')
         configs.update(cls.parse_mcp_json(project_mcp))
 
         # Also check legacy .mcp.json for backward compatibility
@@ -186,8 +187,8 @@ class MCPConfigParser:
         if os.path.exists(legacy_mcp) and not os.path.exists(project_mcp):
             configs.update(cls.parse_mcp_json(legacy_mcp))
 
-        # User-level ~/.mimo/config.json
-        user_config_path = os.path.join(os.path.expanduser('~'), '.mimo', 'config.json')
+        # User-level ~/.nexgent/config.json
+        user_config_path = os.path.join(os.path.expanduser('~'), '.nexgent', 'config.json')
         if os.path.exists(user_config_path):
             try:
                 with open(user_config_path, 'r', encoding='utf-8') as f:
@@ -264,13 +265,17 @@ class MCPConnection:
             env.update(self.config.env)
             env['CLAUDE_PROJECT_DIR'] = os.getcwd()
 
-            # Start process (binary mode to avoid \r\n translation on Windows)
+            # Start process
+            # On Windows, shell=True is needed for commands like npx/npm/node
+            # that are actually .cmd/.bat wrappers
+            use_shell = sys.platform == 'win32'
             self.server.process = subprocess.Popen(
                 cmd,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 env=env,
+                shell=use_shell,
             )
 
             # Initialize MCP session

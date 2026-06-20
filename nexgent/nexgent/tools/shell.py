@@ -36,7 +36,7 @@ def _cleanup_completed_jobs():
 
 # S5+S20: Configurable output length limit via env var
 try:
-    MAX_OUTPUT_LENGTH = int(os.environ.get("MIMO_MAX_OUTPUT_LENGTH", "50000"))
+    MAX_OUTPUT_LENGTH = int(os.environ.get("NEXGENT_MAX_OUTPUT_LENGTH", "50000"))
 except (ValueError, TypeError):
     MAX_OUTPUT_LENGTH = 50000
 
@@ -225,7 +225,7 @@ def _is_readonly_single(command: str) -> bool:
 def _spill_output(output: str) -> str:
     """S5+S20: Save oversized output to disk, return a preview with file path."""
     try:
-        outputs_dir = os.environ.get("MIMO_SPILL_DIR", os.path.join(".mimo", "outputs"))
+        outputs_dir = os.environ.get("NEXGENT_SPILL_DIR", os.path.join(".nexgent", "outputs"))
         os.makedirs(outputs_dir, exist_ok=True)
         fname = f"{uuid.uuid4().hex}.txt"
         fpath = os.path.join(outputs_dir, fname)

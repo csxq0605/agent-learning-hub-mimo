@@ -98,7 +98,7 @@ def read_memory_topic(params: dict) -> str:
     if not topic_name:
         return json.dumps({"error": "No topic_name provided"})
 
-    # Find project dir (look for .mimo/memory/ directory)
+    # Find project dir (look for .nexgent/memory/ directory)
     project_dir = os.getcwd()
     from ..memory import MemoryStore
     store = MemoryStore(project_dir)

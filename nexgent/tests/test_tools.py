@@ -375,7 +375,7 @@ class TestInteractive:
     def test_read_memory_topic(self, tmp_path, monkeypatch):
         """Test read_memory_topic tool handler."""
         monkeypatch.chdir(tmp_path)
-        memory_dir = tmp_path / ".mimo" / "memory"
+        memory_dir = tmp_path / ".nexgent" / "memory"
         memory_dir.mkdir(parents=True)
         topic_file = memory_dir / "test_topic.md"
         topic_file.write_text("---\nname: test_topic\ndescription: A test\n---\nTopic content here")

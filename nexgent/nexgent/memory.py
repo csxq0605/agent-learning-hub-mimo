@@ -62,7 +62,7 @@ class MemoryStore:
     """File-based persistent memory store (Ch6: memdir pattern).
 
     Directory structure:
-        <project_dir>/.mimo/memory/
+        <project_dir>/.nexgent/memory/
             MEMORY.md          <- Index file (loaded into context)
             user_profile.md    <- user type
             feedback_rules.md  <- feedback type
@@ -72,7 +72,7 @@ class MemoryStore:
 
     def __init__(self, project_dir: str = "."):
         self.project_dir = os.path.abspath(project_dir)
-        self.memory_dir = os.path.join(self.project_dir, ".mimo", "memory")
+        self.memory_dir = os.path.join(self.project_dir, ".nexgent", "memory")
         self.index_path = os.path.join(self.memory_dir, "MEMORY.md")
 
     def ensure_dir(self):

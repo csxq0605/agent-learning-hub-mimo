@@ -295,7 +295,7 @@ class SkillSubstitutor:
 class SkillDiscovery:
     """Discover skills from multiple directories."""
 
-    COMMANDS_DIR = Path('.mimo') / 'commands'  # Legacy commands
+    COMMANDS_DIR = Path('.nexgent') / 'commands'  # Legacy commands
 
     @classmethod
     def discover_skills(cls, project_root: str = '.') -> Dict[str, Skill]:
@@ -304,8 +304,8 @@ class SkillDiscovery:
 
         # Build skill directories from project_root (not CWD)
         skill_dirs = [
-            Path.home() / '.mimo' / 'skills',   # Personal
-            Path(project_root) / '.mimo' / 'skills',  # Project
+            Path.home() / '.nexgent' / 'skills',   # Personal
+            Path(project_root) / '.nexgent' / 'skills',  # Project
         ]
 
         # Scan skill directories

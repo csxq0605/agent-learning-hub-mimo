@@ -44,7 +44,7 @@ class PermissionMode(Enum):
 
 
 # S4: Protected directories and files that cannot be written to
-PROTECTED_DIRS = {".git", ".vscode", ".idea", ".husky", ".claude", ".mimo"}
+PROTECTED_DIRS = {".git", ".vscode", ".idea", ".husky", ".claude", ".nexgent"}
 PROTECTED_FILES = {".gitconfig", ".gitmodules", ".bashrc", ".bash_profile", ".zshrc", ".zprofile", ".profile", ".env"}
 
 

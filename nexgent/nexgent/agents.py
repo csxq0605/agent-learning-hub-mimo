@@ -154,13 +154,13 @@ class AgentDiscovery:
         agents = {}
 
         # Project-level agents
-        project_agents_dir = os.path.join(project_root, '.mimo', 'agents')
+        project_agents_dir = os.path.join(project_root, '.nexgent', 'agents')
         if os.path.exists(project_agents_dir):
             for agent in cls._scan_directory(project_agents_dir, 'project'):
                 agents[agent.name] = agent
 
         # User-level agents
-        user_agents_dir = os.path.join(os.path.expanduser('~'), '.mimo', 'agents')
+        user_agents_dir = os.path.join(os.path.expanduser('~'), '.nexgent', 'agents')
         if os.path.exists(user_agents_dir):
             for agent in cls._scan_directory(user_agents_dir, 'user'):
                 if agent.name not in agents:
@@ -237,9 +237,9 @@ class AgentManager:
         """Create a new agent definition file."""
         # Determine directory
         if scope == "project":
-            agents_dir = os.path.join(self.project_root, '.mimo', 'agents')
+            agents_dir = os.path.join(self.project_root, '.nexgent', 'agents')
         else:
-            agents_dir = os.path.join(os.path.expanduser('~'), '.mimo', 'agents')
+            agents_dir = os.path.join(os.path.expanduser('~'), '.nexgent', 'agents')
 
         os.makedirs(agents_dir, exist_ok=True)
 

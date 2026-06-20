@@ -24,21 +24,21 @@ from nexgent.security_pipeline import (
 
 
 def _has_real_api_key():
-    api_key = os.environ.get("MIMO_API_KEY", "")
+    api_key = os.environ.get("NEXGENT_API_KEY", "")
     return api_key and api_key != "test-key-for-testing"
 
 
 def _get_client():
     """Create a real OpenAI client for API tests."""
-    from nexgent.config import MIMO_BASE_URL, MIMO_MODEL, require_api_key
+    from nexgent.config import NEXGENT_BASE_URL, NEXGENT_MODEL, require_api_key
     from openai import OpenAI
     api_key = require_api_key()
-    return OpenAI(api_key=api_key, base_url=MIMO_BASE_URL), MIMO_MODEL
+    return OpenAI(api_key=api_key, base_url=NEXGENT_BASE_URL), NEXGENT_MODEL
 
 
 requires_api = pytest.mark.skipif(
     not _has_real_api_key(),
-    reason="Real MIMO_API_KEY not set — E2E tests skipped",
+    reason="Real NEXGENT_API_KEY not set — E2E tests skipped",
 )
 
 

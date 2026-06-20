@@ -27,8 +27,8 @@ from nexgent.tools import file_ops
 
 # All E2E tests require a real API key
 pytestmark = pytest.mark.skipif(
-    not os.environ.get("MIMO_API_KEY") or os.environ.get("MIMO_API_KEY") == "test-key-for-testing",
-    reason="Real MIMO_API_KEY not set — E2E tests skipped",
+    not os.environ.get("NEXGENT_API_KEY") or os.environ.get("NEXGENT_API_KEY") == "test-key-for-testing",
+    reason="Real NEXGENT_API_KEY not set — E2E tests skipped",
 )
 
 @pytest.fixture(autouse=True, scope="session")
@@ -414,11 +414,11 @@ class TestE2ETokenCounter:
     def test_token_count_accuracy_vs_api_response(self):
         """Compare our token count with the API's reported usage."""
         from nexgent.token_counter import count_messages_tokens
-        from nexgent.config import MIMO_BASE_URL, MIMO_MODEL, require_api_key
+        from nexgent.config import NEXGENT_BASE_URL, NEXGENT_MODEL, require_api_key
         from openai import OpenAI
 
         api_key = require_api_key()
-        client = OpenAI(api_key=api_key, base_url=MIMO_BASE_URL)
+        client = OpenAI(api_key=api_key, base_url=NEXGENT_BASE_URL)
 
         messages = [
             {"role": "system", "content": "You are a helpful assistant."},
@@ -427,7 +427,7 @@ class TestE2ETokenCounter:
 
         # Get API response with usage info
         response = client.chat.completions.create(
-            model=MIMO_MODEL,
+            model=NEXGENT_MODEL,
             messages=messages,
             max_tokens=100,
         )
@@ -466,10 +466,10 @@ class TestE2ECompactContext:
     """Compact context with real MiMo API calls."""
 
     def _get_client(self):
-        from nexgent.config import MIMO_BASE_URL, MIMO_MODEL, require_api_key
+        from nexgent.config import NEXGENT_BASE_URL, NEXGENT_MODEL, require_api_key
         from openai import OpenAI
         api_key = require_api_key()
-        return OpenAI(api_key=api_key, base_url=MIMO_BASE_URL), MIMO_MODEL
+        return OpenAI(api_key=api_key, base_url=NEXGENT_BASE_URL), NEXGENT_MODEL
 
     def test_compact_context_with_llm(self):
         """LLM compression should reduce message count."""

@@ -26,6 +26,13 @@ SLASH_COMMANDS = [
     "/skills", "/skills install",
     # MCP
     "/mcp", "/mcp install", "/mcp connect", "/mcp disconnect", "/mcp refresh",
+    # Workflow
+    "/workflow", "/workflow run", "/workflow list", "/workflow status",
+    "/workflow resume", "/workflow save",
+    # Model management
+    "/model", "/model list", "/model set", "/model default",
+    # Plugins
+    "/plugin", "/plugin list", "/plugin load", "/plugin unload",
 ]
 
 # Subset of commands for quick suggestions (most common)

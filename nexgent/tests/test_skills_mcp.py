@@ -153,7 +153,7 @@ class TestSkillDiscovery:
     def test_discover_from_project(self, tmp_path):
         """Test discovering skills from project directory."""
         # Create skill directory
-        skill_dir = tmp_path / '.mimo' / 'skills' / 'test-skill'
+        skill_dir = tmp_path / '.nexgent' / 'skills' / 'test-skill'
         skill_dir.mkdir(parents=True)
         skill_md = skill_dir / 'SKILL.md'
         skill_md.write_text("""---
@@ -175,7 +175,7 @@ Do something.
     def test_discover_legacy_commands(self, tmp_path):
         """Test discovering legacy commands."""
         # Create commands directory
-        commands_dir = tmp_path / '.mimo' / 'commands'
+        commands_dir = tmp_path / '.nexgent' / 'commands'
         commands_dir.mkdir(parents=True)
         cmd_file = commands_dir / 'deploy.md'
         cmd_file.write_text("""---
@@ -200,7 +200,7 @@ class TestSkillManager:
     def test_list_skills(self, tmp_path):
         """Test listing skills."""
         # Create skill
-        skill_dir = tmp_path / '.mimo' / 'skills' / 'test-skill'
+        skill_dir = tmp_path / '.nexgent' / 'skills' / 'test-skill'
         skill_dir.mkdir(parents=True)
         skill_md = skill_dir / 'SKILL.md'
         skill_md.write_text("""---
@@ -222,7 +222,7 @@ Do something.
     def test_invoke_skill(self, tmp_path):
         """Test invoking a skill."""
         # Create skill
-        skill_dir = tmp_path / '.mimo' / 'skills' / 'test-skill'
+        skill_dir = tmp_path / '.nexgent' / 'skills' / 'test-skill'
         skill_dir.mkdir(parents=True)
         skill_md = skill_dir / 'SKILL.md'
         skill_md.write_text("""---
@@ -246,8 +246,8 @@ class TestMCPConfigParser:
     """Test MCP configuration parsing."""
 
     def test_parse_mcp_json(self, tmp_path):
-        """Test parsing .mimo/mcp.json file."""
-        mcp_dir = tmp_path / '.mimo'
+        """Test parsing .nexgent/mcp.json file."""
+        mcp_dir = tmp_path / '.nexgent'
         mcp_dir.mkdir(parents=True)
         mcp_json = mcp_dir / 'mcp.json'
         mcp_json.write_text(json.dumps({
@@ -267,7 +267,7 @@ class TestMCPConfigParser:
 
     def test_parse_http_server(self, tmp_path):
         """Test parsing HTTP server config."""
-        mcp_dir = tmp_path / '.mimo'
+        mcp_dir = tmp_path / '.nexgent'
         mcp_dir.mkdir(parents=True)
         mcp_json = mcp_dir / 'mcp.json'
         mcp_json.write_text(json.dumps({
@@ -289,7 +289,7 @@ class TestMCPConfigParser:
 
     def test_expand_env_vars(self, tmp_path):
         """Test environment variable expansion."""
-        mcp_dir = tmp_path / '.mimo'
+        mcp_dir = tmp_path / '.nexgent'
         mcp_dir.mkdir(parents=True)
         mcp_json = mcp_dir / 'mcp.json'
         mcp_json.write_text(json.dumps({
@@ -311,7 +311,7 @@ class TestMCPConfigParser:
 
     def test_expand_env_vars_default(self, tmp_path):
         """Test environment variable expansion with default."""
-        mcp_dir = tmp_path / '.mimo'
+        mcp_dir = tmp_path / '.nexgent'
         mcp_dir.mkdir(parents=True)
         mcp_json = mcp_dir / 'mcp.json'
         mcp_json.write_text(json.dumps({
@@ -332,7 +332,7 @@ class TestMCPManager:
 
     def test_load_configurations(self, tmp_path):
         """Test loading configurations."""
-        mcp_dir = tmp_path / '.mimo'
+        mcp_dir = tmp_path / '.nexgent'
         mcp_dir.mkdir(parents=True)
         mcp_json = mcp_dir / 'mcp.json'
         mcp_json.write_text(json.dumps({
@@ -355,7 +355,7 @@ class TestMCPManager:
 
     def test_get_server_status(self, tmp_path, monkeypatch):
         """Test getting server status."""
-        mcp_dir = tmp_path / '.mimo'
+        mcp_dir = tmp_path / '.nexgent'
         mcp_dir.mkdir(parents=True)
         mcp_json = mcp_dir / 'mcp.json'
         mcp_json.write_text(json.dumps({
@@ -459,7 +459,7 @@ class TestMCPInstall:
         import re
         import zipfile
 
-        # Redirect home dir to tmp_path so ~/.mimo/ writes go there
+        # Redirect home dir to tmp_path so ~/.nexgent/ writes go there
         monkeypatch.setattr('os.path.expanduser', lambda p: str(tmp_path) if p == '~' else p)
 
         # Mock only external calls: gh api + curl
@@ -469,7 +469,7 @@ class TestMCPInstall:
         ]
 
         # Create a real zip with a fake exe inside
-        mcp_dir = tmp_path / ".mimo" / "mcp-servers" / "test-server"
+        mcp_dir = tmp_path / ".nexgent" / "mcp-servers" / "test-server"
         zip_path = tmp_path / "test-server.zip"
         with zipfile.ZipFile(zip_path, 'w') as zf:
             zf.writestr('server.exe', b'MZ fake')

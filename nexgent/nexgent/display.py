@@ -624,6 +624,17 @@ def print_help():
         ("/mcp connect <name>", "Connect to MCP server"),
         ("/mcp disconnect <name>", "Disconnect from MCP server"),
         ("/mcp refresh", "Refresh MCP configurations"),
+        ("/workflow run <script>", "Run a workflow script"),
+        ("/workflow list", "List workflow runs"),
+        ("/workflow status <id>", "Show workflow status"),
+        ("/workflow resume <id>", "Resume a workflow"),
+        ("/workflow save <id> <name>", "Save workflow as command"),
+        ("/model", "List available models"),
+        ("/model set <id>", "Switch main model"),
+        ("/model default <role> <id>", "Set default model for role"),
+        ("/plugin list", "List installed plugins"),
+        ("/plugin load <path>", "Load a plugin"),
+        ("/plugin unload <name>", "Unload a plugin"),
     ]
 
     table = Table(title="Commands", box=box.SIMPLE, show_header=True, header_style="bold")

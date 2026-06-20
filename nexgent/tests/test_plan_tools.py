@@ -62,9 +62,9 @@ class TestHandlePlanApproval:
     """Test _handle_plan_approval (user interaction in agent loop)."""
 
     def _make_harness(self, monkeypatch):
-        monkeypatch.setenv("MIMO_API_KEY", "test-key")
-        monkeypatch.setenv("MIMO_BASE_URL", "http://test.com")
-        monkeypatch.setenv("MIMO_MODEL", "test-model")
+        monkeypatch.setenv("NEXGENT_API_KEY", "test-key")
+        monkeypatch.setenv("NEXGENT_BASE_URL", "http://test.com")
+        monkeypatch.setenv("NEXGENT_MODEL", "test-model")
         from nexgent.agent import NexgentAgent
         return NexgentAgent(auto_approve=False)
 
@@ -89,9 +89,9 @@ class TestHandlePlanApproval:
         assert result["feedback"] == "Add error handling"
 
     def test_auto_approve(self, monkeypatch):
-        monkeypatch.setenv("MIMO_API_KEY", "test-key")
-        monkeypatch.setenv("MIMO_BASE_URL", "http://test.com")
-        monkeypatch.setenv("MIMO_MODEL", "test-model")
+        monkeypatch.setenv("NEXGENT_API_KEY", "test-key")
+        monkeypatch.setenv("NEXGENT_BASE_URL", "http://test.com")
+        monkeypatch.setenv("NEXGENT_MODEL", "test-model")
         from nexgent.agent import NexgentAgent
         harness = NexgentAgent(auto_approve=True)
         result = json.loads(harness._handle_plan_approval({"plan": "do X"}))

@@ -163,9 +163,9 @@ class TestHookRunner:
     def test_run_hooks_prompt_hook_with_client(self):
         """Prompt hook with real LLM client — verifies end-to-end mechanism works."""
         from openai import OpenAI
-        from nexgent.config import MIMO_API_KEY, MIMO_BASE_URL, MIMO_MODEL
-        if not MIMO_API_KEY or MIMO_API_KEY == "test-key-for-testing":
-            pytest.skip("Real MIMO_API_KEY not set")
+        from nexgent.config import NEXGENT_API_KEY, NEXGENT_BASE_URL, NEXGENT_MODEL
+        if not NEXGENT_API_KEY or NEXGENT_API_KEY == "test-key-for-testing":
+            pytest.skip("Real NEXGENT_API_KEY not set")
 
         runner = HookRunner()
         runner.register(HookConfig(
@@ -178,8 +178,8 @@ class TestHookRunner:
                 '{{"decision": "approve"}}.'
             ),
         ))
-        runner._llm_client = OpenAI(api_key=MIMO_API_KEY, base_url=MIMO_BASE_URL)
-        runner._llm_model = MIMO_MODEL
+        runner._llm_client = OpenAI(api_key=NEXGENT_API_KEY, base_url=NEXGENT_BASE_URL)
+        runner._llm_model = NEXGENT_MODEL
 
         result = runner.run_hooks(HookEvent.PRE_TOOL_USE, "run_command")
         # The key assertion: prompt hook mechanism works end-to-end with real API.

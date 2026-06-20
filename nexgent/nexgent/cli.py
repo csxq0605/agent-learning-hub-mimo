@@ -23,7 +23,7 @@ import json
 import subprocess
 import time
 from .agent import NexgentAgent
-from .config import MIMO_API_KEY, MIMO_MODEL
+from .config import NEXGENT_API_KEY, NEXGENT_MODEL
 from .permissions import PermissionRule
 from .context import Session, CheckpointManager, estimate_tokens, compact_context, cleanup_old_sessions, cleanup_old_spill_files, CONTEXT_WINDOW_TOKENS, LoadResult, _CORRUPT_THRESHOLD
 from .memory import MemoryStore, MemoryType
@@ -93,7 +93,7 @@ class ConfigWatcher:
     """Watch config file for changes and reload on modification.
 
     Claude Code watches settings files and reloads them on change.
-    This implements the same pattern for .mimo/config.json.
+    This implements the same pattern for .nexgent/config.json.
     """
 
     def __init__(self, config_path: str):
@@ -260,7 +260,7 @@ def _build_parser():
         description="Nexgent - AI Agent powered by Xiaomi MiMo model"
     )
     parser.add_argument("--task", "-t", help="Run a single task and exit")
-    parser.add_argument("--model", "-m", default=None, help=f"Model name (default: {MIMO_MODEL})")
+    parser.add_argument("--model", "-m", default=None, help=f"Model name (default: {NEXGENT_MODEL})")
     parser.add_argument("--auto-approve", "-y", action="store_true", help="Auto-approve all write operations")
     parser.add_argument("--dry-run", action="store_true", help="Dry-run mode (show but don't execute)")
     parser.add_argument("--plan", action="store_true", help="Plan mode (read-only operations only)")
@@ -275,7 +275,7 @@ def _build_parser():
     parser.add_argument("--output-format", choices=["text", "json", "stream-json"], default="text", help="Output format (default: text)")
     parser.add_argument("--bare", action="store_true", help="Bare mode: skip memory loading, use minimal system prompt")
     parser.add_argument("--effort", choices=["low", "medium", "high"], default=None, help="Effort level: low, medium (default), high")
-    parser.add_argument("--session-dir", default=None, help="Directory for auto-saving sessions (default: ~/.mimo/sessions/)")
+    parser.add_argument("--session-dir", default=None, help="Directory for auto-saving sessions (default: ~/.nexgent/sessions/)")
     parser.add_argument("--continue", dest="continue_session", action="store_true", help="Resume the most recent session from session dir")
     parser.add_argument("--resume", action="store_true", help="List sessions and let user pick one to resume")
     parser.add_argument("--name", default=None, help="Name for the current session")
@@ -295,8 +295,8 @@ def main():
     config = {}
     if args.config:
         config = _load_config(args.config)
-    elif os.path.exists(".mimo/config.json"):
-        config = _load_config(".mimo/config.json")
+    elif os.path.exists(".nexgent/config.json"):
+        config = _load_config(".nexgent/config.json")
 
     # Streaming is now default ON, use --no-stream to disable
     # Priority: --no-stream flag > config file > default (True)
@@ -328,8 +328,8 @@ def main():
     rules_path = args.rules or config.get("rules_file")
     if rules_path:
         harness.perms.load_rules_from_file(rules_path)
-    elif os.path.exists(".mimo/permissions.json"):
-        harness.perms.load_rules_from_file(".mimo/permissions.json")
+    elif os.path.exists(".nexgent/permissions.json"):
+        harness.perms.load_rules_from_file(".nexgent/permissions.json")
 
     # Load hooks from config
     if "hooks" in config:
@@ -347,7 +347,7 @@ def main():
         pass
 
     # A4+X1: Session directory setup
-    session_dir = args.session_dir or os.path.join(os.path.expanduser("~"), ".mimo", "sessions")
+    session_dir = args.session_dir or os.path.join(os.path.expanduser("~"), ".nexgent", "sessions")
     os.makedirs(session_dir, exist_ok=True)
 
     # Claude Code pattern: auto-cleanup old sessions (default 30 days)
@@ -436,7 +436,7 @@ def main():
     harness._checkpoint_manager = checkpoint_manager
 
     # Config hot-reload watcher
-    config_path = args.config or ".mimo/config.json"
+    config_path = args.config or ".nexgent/config.json"
     config_watcher = ConfigWatcher(config_path)
 
     # Initialize scheduler for session-scoped cron jobs
@@ -476,7 +476,7 @@ def main():
 
     # Fallback: normal REPL without full-screen TUI
     if args.output_format == "text":
-        print_session_info(harness.model, mode_str, bool(MIMO_API_KEY))
+        print_session_info(harness.model, mode_str, bool(NEXGENT_API_KEY))
         _safe_print(f"  {_dim('Session:')}  {session.session_id}")
         print_info("Type /help for commands, or just start chatting.")
         print()
@@ -770,12 +770,12 @@ def _handle_command(cmd, harness, session, memory_store, checkpoint_manager=None
             print_info("Not enough messages to compress.")
         else:
             print_info(f"Compressing... ({_format_tokens(tokens_before)} tokens)")
-            from .config import MIMO_BASE_URL, require_api_key
+            from .config import NEXGENT_BASE_URL, require_api_key
             from .context import llm_compress, snip_compress, microcompact
             try:
                 api_key = require_api_key()
                 from openai import OpenAI
-                client = OpenAI(api_key=api_key, base_url=MIMO_BASE_URL)
+                client = OpenAI(api_key=api_key, base_url=NEXGENT_BASE_URL)
                 # /compact: directly use LLM summarization (Level 3)
                 compacted = llm_compress(session.messages, client, harness.model)
                 if compacted is None:
@@ -873,7 +873,7 @@ def _handle_command(cmd, harness, session, memory_store, checkpoint_manager=None
         session._last_saved_idx = len(session.messages)
         # Update checkpoint_manager to new session
         if checkpoint_manager:
-            checkpoint_manager.checkpoint_dir = os.path.join(".mimo", "checkpoints", new_id)
+            checkpoint_manager.checkpoint_dir = os.path.join(".nexgent", "checkpoints", new_id)
             checkpoint_manager._seq = 0
             checkpoint_manager._batch_dir = None
         print_success(f"Session forked: {old_id} {ARROW_ICON} {new_id}")
@@ -982,6 +982,289 @@ def _handle_command(cmd, harness, session, memory_store, checkpoint_manager=None
             except Exception as e:
                 print_error(str(e))
         print()
+    elif cmd[0] == "/workflow":
+        # Workflow engine commands
+        if len(cmd) < 2:
+            print_warning("Usage: /workflow <run|list|status|resume|save> [args]")
+            print_info("  /workflow run <script_path> [--budget N] [--args JSON]")
+            print_info("  /workflow list")
+            print_info("  /workflow status <run_id>")
+            print_info("  /workflow resume <run_id>")
+            print_info("  /workflow save <run_id> <name>")
+            print()
+            return "continue", session
+
+        subcmd = cmd[1]
+        runner = harness.workflow_runner
+
+        if subcmd == "run":
+            if len(cmd) < 3:
+                print_warning("Usage: /workflow run <script_path> [--budget N] [--args JSON]")
+                print()
+                return "continue", session
+            script_path = cmd[2]
+            budget = None
+            args = None
+            # Parse optional flags
+            i = 3
+            while i < len(cmd):
+                if cmd[i] == "--budget" and i + 1 < len(cmd):
+                    budget = int(cmd[i + 1])
+                    i += 2
+                elif cmd[i] == "--args" and i + 1 < len(cmd):
+                    import json as _json
+                    args = _json.loads(cmd[i + 1])
+                    i += 2
+                else:
+                    i += 1
+
+            if not os.path.exists(script_path):
+                print_error(f"Script file not found: {script_path}")
+                print()
+                return "continue", session
+
+            with open(script_path, "r", encoding="utf-8") as f:
+                script_source = f.read()
+
+            print_info(f"Running workflow: {script_path}")
+            if budget:
+                print(f"  {_dim('Budget:')} {budget:,} tokens")
+            print()
+
+            def _progress(msg):
+                print(f"  {msg}")
+
+            try:
+                run = runner.run(
+                    script_source=script_source,
+                    script_path=script_path,
+                    args=args,
+                    budget_total=budget,
+                    progress_callback=_progress,
+                )
+                print()
+                print(f"  {_bold('Workflow Result')}")
+                _safe_print(f"  {_dim(BUBBLE_H * 40)}")
+                print(f"  {_dim('Run ID:')} {run.run_id}")
+                print(f"  {_dim('Status:')} {_green(run.status.value) if run.status.value == 'completed' else _red(run.status.value)}")
+                print(f"  {_dim('Agents:')} {len(run.agents)} total, {sum(1 for a in run.agents.values() if a.status.value == 'completed')} completed")
+                print(f"  {_dim('Duration:')} {(run.finished_at - run.started_at):.1f}s")
+                print(f"  {_dim('Budget:')} {run.budget.to_dict()}")
+                if run.result:
+                    print(f"\n  {_bold('Output:')}")
+                    result_str = str(run.result)
+                    if len(result_str) > 500:
+                        result_str = result_str[:500] + "..."
+                    print(f"  {result_str}")
+                if run.error:
+                    print_error(f"Error: {run.error}")
+            except Exception as e:
+                print_error(str(e))
+            print()
+
+        elif subcmd == "list":
+            runs = runner.list_runs()
+            if not runs:
+                print_info("No workflow runs")
+            else:
+                print(f"\n  {_bold('Workflow Runs')}")
+                _safe_print(f"  {_dim(BUBBLE_H * 50)}")
+                for run in runs:
+                    status_icon = _green(CHECK_ICON) if run.status.value == "completed" else _red(CROSS_ICON)
+                    duration = (run.finished_at or time.time()) - run.started_at if run.started_at else 0
+                    print(f"  {status_icon} {run.run_id}  {_dim(run.status.value)}  agents:{len(run.agents)}  {duration:.1f}s")
+            print()
+
+        elif subcmd == "status":
+            if len(cmd) < 3:
+                print_warning("Usage: /workflow status <run_id>")
+                print()
+                return "continue", session
+            run_id = cmd[2]
+            run = runner.get_run(run_id)
+            if not run:
+                print_error(f"Workflow run {run_id} not found")
+            else:
+                print(f"\n  {_bold('Workflow Status')}")
+                _safe_print(f"  {_dim(BUBBLE_H * 40)}")
+                print(f"  {_dim('Run ID:')} {run.run_id}")
+                print(f"  {_dim('Script:')} {run.script_path}")
+                print(f"  {_dim('Status:')} {run.status.value}")
+                print(f"  {_dim('Budget:')} {run.budget.to_dict()}")
+                if run.phases:
+                    print(f"\n  {_bold('Phases:')}")
+                    for phase in run.phases:
+                        print(f"    {phase.title} ({len(phase.agent_ids)} agents)")
+                if run.agents:
+                    print(f"\n  {_bold('Agents:')}")
+                    for a in run.agents.values():
+                        status_icon = _green(CHECK_ICON) if a.status.value == "completed" else _red(CROSS_ICON)
+                        print(f"    {status_icon} {a.label} [{a.phase}] {a.duration:.1f}s")
+                        if a.error:
+                            print(f"      {_red('Error:')} {a.error[:80]}")
+            print()
+
+        elif subcmd == "resume":
+            if len(cmd) < 3:
+                print_warning("Usage: /workflow resume <run_id>")
+                print()
+                return "continue", session
+            run_id = cmd[2]
+            print_info(f"Resuming workflow {run_id}...")
+
+            def _progress(msg):
+                print(f"  {msg}")
+
+            try:
+                run = runner.resume(run_id, progress_callback=_progress)
+                print()
+                print_success(f"Workflow {run_id} resumed: {run.status.value}")
+                print(f"  {_dim('Agents:')} {len(run.agents)} total, {sum(1 for a in run.agents.values() if a.status.value == 'completed')} completed")
+            except Exception as e:
+                print_error(str(e))
+            print()
+
+        elif subcmd == "save":
+            if len(cmd) < 4:
+                print_warning("Usage: /workflow save <run_id> <name>")
+                print()
+                return "continue", session
+            run_id = cmd[2]
+            name = cmd[3]
+            try:
+                filepath = runner.save_workflow(run_id, name)
+                print_success(f"Workflow saved to {filepath}")
+            except Exception as e:
+                print_error(str(e))
+            print()
+
+        else:
+            print_warning(f"Unknown workflow subcommand: {subcmd}")
+            print_info("Available: run, list, status, resume, save")
+            print()
+
+    elif cmd[0] == "/model":
+        from .models import get_model_registry
+        registry = get_model_registry()
+
+        if len(cmd) < 2 or cmd[1] == "list":
+            # List all available models
+            profiles = registry.list_profiles()
+            defaults = registry.get_defaults()
+            current_model = getattr(harness, 'model', 'unknown')
+
+            print(f"\n  {_bold('Available Models')}")
+            _safe_print(f"  {_dim(BUBBLE_H * 50)}")
+            for p in profiles:
+                is_current = (p.model_name == current_model or p.full_id == current_model)
+                marker = _green(CHECK_ICON) if is_current else "  "
+                tags = ", ".join(p.tags) if p.tags else ""
+                print(f"  {marker} {p.full_id:<30} {_dim(p.description):<20} [{tags}]")
+            print()
+            print(f"  {_bold('Defaults')}")
+            for role, model_id in defaults.items():
+                print(f"  {_dim(role + ':')} {model_id}")
+            print()
+
+        elif cmd[1] == "set":
+            if len(cmd) < 3:
+                print_warning("Usage: /model set <model_id>")
+                print_info("Example: /model set gpt-4o-mini")
+                print()
+                return "continue", session
+            model_id = cmd[2]
+            profile = registry.get_profile(model_id)
+            if profile:
+                harness.model = profile.model_name
+                print_success(f"Main model set to: {profile.full_id}")
+            else:
+                print_error(f"Model not found: {model_id}")
+                print_info("Use /model list to see available models")
+            print()
+
+        elif cmd[1] == "default":
+            if len(cmd) < 4:
+                print_warning("Usage: /model default <role> <model_id>")
+                print_info("Roles: main, subagent, fast")
+                print_info("Example: /model default subagent deepseek-chat")
+                print()
+                return "continue", session
+            role = cmd[2]
+            model_id = cmd[3]
+            if registry.set_default(role, model_id):
+                print_success(f"Default {role} model set to: {model_id}")
+            else:
+                print_error(f"Model not found: {model_id}")
+            print()
+
+        else:
+            # /model <model_id> — shorthand for /model set
+            model_id = cmd[1]
+            profile = registry.get_profile(model_id)
+            if profile:
+                harness.model = profile.model_name
+                print_success(f"Main model set to: {profile.full_id}")
+            else:
+                print_error(f"Model not found: {model_id}")
+            print()
+
+    elif cmd[0] == "/plugin":
+        from .plugins import get_plugin_manager
+        plugin_mgr = get_plugin_manager()
+
+        if len(cmd) < 2 or cmd[1] == "list":
+            plugins = plugin_mgr.list_plugins()
+            if not plugins:
+                # Try discovering first
+                plugin_mgr.load_all()
+                plugins = plugin_mgr.list_plugins()
+
+            if not plugins:
+                print_info("No plugins installed")
+                print_info(f"Install plugins to: {plugin_mgr.project_plugin_dir}/ or {plugin_mgr.user_plugin_dir}/")
+            else:
+                print(f"\n  {_bold('Plugins')}")
+                _safe_print(f"  {_dim(BUBBLE_H * 50)}")
+                for p in plugins:
+                    status = _green(CHECK_ICON) if p.loaded else _red(CROSS_ICON)
+                    tools_count = len(p.tools)
+                    error_info = f" {_red('(' + p.error[:40] + ')')}" if p.error else ""
+                    print(f"  {status} {p.name} v{p.manifest.version}  tools:{tools_count}  {_dim(p.manifest.description[:40])}{error_info}")
+            print()
+
+        elif cmd[1] == "load":
+            if len(cmd) < 3:
+                print_warning("Usage: /plugin load <path>")
+                print_info("Example: /plugin load ~/.nexgent/plugins/my-plugin")
+                print()
+                return "continue", session
+            plugin_dir = cmd[2]
+            plugin = plugin_mgr.load(plugin_dir)
+            if plugin and plugin.loaded:
+                print_success(f"Loaded plugin: {plugin.name} ({len(plugin.tools)} tools)")
+            elif plugin:
+                print_error(f"Failed to load plugin: {plugin.error}")
+            else:
+                print_error(f"Could not load plugin from: {plugin_dir}")
+            print()
+
+        elif cmd[1] == "unload":
+            if len(cmd) < 3:
+                print_warning("Usage: /plugin unload <name>")
+                print()
+                return "continue", session
+            name = cmd[2]
+            if plugin_mgr.unload(name):
+                print_success(f"Unloaded plugin: {name}")
+            else:
+                print_error(f"Plugin not found: {name}")
+            print()
+
+        else:
+            print_warning(f"Unknown plugin subcommand: {cmd[1]}")
+            print_info("Available: list, load, unload")
+            print()
+
     elif cmd[0] == "/save":
         if len(cmd) < 2:
             print_warning("Usage: /save <filepath>")
@@ -1013,7 +1296,7 @@ def _handle_command(cmd, harness, session, memory_store, checkpoint_manager=None
                 session.auto_save_dir = session_dir
             # Update checkpoint_manager to loaded session
             if checkpoint_manager:
-                checkpoint_manager.checkpoint_dir = os.path.join(".mimo", "checkpoints", session.session_id)
+                checkpoint_manager.checkpoint_dir = os.path.join(".nexgent", "checkpoints", session.session_id)
                 checkpoint_manager._seq = 0
                 checkpoint_manager._batch_dir = None
             print_success(f"Session loaded from {cmd[1]}")
@@ -1077,7 +1360,7 @@ def _handle_command(cmd, harness, session, memory_store, checkpoint_manager=None
                     print_error(f"Invalid repository name: {repo_name}")
                     print()
                     return "continue", session
-                skill_dir = os.path.join(os.path.expanduser('~'), '.mimo', 'skills', repo_name)
+                skill_dir = os.path.join(os.path.expanduser('~'), '.nexgent', 'skills', repo_name)
                 os.makedirs(skill_dir, exist_ok=True)
                 # Clone to temp dir
                 with tempfile.TemporaryDirectory() as tmpdir:
@@ -1120,7 +1403,7 @@ def _handle_command(cmd, harness, session, memory_store, checkpoint_manager=None
                 print(f"\n  {_dim('Usage: /<skill-name> [arguments]')}")
                 print(f"  {_dim('Install: /skills install <github-url>')}")
             else:
-                print_info("No skills found. Create skills in ~/.mimo/skills/ or .mimo/skills/")
+                print_info("No skills found. Create skills in ~/.nexgent/skills/ or .nexgent/skills/")
                 print_info("Install: /skills install <github-url>")
             print()
     elif cmd[0].startswith("/") and cmd[0][1:] in (harness._skill_manager.skills if hasattr(harness, '_skill_manager') and harness._skill_manager else {}):
@@ -1193,7 +1476,7 @@ def _handle_command(cmd, harness, session, memory_store, checkpoint_manager=None
                             print_error("Invalid server name derived from package")
                             print()
                             return "continue", session
-                        install_dir = os.path.join(os.path.expanduser('~'), '.mimo', 'mcp-servers', server_name)
+                        install_dir = os.path.join(os.path.expanduser('~'), '.nexgent', 'mcp-servers', server_name)
                         os.makedirs(install_dir, exist_ok=True)
                         tmp_path = os.path.join(tempfile.gettempdir(), f'{server_name}.zip')
                         try:
@@ -1221,7 +1504,7 @@ def _handle_command(cmd, harness, session, memory_store, checkpoint_manager=None
                             print()
                             return "continue", session
                         # Update config
-                        config_path = os.path.join(os.path.expanduser('~'), '.mimo', 'config.json')
+                        config_path = os.path.join(os.path.expanduser('~'), '.nexgent', 'config.json')
                         config = {}
                         if os.path.exists(config_path):
                             with open(config_path, 'r', encoding='utf-8') as f:
@@ -1258,7 +1541,7 @@ def _handle_command(cmd, harness, session, memory_store, checkpoint_manager=None
                         subprocess.run(['npm', 'install', '-g', package] + extra_args,
                                        capture_output=True, check=True)
                         print_success(f"npm package '{package}' installed")
-                        print_info("Add configuration to ~/.mimo/config.json manually")
+                        print_info("Add configuration to ~/.nexgent/config.json manually")
                 except subprocess.CalledProcessError as e:
                     print_error(f"Installation failed: {e.stderr.decode() if e.stderr else str(e)}")
                 except Exception as e:
@@ -1303,7 +1586,7 @@ def _handle_command(cmd, harness, session, memory_store, checkpoint_manager=None
                         _safe_print(f"    {_red(server['error'][:50])}")
                 print(f"\n  {_dim('Commands: /mcp install|connect|disconnect|refresh [server-name]')}")
             else:
-                print_info("No MCP servers configured. Create .mimo/mcp.json to add servers.")
+                print_info("No MCP servers configured. Create .nexgent/mcp.json to add servers.")
                 print_info("Install: /mcp install <package-or-repo>")
         print()
     elif cmd[0] == "/agents":
@@ -1328,7 +1611,7 @@ def _handle_command(cmd, harness, session, memory_store, checkpoint_manager=None
                         if agent['tools']:
                             _safe_print(f"    {_dim('Tools:')} {', '.join(agent['tools'][:5])}")
                 else:
-                    print_info("No agents found. Create agents in ~/.mimo/agents/ or .mimo/agents/")
+                    print_info("No agents found. Create agents in ~/.nexgent/agents/ or .nexgent/agents/")
                 print()
             elif subcmd == "create":
                 # Create new agent
@@ -1448,7 +1731,7 @@ def _handle_command(cmd, harness, session, memory_store, checkpoint_manager=None
                         _safe_print(f"    {_dim(agent['description'][:60])}")
                 print(f"\n  {_dim('Commands: /agents list|create|delete|show [name]')}")
             else:
-                print_info("No agents found. Create agents in ~/.mimo/agents/ or .mimo/agents/")
+                print_info("No agents found. Create agents in ~/.nexgent/agents/ or .nexgent/agents/")
                 print_info("Create: /agents create <name> [description]")
             print()
     elif cmd[0] == "/tasks":

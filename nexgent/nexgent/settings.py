@@ -1,10 +1,10 @@
 """Settings hierarchy - 4-level configuration with deny-rule precedence.
 
 Hierarchy (later levels override earlier, but deny rules always win):
-  managed:  .mimo/managed.json          (enterprise, cannot be overridden)
-  user:     ~/.mimo/settings.json       (user-level)
-  project:  .mimo/settings.json         (project-level, committable)
-  local:    .mimo/settings.local.json   (project-level, gitignored)
+  managed:  .nexgent/managed.json          (enterprise, cannot be overridden)
+  user:     ~/.nexgent/settings.json       (user-level)
+  project:  .nexgent/settings.json         (project-level, committable)
+  local:    .nexgent/settings.local.json   (project-level, gitignored)
 """
 
 import json
@@ -28,10 +28,10 @@ class SettingsManager:
 
     def _load_all(self, project_dir: str):
         paths = {
-            "managed": os.path.join(project_dir, ".mimo", "managed.json"),
-            "user": os.path.join(str(Path.home()), ".mimo", "settings.json"),
-            "project": os.path.join(project_dir, ".mimo", "settings.json"),
-            "local": os.path.join(project_dir, ".mimo", "settings.local.json"),
+            "managed": os.path.join(project_dir, ".nexgent", "managed.json"),
+            "user": os.path.join(str(Path.home()), ".nexgent", "settings.json"),
+            "project": os.path.join(project_dir, ".nexgent", "settings.json"),
+            "local": os.path.join(project_dir, ".nexgent", "settings.local.json"),
         }
         for level in SETTINGS_LEVELS:
             self._merge_level(level, paths[level])

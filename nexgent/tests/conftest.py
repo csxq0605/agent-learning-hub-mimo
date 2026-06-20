@@ -32,13 +32,13 @@ if not _env_path.exists():
     _env_path = Path(__file__).resolve().parent.parent / ".env"
 load_dotenv(_env_path, override=False)
 
-_real_api_key = os.environ.get("MIMO_API_KEY", "")
+_real_api_key = os.environ.get("NEXGENT_API_KEY", "")
 
 # Only set mock defaults when no real API key is configured
 if not _real_api_key or _real_api_key == "test-key-for-testing":
-    os.environ["MIMO_API_KEY"] = "test-key-for-testing"
-    os.environ["MIMO_BASE_URL"] = "http://localhost:8080/v1"
-    os.environ["MIMO_MODEL"] = "test-model"
+    os.environ["NEXGENT_API_KEY"] = "test-key-for-testing"
+    os.environ["NEXGENT_BASE_URL"] = "http://localhost:8080/v1"
+    os.environ["NEXGENT_MODEL"] = "test-model"
 
 
 def _validate_api_connection() -> bool:
@@ -46,15 +46,15 @@ def _validate_api_connection() -> bool:
 
     Cached: only calls the API once per test session.
     """
-    api_key = os.environ.get("MIMO_API_KEY", "")
+    api_key = os.environ.get("NEXGENT_API_KEY", "")
     if not api_key or api_key == "test-key-for-testing":
         return False
     try:
         from openai import OpenAI
-        from nexgent.config import MIMO_BASE_URL, MIMO_MODEL
-        client = OpenAI(api_key=api_key, base_url=MIMO_BASE_URL)
+        from nexgent.config import NEXGENT_BASE_URL, NEXGENT_MODEL
+        client = OpenAI(api_key=api_key, base_url=NEXGENT_BASE_URL)
         client.chat.completions.create(
-            model=MIMO_MODEL,
+            model=NEXGENT_MODEL,
             messages=[{"role": "user", "content": "hi"}],
             max_completion_tokens=1,
         )
@@ -94,9 +94,9 @@ if os.path.isdir(_e2e_work):
     shutil.rmtree(_e2e_work, ignore_errors=True)
 
 # Redirect spill files to a temp directory during tests to prevent
-# test artifacts from accumulating in .mimo/outputs/
+# test artifacts from accumulating in .nexgent/outputs/
 _test_spill_dir = tempfile.mkdtemp(prefix="mimo_test_spill_")
-os.environ.setdefault("MIMO_SPILL_DIR", _test_spill_dir)
+os.environ.setdefault("NEXGENT_SPILL_DIR", _test_spill_dir)
 
 
 @pytest.fixture(autouse=True, scope="session")

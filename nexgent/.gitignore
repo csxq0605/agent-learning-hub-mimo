@@ -4,10 +4,22 @@ __pycache__/
 *.egg-info/
 dist/
 build/
+
+# 敏感配置
 .env
+models.json
+.nexgent/mcp.json
+.nexgent/settings.local.json
+
+# 运行时
 *.log
 .pytest_cache/
 .coverage
-.claude/
-.e2e_work/
 coverage.json
+.e2e_work/
+.nexgent/outputs/
+.nexgent/sessions/
+.nexgent/checkpoints/
+
+# IDE
+.claude/

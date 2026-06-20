@@ -30,12 +30,12 @@ def _cleanup_e2e_work_subagent():
 
 # Helper to check if real API key is available
 def _has_real_api_key():
-    api_key = os.environ.get("MIMO_API_KEY", "")
+    api_key = os.environ.get("NEXGENT_API_KEY", "")
     return api_key and api_key != "test-key-for-testing"
 
 requires_api = pytest.mark.skipif(
     not _has_real_api_key(),
-    reason="Real MIMO_API_KEY not set — E2E tests skipped",
+    reason="Real NEXGENT_API_KEY not set — E2E tests skipped",
 )
 
 
@@ -678,8 +678,8 @@ class TestConvenienceFunctions:
 # ============================================================
 
 @pytest.mark.skipif(
-    not os.environ.get("MIMO_API_KEY") or os.environ.get("MIMO_API_KEY") == "test-key-for-testing",
-    reason="Real MIMO_API_KEY not set — E2E tests skipped",
+    not os.environ.get("NEXGENT_API_KEY") or os.environ.get("NEXGENT_API_KEY") == "test-key-for-testing",
+    reason="Real NEXGENT_API_KEY not set — E2E tests skipped",
 )
 class TestSubAgentE2E:
     """End-to-end tests for SubAgent system with real API calls."""

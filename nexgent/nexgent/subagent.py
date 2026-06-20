@@ -228,6 +228,7 @@ class SubAgentConfig:
     isolated: bool = True  # If True, create new session; if False, share parent's session
     auto_approve: bool = False
     effort: str = "medium"
+    model: Optional[str] = None  # Model override (full_id, short_id, or tag)
     metadata: dict = field(default_factory=dict)
 
 
@@ -385,8 +386,23 @@ class SubAgent:
             Session = SubAgent._Session
 
             # Create a child harness with limited capabilities
+            # Model priority: config.model > parent model > default
+            subagent_model = self.config.model
+            if subagent_model and self.parent_harness:
+                # Try to resolve via parent's model registry
+                try:
+                    from .models import get_model_registry
+                    registry = get_model_registry()
+                    profile = registry.get_profile(subagent_model)
+                    if profile:
+                        subagent_model = profile.model_name
+                except Exception:
+                    pass  # Use the model string as-is
+            elif not subagent_model:
+                subagent_model = self.parent_harness.model if self.parent_harness else None
+
             child_harness = NexgentAgent(
-                model=self.parent_harness.model if self.parent_harness else None,
+                model=subagent_model,
                 auto_approve=self.config.auto_approve,
                 dry_run=self.parent_harness.perms.dry_run if self.parent_harness else False,
                 max_steps=self.config.max_steps,

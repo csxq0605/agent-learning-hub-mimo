@@ -102,7 +102,7 @@ class TestAgentDiscovery:
 
     def test_discover_from_project(self, tmp_path):
         """Test discovering agents from project directory."""
-        agents_dir = tmp_path / '.mimo' / 'agents'
+        agents_dir = tmp_path / '.nexgent' / 'agents'
         agents_dir.mkdir(parents=True)
         agent_file = agents_dir / 'test-agent.md'
         agent_file.write_text("""---
@@ -122,7 +122,7 @@ You are a test agent.""")
 
     def test_discover_from_user(self, tmp_path, monkeypatch):
         """Test discovering agents from user directory."""
-        agents_dir = tmp_path / '.mimo' / 'agents'
+        agents_dir = tmp_path / '.nexgent' / 'agents'
         agents_dir.mkdir(parents=True)
         agent_file = agents_dir / 'user-agent.md'
         agent_file.write_text("""---
@@ -141,7 +141,7 @@ You are a user agent.""")
     def test_project_priority_over_user(self, tmp_path, monkeypatch):
         """Test project agents have priority over user agents."""
         # Create project agent
-        project_dir = tmp_path / '.mimo' / 'agents'
+        project_dir = tmp_path / '.nexgent' / 'agents'
         project_dir.mkdir(parents=True)
         (project_dir / 'agent.md').write_text("""---
 name: shared-agent
@@ -150,7 +150,7 @@ description: Project version
 Project prompt.""")
 
         # Create user agent with same name
-        user_dir = tmp_path / 'user' / '.mimo' / 'agents'
+        user_dir = tmp_path / 'user' / '.nexgent' / 'agents'
         user_dir.mkdir(parents=True)
         (user_dir / 'agent.md').write_text("""---
 name: shared-agent
@@ -176,7 +176,7 @@ class TestAgentManager:
 
     def test_list_agents(self, tmp_path, monkeypatch):
         """Test listing agents."""
-        agents_dir = tmp_path / '.mimo' / 'agents'
+        agents_dir = tmp_path / '.nexgent' / 'agents'
         agents_dir.mkdir(parents=True)
         (agents_dir / 'agent1.md').write_text("""---
 name: agent1
@@ -207,7 +207,7 @@ Prompt 2.""")
 
     def test_get_agent(self, tmp_path):
         """Test getting a specific agent."""
-        agents_dir = tmp_path / '.mimo' / 'agents'
+        agents_dir = tmp_path / '.nexgent' / 'agents'
         agents_dir.mkdir(parents=True)
         (agents_dir / 'test.md').write_text("""---
 name: test-agent
@@ -258,7 +258,7 @@ Test prompt.""")
 
     def test_delete_agent(self, tmp_path, monkeypatch):
         """Test deleting an agent."""
-        agents_dir = tmp_path / '.mimo' / 'agents'
+        agents_dir = tmp_path / '.nexgent' / 'agents'
         agents_dir.mkdir(parents=True)
         (agents_dir / 'to-delete.md').write_text("""---
 name: to-delete

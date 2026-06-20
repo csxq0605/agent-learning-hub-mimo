@@ -14,9 +14,9 @@ class _HarnessFixture:
 
     @staticmethod
     def make(monkeypatch):
-        monkeypatch.setenv("MIMO_API_KEY", "test-key")
-        monkeypatch.setenv("MIMO_BASE_URL", "http://test.com")
-        monkeypatch.setenv("MIMO_MODEL", "test-model")
+        monkeypatch.setenv("NEXGENT_API_KEY", "test-key")
+        monkeypatch.setenv("NEXGENT_BASE_URL", "http://test.com")
+        monkeypatch.setenv("NEXGENT_MODEL", "test-model")
         from nexgent.agent import NexgentAgent
         from nexgent.context import Session
         harness = NexgentAgent()
@@ -160,8 +160,8 @@ class TestHandleCommand:
             session.add_message("user", f"This is a long message number {i} " * 10)
             session.add_message("assistant", f"Response to message {i} " * 10)
         # Use real compact_context (requires API key for LLM compression)
-        if not os.environ.get("MIMO_API_KEY") or os.environ.get("MIMO_API_KEY") == "test-key-for-testing":
-            pytest.skip("Real MIMO_API_KEY not set for compact test")
+        if not os.environ.get("NEXGENT_API_KEY") or os.environ.get("NEXGENT_API_KEY") == "test-key-for-testing":
+            pytest.skip("Real NEXGENT_API_KEY not set for compact test")
         _handle_command(["/compact"], harness, session, memory_store)
         captured = capsys.readouterr()
         assert "Compressing" in captured.out or "compacted" in captured.out.lower() or "compact" in captured.out.lower()

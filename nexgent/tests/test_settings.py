@@ -27,7 +27,7 @@ class TestSettingsManagerHierarchy:
     def test_single_level_managed(self, tmp_path, monkeypatch):
         """Managed level settings are loaded correctly."""
         _setup_settings(tmp_path, monkeypatch)
-        mimo_dir = tmp_path / ".mimo"
+        mimo_dir = tmp_path / ".nexgent"
         mimo_dir.mkdir()
         (mimo_dir / "managed.json").write_text(json.dumps({
             "model": "enterprise-model",
@@ -41,11 +41,11 @@ class TestSettingsManagerHierarchy:
         """User level overrides managed level for non-deny keys."""
         fake_home = _setup_settings(tmp_path, monkeypatch)
         # Managed
-        mimo_dir = tmp_path / ".mimo"
+        mimo_dir = tmp_path / ".nexgent"
         mimo_dir.mkdir()
         (mimo_dir / "managed.json").write_text(json.dumps({"model": "managed-model"}))
         # User
-        user_mimo = fake_home / ".mimo"
+        user_mimo = fake_home / ".nexgent"
         user_mimo.mkdir()
         (user_mimo / "settings.json").write_text(json.dumps({"model": "user-model"}))
 
@@ -56,11 +56,11 @@ class TestSettingsManagerHierarchy:
         """Project level overrides user level for non-deny keys."""
         fake_home = _setup_settings(tmp_path, monkeypatch)
         # User
-        user_mimo = fake_home / ".mimo"
+        user_mimo = fake_home / ".nexgent"
         user_mimo.mkdir()
         (user_mimo / "settings.json").write_text(json.dumps({"model": "user-model"}))
         # Project
-        mimo_dir = tmp_path / ".mimo"
+        mimo_dir = tmp_path / ".nexgent"
         mimo_dir.mkdir()
         (mimo_dir / "settings.json").write_text(json.dumps({"model": "project-model"}))
 
@@ -71,7 +71,7 @@ class TestSettingsManagerHierarchy:
         """Local level overrides project level for non-deny keys."""
         _setup_settings(tmp_path, monkeypatch)
         # Project
-        mimo_dir = tmp_path / ".mimo"
+        mimo_dir = tmp_path / ".nexgent"
         mimo_dir.mkdir()
         (mimo_dir / "settings.json").write_text(json.dumps({"model": "project-model"}))
         # Local
@@ -83,9 +83,9 @@ class TestSettingsManagerHierarchy:
     def test_full_hierarchy(self, tmp_path, monkeypatch):
         """All 4 levels merge correctly with later levels winning."""
         fake_home = _setup_settings(tmp_path, monkeypatch)
-        mimo_dir = tmp_path / ".mimo"
+        mimo_dir = tmp_path / ".nexgent"
         mimo_dir.mkdir()
-        user_mimo = fake_home / ".mimo"
+        user_mimo = fake_home / ".nexgent"
         user_mimo.mkdir()
 
         (mimo_dir / "managed.json").write_text(json.dumps({
@@ -122,7 +122,7 @@ class TestSettingsDenyRules:
     def test_deny_rules_accumulate_from_managed(self, tmp_path, monkeypatch):
         """Deny rules from managed level are present."""
         _setup_settings(tmp_path, monkeypatch)
-        mimo_dir = tmp_path / ".mimo"
+        mimo_dir = tmp_path / ".nexgent"
         mimo_dir.mkdir()
         (mimo_dir / "managed.json").write_text(json.dumps({
             "permissions": {"deny": ["rm -rf *"]},
@@ -135,9 +135,9 @@ class TestSettingsDenyRules:
     def test_deny_rules_accumulate_across_levels(self, tmp_path, monkeypatch):
         """Deny rules from multiple levels are merged (union), not replaced."""
         fake_home = _setup_settings(tmp_path, monkeypatch)
-        mimo_dir = tmp_path / ".mimo"
+        mimo_dir = tmp_path / ".nexgent"
         mimo_dir.mkdir()
-        user_mimo = fake_home / ".mimo"
+        user_mimo = fake_home / ".nexgent"
         user_mimo.mkdir()
 
         (mimo_dir / "managed.json").write_text(json.dumps({
@@ -159,7 +159,7 @@ class TestSettingsDenyRules:
     def test_deny_rules_not_overridden_by_later_level(self, tmp_path, monkeypatch):
         """Later levels cannot remove deny rules from earlier levels."""
         _setup_settings(tmp_path, monkeypatch)
-        mimo_dir = tmp_path / ".mimo"
+        mimo_dir = tmp_path / ".nexgent"
         mimo_dir.mkdir()
 
         (mimo_dir / "managed.json").write_text(json.dumps({
@@ -179,9 +179,9 @@ class TestSettingsDenyRules:
     def test_deny_rules_no_duplicates(self, tmp_path, monkeypatch):
         """Duplicate deny rules across levels are deduplicated."""
         fake_home = _setup_settings(tmp_path, monkeypatch)
-        mimo_dir = tmp_path / ".mimo"
+        mimo_dir = tmp_path / ".nexgent"
         mimo_dir.mkdir()
-        user_mimo = fake_home / ".mimo"
+        user_mimo = fake_home / ".nexgent"
         user_mimo.mkdir()
 
         (mimo_dir / "managed.json").write_text(json.dumps({
@@ -207,7 +207,7 @@ class TestSettingsGetMethods:
 
     def test_get_nested_single_key(self, tmp_path, monkeypatch):
         _setup_settings(tmp_path, monkeypatch)
-        mimo_dir = tmp_path / ".mimo"
+        mimo_dir = tmp_path / ".nexgent"
         mimo_dir.mkdir()
         (mimo_dir / "settings.json").write_text(json.dumps({
             "permissions": {"allow": ["read_file"]},
@@ -225,7 +225,7 @@ class TestSettingsGetMethods:
     def test_get_nested_non_dict_intermediate(self, tmp_path, monkeypatch):
         """If an intermediate key is not a dict, return default."""
         _setup_settings(tmp_path, monkeypatch)
-        mimo_dir = tmp_path / ".mimo"
+        mimo_dir = tmp_path / ".nexgent"
         mimo_dir.mkdir()
         (mimo_dir / "settings.json").write_text(json.dumps({
             "model": "test-model",
@@ -238,7 +238,7 @@ class TestSettingsGetMethods:
     def test_raw_returns_copy(self, tmp_path, monkeypatch):
         """raw property returns a copy, not internal state."""
         _setup_settings(tmp_path, monkeypatch)
-        mimo_dir = tmp_path / ".mimo"
+        mimo_dir = tmp_path / ".nexgent"
         mimo_dir.mkdir()
         (mimo_dir / "settings.json").write_text(json.dumps({"key": "value"}))
 
@@ -254,7 +254,7 @@ class TestSettingsMalformedFiles:
     def test_invalid_json_handled(self, tmp_path, monkeypatch):
         """Invalid JSON in a settings file is silently skipped."""
         _setup_settings(tmp_path, monkeypatch)
-        mimo_dir = tmp_path / ".mimo"
+        mimo_dir = tmp_path / ".nexgent"
         mimo_dir.mkdir()
         (mimo_dir / "settings.json").write_text("{not valid json!!!")
 
@@ -264,7 +264,7 @@ class TestSettingsMalformedFiles:
     def test_empty_file_handled(self, tmp_path, monkeypatch):
         """Empty settings file is silently skipped."""
         _setup_settings(tmp_path, monkeypatch)
-        mimo_dir = tmp_path / ".mimo"
+        mimo_dir = tmp_path / ".nexgent"
         mimo_dir.mkdir()
         (mimo_dir / "settings.json").write_text("")
 
@@ -274,7 +274,7 @@ class TestSettingsMalformedFiles:
     def test_partial_valid_partial_invalid(self, tmp_path, monkeypatch):
         """Valid files are loaded even if other files are invalid."""
         _setup_settings(tmp_path, monkeypatch)
-        mimo_dir = tmp_path / ".mimo"
+        mimo_dir = tmp_path / ".nexgent"
         mimo_dir.mkdir()
         # Managed is valid
         (mimo_dir / "managed.json").write_text(json.dumps({"model": "ok"}))
