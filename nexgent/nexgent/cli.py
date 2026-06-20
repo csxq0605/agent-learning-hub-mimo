@@ -208,7 +208,7 @@ def _pick_session(session_dir: str):
         print(f"  [{i+1}] {name} (~{msg_count} msgs, {dt.strftime('%Y-%m-%d %H:%M')})")
     print()
     try:
-        choice = _rich_input("Pick a session number (or Enter to cancel): ").strip()
+        choice = _rich_input("Pick a session number (or Enter to cancel): ", save_to_history=False).strip()
         if not choice:
             return None
         idx = int(choice) - 1
@@ -825,7 +825,8 @@ def _handle_command(cmd, harness, session, memory_store, checkpoint_manager=None
         if os.path.exists(agents_md_path):
             from prompt_toolkit.formatted_text import FormattedText
             confirm = _rich_input(
-                FormattedText([('class:prompt.label', '  ⚠ AGENTS.md already exists. Overwrite? [y/N] ')])
+                FormattedText([('class:prompt.label', '  ⚠ AGENTS.md already exists. Overwrite? [y/N] ')]),
+                save_to_history=False,
             ).strip().lower()
             if confirm not in ("y", "yes"):
                 print_info("Skipped.")

@@ -172,7 +172,7 @@ def _init_prompt_toolkit():
 
         slash_completer = WordCompleter(_SLASH_COMMANDS, ignore_case=True, sentence=True)
         at_file_completer = AtFileCompleter()
-        completer = merge_completers(slash_completer, at_file_completer)
+        completer = merge_completers([slash_completer, at_file_completer])
 
         # Style for the prompt labels
         prompt_style = Style.from_dict({
@@ -199,24 +199,39 @@ def _init_prompt_toolkit():
         return False
 
 
-def rich_input(prompt: str = "") -> str:
+def rich_input(prompt: str = "", save_to_history: bool = True) -> str:
     """Drop-in replacement for input() with auto-completion and history.
 
     Falls back to built-in input() if prompt_toolkit is unavailable.
     Uses builtins.input so monkeypatching in tests works correctly.
+
+    Args:
+        prompt: The prompt string to display.
+        save_to_history: If False, suppress saving this input to persistent
+            history.  Use for one-shot prompts like session pickers where
+            the answer (e.g. "1") should not appear in chat history.
 
     Usage:
         from .input_utils import rich_input
         user_input = rich_input("Enter command: ").strip()
     """
     if _init_prompt_toolkit():
+        orig_store = None
         try:
+            if not save_to_history:
+                # Temporarily disable history storage for this prompt
+                orig_store = _session.history.store_string
+                _session.history.store_string = lambda s: None
             return _session.prompt(prompt)
         except (EOFError, KeyboardInterrupt):
             raise
         except Exception:
             # prompt_toolkit failed at runtime, fall back
             return builtins.input(prompt)
+        finally:
+            # Always restore the original store_string
+            if orig_store is not None:
+                _session.history.store_string = orig_store
     else:
         return builtins.input(prompt)
 

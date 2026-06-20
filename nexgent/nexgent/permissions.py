@@ -443,7 +443,7 @@ class PermissionGate:
                 ('class:prompt.user', 'Y'),
                 ('', '/n) '),
             ])
-            response = _rich_input(prompt).strip().lower()
+            response = _rich_input(prompt, save_to_history=False).strip().lower()
         except (EOFError, KeyboardInterrupt):
             self._log(permission, action_desc, "denied_no_input")
             return False

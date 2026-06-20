@@ -333,11 +333,21 @@ def print_banner(version: str = "0.4.0"):
         width=52,
         padding=(0, 1),
     )
+    if _tui_print is not None:
+        _tui_print(f"Nexgent v{version}")
+        _tui_print("AI Agent Harness — model agnostic")
+        _tui_print("Claude Code architecture patterns")
+        return
     _console.print(panel)
 
 
 def print_session_info(model: str, mode: str, api_key_set: bool):
     """Print session configuration info."""
+    if _tui_print is not None:
+        _tui_print(f"  Model:    {model}")
+        _tui_print(f"  API Key:  {'*' * 12 if api_key_set else 'NOT SET'}")
+        _tui_print(f"  Mode:     {mode}")
+        return
     _console.print()
     _console.print(f"  [dim]Model:[/dim]    {model}")
     _console.print(f"  [dim]API Key:[/dim]  {'*' * 12 if api_key_set else '[red]NOT SET[/red]'}")
@@ -468,11 +478,28 @@ def print_token_usage(current: int, max_tokens: int):
     current_str = _format_tokens(current)
     max_str = _format_tokens(max_tokens)
 
+    if _tui_print is not None:
+        _tui_print(f"  Tokens: {bar} {current_str}/{max_str} {status}")
+        return
     _console.print(f"\n  [dim]Tokens:[/dim] [{bar_color}]{bar}[/{bar_color}] {current_str}/{max_str} [dim]{status}[/dim]", highlight=False)
 
 
 def print_tool_list(tools: list):
     """Print available tools in a structured table."""
+    if _tui_print is not None:
+        _tui_print(f"  Available Tools ({len(tools)})")
+        for tool in tools:
+            markers = []
+            if tool.get("is_read_only"):
+                markers.append("RO")
+            if tool.get("is_concurrency_safe"):
+                markers.append("CS")
+            if tool.get("is_destructive"):
+                markers.append("DST")
+            marker_str = f" [{','.join(markers)}]" if markers else ""
+            desc = (tool.get("description") or "")[:60]
+            _tui_print(f"  {tool['name']}{marker_str} — {desc}")
+        return
     table = Table(title="Available Tools", box=box.SIMPLE, show_header=True, header_style="bold")
     table.add_column("Tool", style="yellow", no_wrap=True)
     table.add_column("Markers", style="dim", width=10)
@@ -497,6 +524,19 @@ def print_tool_list(tools: list):
 
 def print_context_breakdown(messages: list, max_display: int = 15):
     """Print context breakdown in a structured table."""
+    if _tui_print is not None:
+        _tui_print(f"  Context Breakdown ({len(messages)} messages)")
+        for i, msg in enumerate(messages[:max_display]):
+            role = msg.get("role", "?")
+            content = msg.get("content", "")
+            if not isinstance(content, str):
+                content = str(content) if content else ""
+            tokens = max(1, len(content) // 4)
+            preview = content[:50].replace("\n", " ")
+            _tui_print(f"  [{i}] {role} {_format_tokens(tokens)} — {preview}")
+        if len(messages) > max_display:
+            _tui_print(f"  ... and {len(messages) - max_display} more messages")
+        return
     table = Table(
         title=f"Context Breakdown ({len(messages)} messages)",
         box=box.SIMPLE,
@@ -527,6 +567,11 @@ def print_context_breakdown(messages: list, max_display: int = 15):
 
 def print_session_stats(stats: dict):
     """Print session statistics."""
+    if _tui_print is not None:
+        _tui_print("  Session Statistics")
+        for key, value in stats.items():
+            _tui_print(f"  {key}: {value}")
+        return
     table = Table(title="Session Statistics", box=box.SIMPLE, show_header=False)
     table.add_column("Key", style="dim")
     table.add_column("Value")
@@ -637,6 +682,11 @@ def print_help():
         ("/plugin unload <name>", "Unload a plugin"),
     ]
 
+    if _tui_print is not None:
+        _tui_print("  Commands:")
+        for cmd, desc in commands:
+            _tui_print(f"  {cmd:<30} {desc}")
+        return
     table = Table(title="Commands", box=box.SIMPLE, show_header=True, header_style="bold")
     table.add_column("Command", style="yellow", no_wrap=True)
     table.add_column("Description", style="dim")

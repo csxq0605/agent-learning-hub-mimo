@@ -536,11 +536,40 @@ class MiMoTUI(App):
                 self.write_output("[yellow]Usage: /btw <message to add to context>[/yellow]")
             return
 
+        import nexgent.display as _display_mod
         from .cli import _handle_command
         parts = text.split()
         cmd = [parts[0].lower()] + parts[1:]
 
-        # Capture stdout output from the command handler
+        # Install TUI callbacks so display.py functions (print_help,
+        # print_info, etc.) route through the output queue instead of
+        # _console.print() which bypasses redirect_stdout.
+        orig_tui_write = _display_mod._tui_write
+        orig_tui_print = _display_mod._tui_print
+        orig_tui_stream_token = _display_mod._tui_stream_token
+        orig_tui_stream_end = _display_mod._tui_stream_end
+        orig_tui_model_output_start = _display_mod._tui_model_output_start
+        orig_tui_model_output_end = _display_mod._tui_model_output_end
+        orig_tui_tool_call_collapsible = _display_mod._tui_tool_call_collapsible
+        orig_tui_tool_call_result = _display_mod._tui_tool_call_result
+        orig_console_file = _display_mod._console.file
+
+        _display_mod._tui_write = lambda text: self.write_output(text.rstrip('\n'))
+        _display_mod._tui_print = lambda *a, **kw: self.write_output(
+            kw.get('sep', ' ').join(str(x) for x in a).rstrip('\n')
+        ) if a else None
+        _display_mod._tui_stream_token = lambda token: None
+        _display_mod._tui_stream_end = lambda: None
+        _display_mod._tui_model_output_start = lambda model: self.write_output(
+            f"╭── {model} ──" if model else "╭── Assistant ──"
+        )
+        _display_mod._tui_model_output_end = lambda: self.write_output("╰──────")
+        _display_mod._tui_tool_call_collapsible = lambda *a, **kw: None
+        _display_mod._tui_tool_call_result = lambda *a, **kw: None
+        # Suppress _console.print — callbacks handle all output
+        _display_mod._console.file = io.StringIO()
+
+        # Capture any stray print() calls
         buf = io.StringIO()
         try:
             with redirect_stdout(buf):
@@ -554,7 +583,19 @@ class MiMoTUI(App):
             # In TUI mode, catch SystemExit from slash commands (e.g., /quit)
             # and handle gracefully. The actual exit is done by _save_and_exit().
             action = "continue" if e.code is None else "quit"
+        finally:
+            # Restore all callbacks
+            _display_mod._tui_print = orig_tui_print
+            _display_mod._tui_stream_token = orig_tui_stream_token
+            _display_mod._tui_write = orig_tui_write
+            _display_mod._tui_stream_end = orig_tui_stream_end
+            _display_mod._tui_model_output_start = orig_tui_model_output_start
+            _display_mod._tui_model_output_end = orig_tui_model_output_end
+            _display_mod._tui_tool_call_collapsible = orig_tui_tool_call_collapsible
+            _display_mod._tui_tool_call_result = orig_tui_tool_call_result
+            _display_mod._console.file = orig_console_file
 
+        # Also capture any print() output
         output = buf.getvalue()
         if output.strip():
             self.write_output(output.rstrip())
@@ -730,8 +771,12 @@ class MiMoTUI(App):
 
             try:
                 # harness.run() outputs through builtins.print (routed to queue)
-                # and display.py override callbacks. Do NOT write result again here.
-                self.harness.run(task, self.session)
+                # and display.py override callbacks. Error strings (e.g.
+                # "[ERROR] Circuit breaker open") are returned, not raised.
+                result = self.harness.run(task, self.session)
+                # Display error/limit results that don't go through print()
+                if result and isinstance(result, str) and result.startswith("["):
+                    _output_queue.put(("write", f"[red]{result}[/red]"))
             except Exception as e:
                 _output_queue.put(("end_stream", None))
                 _output_queue.put(("write", f"[red]Error: {e}[/red]"))

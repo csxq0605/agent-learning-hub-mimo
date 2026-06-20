@@ -23,6 +23,7 @@ from typing import Callable, Optional
 from openai import OpenAI
 
 from .config import NEXGENT_BASE_URL, NEXGENT_API_KEY, NEXGENT_MODEL, require_api_key
+from .models import get_model_registry
 from .logging_utils import TraceLogger
 from .permissions import Permission, PermissionGate, PermissionMode
 from .context import Session, load_memory, estimate_tokens, load_topic_on_demand, COMPRESS_TRIGGER_TOKENS
@@ -615,7 +616,7 @@ You help users with coding, file operations, web research, document creation, an
         print("  3. Modify — request changes to the plan")
 
         try:
-            choice = _rich_input("\nYour choice (1/2/3): ").strip()
+            choice = _rich_input("\nYour choice (1/2/3): ", save_to_history=False).strip()
         except (EOFError, KeyboardInterrupt):
             return json.dumps({"decision": "rejected", "reason": "User cancelled"})
 
@@ -905,9 +906,20 @@ You help users with coding, file operations, web research, document creation, an
             self.logger.trace("task_start", {"task": task[:200], "session": self.logger.session_id, "dry_run": True})
             return f"[DRY-RUN] Task received: {task[:200]}\nNo LLM call made, no tools executed."
 
-        api_key = require_api_key()
+        # Resolve provider credentials for the current model.
+        # /model set <id> only changes self.model; we must also switch
+        # base_url and api_key to match the model's provider.
+        registry = get_model_registry()
+        profile = registry.get_profile(self.model)
+        if profile and profile.api_key:
+            model_base_url = profile.base_url
+            model_api_key = profile.api_key
+        else:
+            # Fallback to env/config defaults
+            model_base_url = NEXGENT_BASE_URL
+            model_api_key = require_api_key()
         client = self.deps.llm_client_factory(
-            api_key=api_key, base_url=NEXGENT_BASE_URL,
+            api_key=model_api_key, base_url=model_base_url,
         )
         self._llm_client = client  # Store for security pipeline model classifier
         # Set LLM client on permission gate for model-driven classification
@@ -1033,8 +1045,17 @@ You help users with coding, file operations, web research, document creation, an
                             f"Primary model failed ({status}), trying fallback: {self.fallback_model}"
                         )
                         try:
+                            # Fallback model may belong to a different provider
+                            fb_profile = registry.get_profile(self.fallback_model)
+                            if fb_profile and fb_profile.api_key:
+                                fb_client = self.deps.llm_client_factory(
+                                    api_key=fb_profile.api_key,
+                                    base_url=fb_profile.base_url,
+                                )
+                            else:
+                                fb_client = client
                             response = retry_with_backoff(
-                                lambda: client.chat.completions.create(
+                                lambda: fb_client.chat.completions.create(
                                     model=self.fallback_model,
                                     messages=messages,
                                     tools=tools_schema,
