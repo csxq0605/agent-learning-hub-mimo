@@ -41,16 +41,6 @@ cp models.json.example models.json
 nexgent          # 进入交互模式
 ```
 
-## 配置体系
-
-| 文件 | 说明 | Git |
-|------|------|-----|
-| `models.json` | 模型配置（提供商、模型名、defaults），key 用 `${VAR}` 引用 .env | gitignored |
-| `.env` | 所有密钥（MIMO_API_KEY、DEEPSEEK_API_KEY、GITHUB_TOKEN、TAVILY_API_KEY） | gitignored |
-| `models.json.example` | models.json 模板 | 提交 |
-| `.env.example` | .env 模板 | 提交 |
-| `.nexgent/mcp.json` | MCP 服务器配置 | gitignored |
-
 ## 测试
 
 | 类型 | 数量 |
