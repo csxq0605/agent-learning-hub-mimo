@@ -57,7 +57,7 @@ _WRAPPER_PREFIXES = ["timeout", "time", "nice", "nohup", "stdbuf"]
 
 # Patterns that indicate command injection (Ch4: security) - backticks and $()
 # C1/C3: also reject shell redirections (>, >>, <, <<, <<<) to prevent readonly-bypass attacks
-_CHAINING_PATTERN = re.compile(r'[`><]|\$\(|<<')
+_CHAINING_PATTERN = re.compile(r'[`><]|\$\(|<<|(?<!&)&(?!&)')
 
 # S3: Credential patterns to scrub from environment (M6: extended)
 # Each pattern is matched as a whole segment in the env var name (split on _)

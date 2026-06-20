@@ -114,12 +114,12 @@ _INJECTION_PATTERNS = [
 # Hard deny patterns — always block (circuit breaker, even in bypass mode)
 _HARD_DENY_PATTERNS = [
     # Case-insensitive rm -rf patterns: lookahead catches both -rf and -fr orderings
-    (re.compile(r'\brm\s+.*-(?=[^\s]*r)(?=[^\s]*f)[^\s]*\s+/(?:\s|\.|/|\)|$)', re.IGNORECASE), "rm -rf / destroys the filesystem"),
+    (re.compile(r'\brm\s+.*-(?=[^\s]*r)(?=[^\s]*f)[^\s]*\s+/(?:\s|\.|/|\)|;|&|\||#|$)', re.IGNORECASE), "rm -rf / destroys the filesystem"),
     (re.compile(r'\brm\s+.*-(?=[^\s]*r)(?=[^\s]*f)[^\s]*\s+~', re.IGNORECASE), "rm -rf ~ destroys home directory"),
     (re.compile(r'\brm\s+.*-(?=[^\s]*r)(?=[^\s]*f)[^\s]*\s+\*', re.IGNORECASE), "rm -rf * destroys all files"),
-    (re.compile(r'\brm\s+.*-(?=[^\s]*r)(?=[^\s]*f)[^\s]*\s+\.(?:\s|/|$)', re.IGNORECASE), "rm -rf . destroys current directory"),
+    (re.compile(r'\brm\s+.*-(?=[^\s]*r)(?=[^\s]*f)[^\s]*\s+\.(?:\s|/|;|&|\||#|$)', re.IGNORECASE), "rm -rf . destroys current directory"),
     # Separate short flags: rm -r -f /, rm -f -r /, etc.
-    (re.compile(r'\brm\s+(?:-[^\s]*r\s+.*-[^\s]*f|-[^\s]*f\s+.*-[^\s]*r)\s+/(?:\s|\.|/|\)|$)', re.IGNORECASE), "rm -r -f / destroys the filesystem"),
+    (re.compile(r'\brm\s+(?:-[^\s]*r\s+.*-[^\s]*f|-[^\s]*f\s+.*-[^\s]*r)\s+/(?:\s|\.|/|\)|;|&|\||#|$)', re.IGNORECASE), "rm -r -f / destroys the filesystem"),
     (re.compile(r'\brm\s+(?:-[^\s]*r\s+.*-[^\s]*f|-[^\s]*f\s+.*-[^\s]*r)\s+~', re.IGNORECASE), "rm -r -f ~ destroys home directory"),
     (re.compile(r'\brm\s+(?:-[^\s]*r\s+.*-[^\s]*f|-[^\s]*f\s+.*-[^\s]*r)\s+\*', re.IGNORECASE), "rm -r -f * destroys all files"),
     (re.compile(r'\brm\s+(?:-[^\s]*r\s+.*-[^\s]*f|-[^\s]*f\s+.*-[^\s]*r)\s+\.(?:\s|/|$)', re.IGNORECASE), "rm -r -f . destroys current directory"),
@@ -329,9 +329,9 @@ def classify_action_regex(
             cred_dir = cred_path
             if os.path.splitext(os.path.basename(cred_path))[1]:
                 cred_dir = os.path.dirname(cred_path)
-            norm_path = os.path.normpath(path) if path else ""
-            norm_cred = os.path.normpath(cred_dir)
-            if path and norm_path.startswith(norm_cred + os.sep):
+            real_path = os.path.realpath(path) if path else ""
+            real_cred = os.path.realpath(cred_dir)
+            if path and (real_path == real_cred or real_path.startswith(real_cred + os.sep)):
                 return ClassificationResult(
                     decision=SafetyDecision.HARD_DENY,
                     reason=f"Hard deny: accessing credential directory {os.path.basename(cred_dir)}",
@@ -360,7 +360,8 @@ def classify_action_regex(
             try:
                 abs_path = os.path.realpath(path)
                 abs_project = os.path.realpath(working_dir)
-                if not abs_path.startswith(abs_project):
+                # Ensure prefix match is directory-boundary-aware
+                if not (abs_path == abs_project or abs_path.startswith(abs_project + os.sep)):
                     return ClassificationResult(
                         decision=SafetyDecision.SOFT_DENY,
                         reason="Soft deny: writing outside project directory",
@@ -585,7 +586,18 @@ Is this action safe to execute?"""
                 )
                 return None
             parsed = salvaged
-        decision = parsed.get("decision", "allow")
+        decision = parsed.get("decision")
+        if decision is None:
+            # Missing decision key — fail to soft-deny, not allow
+            logging.getLogger(__name__).warning("Model classifier response missing 'decision' key, soft-denying")
+            return ClassificationResult(
+                decision=SafetyDecision.SOFT_DENY,
+                reason="Model classifier response missing decision field",
+                rule_matched="model_classifier",
+                source="model",
+                reasoning=f"Response had no 'decision' key: {result_text[:200]}",
+                risk_level="medium",
+            )
         reason = parsed.get("reason", "Model classifier decision")
         reasoning = parsed.get("reasoning", reason)
         risk_level = parsed.get("risk_level", "low")

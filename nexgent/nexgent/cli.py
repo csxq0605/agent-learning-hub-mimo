@@ -783,6 +783,14 @@ def _handle_command(cmd, harness, session, memory_store, checkpoint_manager=None
                     compacted = microcompact(snip_compress(session.messages))
                 session.messages = compacted
                 session._last_saved_idx = 0  # Reset so compacted messages get persisted
+                # Truncate JSONL file so compacted state persists on resume
+                if session.auto_save_dir:
+                    jsonl_path = os.path.join(session.auto_save_dir, f"{session.session_id}.jsonl")
+                    try:
+                        with open(jsonl_path, "w", encoding="utf-8"):
+                            pass
+                    except OSError:
+                        pass
                 session.compaction_count += 1
                 tokens_after = estimate_tokens(session.messages)
                 print_success(f"Done: {_format_tokens(tokens_before)} {ARROW_ICON} {_format_tokens(tokens_after)} tokens")
@@ -792,6 +800,14 @@ def _handle_command(cmd, harness, session, memory_store, checkpoint_manager=None
                 compacted = microcompact(snip_compress(session.messages))
                 session.messages = compacted
                 session._last_saved_idx = 0  # Reset so compacted messages get persisted
+                # Truncate JSONL file so compacted state persists on resume
+                if session.auto_save_dir:
+                    jsonl_path = os.path.join(session.auto_save_dir, f"{session.session_id}.jsonl")
+                    try:
+                        with open(jsonl_path, "w", encoding="utf-8"):
+                            pass
+                    except OSError:
+                        pass
                 session.compaction_count += 1
                 tokens_after = estimate_tokens(session.messages)
                 print_success(f"Done (local): {_format_tokens(tokens_before)} {ARROW_ICON} {_format_tokens(tokens_after)} tokens")

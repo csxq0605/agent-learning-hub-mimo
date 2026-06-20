@@ -979,6 +979,10 @@ You help users with coding, file operations, web research, document creation, an
                             return f"[ERROR] Circuit breaker open after repeated failures: {e}"
                         continue  # Retry in next loop iteration
 
+                if not response.choices:
+                    self.logger.error("API returned empty choices list")
+                    self.circuit_breaker.record_failure()
+                    continue
                 choice = response.choices[0]
                 message = choice.message
 
@@ -1098,12 +1102,8 @@ You help users with coding, file operations, web research, document creation, an
                 # Update status bar after parallel execution
                 status_bar.set_thinking(self.model)
 
-                # X2: Batch related edit/write operations together
-                edit_calls = [(tc, fn, fa) for tc, fn, fa in sequential_calls if fn in ("edit_file", "write_file")]
-                other_calls = [(tc, fn, fa) for tc, fn, fa in sequential_calls if fn not in ("edit_file", "write_file")]
-
-                # Execute other sequential tools first
-                for tc, func_name, func_args in other_calls:
+                # Execute all sequential tools in LLM-specified order
+                for tc, func_name, func_args in sequential_calls:
                     status_bar.set_executing(func_name)
                     tool_start = time.time()
                     try:
@@ -1119,24 +1119,8 @@ You help users with coding, file operations, web research, document creation, an
                         print_tool_call_result(func_name, False, duration, error=str(e))
                     session.add_message("tool", result, tool_call_id=tc.id)
 
-                # Execute edit/write tools sequentially
-                if edit_calls:
-                    for tc, func_name, func_args in edit_calls:
-                        status_bar.set_executing(func_name)
-                        tool_start = time.time()
-                        try:
-                            result = self._handle_tool_call(
-                                func_name, func_args, tc.id, session
-                            )
-                            duration = time.time() - tool_start
-                            success, error_msg, preview = _parse_tool_result(result)
-                            print_tool_call_result(func_name, success, duration, preview, error_msg)
-                        except Exception as e:
-                            duration = time.time() - tool_start
-                            result = json.dumps({"error": str(e)})
-                            print_tool_call_result(func_name, False, duration, error=str(e))
-                        session.add_message("tool", result, tool_call_id=tc.id)
-                    status_bar.set_thinking(self.model)
+                # Update status bar after sequential execution
+                status_bar.set_thinking(self.model)
         finally:
             # Ensure session and status bar are always cleaned up
             self._last_session = session

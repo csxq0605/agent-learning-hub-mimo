@@ -274,12 +274,15 @@ class HookRunner:
         tool_result: str = "",
     ):
         """Run a hook asynchronously (fire-and-forget)."""
-        hook_input = json.dumps({
-            "event": config.event.value,
-            "tool_name": tool_name,
-            "tool_input": tool_input or {},
-            "tool_result": tool_result[:2000],
-        }, ensure_ascii=False)
+        try:
+            hook_input = json.dumps({
+                "event": config.event.value,
+                "tool_name": tool_name,
+                "tool_input": tool_input or {},
+                "tool_result": tool_result[:2000],
+            }, ensure_ascii=False)
+        except (TypeError, ValueError):
+            return  # Non-serializable input — skip async hook
 
         try:
             popen_kwargs = dict(

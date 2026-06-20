@@ -563,26 +563,29 @@ class MiMoTUI(App):
 
     def _format_tool_args(self, tool_name: str, args: dict) -> str:
         """Format tool arguments for TUI display (matches display.py logic)."""
+        from .display import _escape_markup
         if not args:
             return ""
         if tool_name in ("read_file", "write_file", "edit_file"):
             path = args.get("path") or args.get("file_path", "")
             if path:
-                return f" → {path}"
+                return f" → {_escape_markup(path)}"
         if tool_name == "run_command":
             cmd = args.get("command", "")
             if cmd:
-                return f" → ${cmd}" if len(cmd) <= 60 else f" → ${cmd[:57]}..."
+                escaped = _escape_markup(cmd)
+                return f" → ${escaped}" if len(cmd) <= 60 else f" → ${escaped[:57]}..."
         if tool_name == "search_files":
             pattern = args.get("pattern", "")
             if pattern:
-                return f" → {pattern}"
+                return f" → {_escape_markup(pattern)}"
         if tool_name == "list_directory":
-            return f" → {args.get('path', '.')}"
+            return f" → {_escape_markup(args.get('path', '.'))}"
         import json
         preview = json.dumps(args, ensure_ascii=False)
         if len(preview) > 80:
             preview = preview[:77] + "..."
+        return f" → {_escape_markup(preview)}"
         return f" → {preview}"
 
     def _run_agent(self, task: str) -> None:
@@ -638,12 +641,13 @@ class MiMoTUI(App):
         _display_mod._tui_tool_call_collapsible = tui_tool_call_collapsible
 
         def tui_tool_call_result(name, success, duration, result_preview=None, error=None):
+            from .display import _escape_markup
             icon = '✓' if success else '✗'
             _output_queue.put(("write", f"  {icon} {name} ({duration:.1f}s)"))
             if error:
-                _output_queue.put(("write", f"    [red]{error[:200]}[/red]"))
+                _output_queue.put(("write", f"    [red]{_escape_markup(error[:200])}[/red]"))
             elif result_preview:
-                _output_queue.put(("write", f"    [dim]{result_preview[:200]}[/dim]"))
+                _output_queue.put(("write", f"    [dim]{_escape_markup(result_preview[:200])}[/dim]"))
         _display_mod._tui_tool_call_result = tui_tool_call_result
 
         # Suppress _console.print — it writes directly to its file object

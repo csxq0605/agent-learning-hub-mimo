@@ -421,7 +421,7 @@ def print_error(message: str):
     if _tui_print is not None:
         _tui_print(f"\n  {CROSS_ICON} {message}\n")
         return
-    _console.print(f"\n  [red]{CROSS_ICON}[/red] [red]{message}[/red]\n", highlight=False)
+    _console.print(f"\n  [red]{CROSS_ICON}[/red] [red]{_escape_markup(message)}[/red]\n", highlight=False)
 
 
 def print_warning(message: str):
@@ -429,7 +429,7 @@ def print_warning(message: str):
     if _tui_print is not None:
         _tui_print(f"  {WARN_ICON} {message}")
         return
-    _console.print(f"  [yellow]{WARN_ICON}[/yellow] {message}", highlight=False)
+    _console.print(f"  [yellow]{WARN_ICON}[/yellow] {_escape_markup(message)}", highlight=False)
 
 
 def print_info(message: str):
@@ -437,7 +437,7 @@ def print_info(message: str):
     if _tui_print is not None:
         _tui_print(f"  {INFO_ICON} {message}")
         return
-    _console.print(f"  [dim]{INFO_ICON}[/dim] {message}", highlight=False)
+    _console.print(f"  [dim]{INFO_ICON}[/dim] {_escape_markup(message)}", highlight=False)
 
 
 def print_success(message: str):
@@ -445,7 +445,7 @@ def print_success(message: str):
     if _tui_print is not None:
         _tui_print(f"  {CHECK_ICON} {message}")
         return
-    _console.print(f"  [green]{CHECK_ICON}[/green] {message}", highlight=False)
+    _console.print(f"  [green]{CHECK_ICON}[/green] {_escape_markup(message)}", highlight=False)
 
 
 def print_token_usage(current: int, max_tokens: int):
