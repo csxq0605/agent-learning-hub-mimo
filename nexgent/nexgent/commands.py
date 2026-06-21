@@ -8,7 +8,7 @@ used in the CLI and TUI interfaces.
 SLASH_COMMANDS = [
     # Basic commands
     "/help", "/quit", "/exit", "/q", "/clear", "/tools",
-    "/save", "/load", "/dry-run", "/auto", "/plan", "/abort",
+    "/save", "/load", "/abort",
     "/memory", "/remember", "/hooks", "/stats", "/tokens",
     "/compact", "/context", "/init", "/init-config", "/rewind", "/fork",
     "/effort",

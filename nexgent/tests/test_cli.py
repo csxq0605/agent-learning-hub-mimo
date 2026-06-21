@@ -230,46 +230,6 @@ class TestHandleCommand:
         assert "read_file" in captured.out
         assert "run_command" in captured.out
 
-    def test_repl_dry_run_toggle(self, monkeypatch, tmp_path, capsys):
-        harness, session = _HarnessFixture.make(monkeypatch)
-        from nexgent.memory import MemoryStore
-        memory_store = MemoryStore(str(tmp_path))
-        harness.perms.dry_run = False
-        _handle_command(["/dry-run"], harness, session, memory_store)
-        captured = capsys.readouterr()
-        assert "Dry-run: ON" in captured.out
-        assert harness.perms.dry_run is True
-
-    def test_repl_auto_toggle(self, monkeypatch, tmp_path, capsys):
-        harness, session = _HarnessFixture.make(monkeypatch)
-        from nexgent.memory import MemoryStore
-        memory_store = MemoryStore(str(tmp_path))
-        harness.perms.auto_approve = False
-        _handle_command(["/auto"], harness, session, memory_store)
-        captured = capsys.readouterr()
-        assert "Auto-approve: ON" in captured.out
-        assert harness.perms.auto_approve is True
-
-    def test_repl_plan_toggle_on(self, monkeypatch, tmp_path, capsys):
-        harness, session = _HarnessFixture.make(monkeypatch)
-        from nexgent.memory import MemoryStore
-        memory_store = MemoryStore(str(tmp_path))
-        from nexgent.permissions import PermissionMode
-        harness.perms.mode = PermissionMode.DEFAULT
-        _handle_command(["/plan"], harness, session, memory_store)
-        captured = capsys.readouterr()
-        assert "Plan mode: ON" in captured.out
-
-    def test_repl_plan_toggle_off(self, monkeypatch, tmp_path, capsys):
-        harness, session = _HarnessFixture.make(monkeypatch)
-        from nexgent.memory import MemoryStore
-        memory_store = MemoryStore(str(tmp_path))
-        from nexgent.permissions import PermissionMode
-        harness.perms.mode = PermissionMode.PLAN
-        _handle_command(["/plan"], harness, session, memory_store)
-        captured = capsys.readouterr()
-        assert "Plan mode: OFF" in captured.out
-
     def test_repl_stats_command(self, monkeypatch, tmp_path, capsys):
         harness, session = _HarnessFixture.make(monkeypatch)
         from nexgent.memory import MemoryStore

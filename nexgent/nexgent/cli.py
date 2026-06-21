@@ -676,22 +676,6 @@ def _handle_command(cmd, harness, session, memory_store, checkpoint_manager=None
                 "is_destructive": tool.is_destructive,
             })
         print_tool_list(tools_info)
-    elif cmd[0] == "/dry-run":
-        harness.perms.dry_run = not harness.perms.dry_run
-        status = "ON" if harness.perms.dry_run else "OFF"
-        print_info(f"Dry-run: {status}")
-    elif cmd[0] == "/auto":
-        harness.perms.auto_approve = not harness.perms.auto_approve
-        status = "ON" if harness.perms.auto_approve else "OFF"
-        print_info(f"Auto-approve: {status}")
-    elif cmd[0] == "/plan":
-        from .permissions import PermissionMode
-        if harness.perms.mode.value == "plan":
-            harness.perms.mode = PermissionMode.DEFAULT
-            print_info("Plan mode: OFF")
-        else:
-            harness.perms.mode = PermissionMode.PLAN
-            print_info("Plan mode: ON (read-only)")
     elif cmd[0] == "/abort":
         harness.graceful_abort.request()
         print_warning("Abort requested — current task will stop at next step boundary.")
