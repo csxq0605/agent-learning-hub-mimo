@@ -11,22 +11,23 @@ cd nexgent/demo-project
 nexgent
 ```
 
-一个 FastAPI 认证服务，有植入的 bug 和未实现的功能。用 Nexgent 来：
+一个 FastAPI 认证服务。用 Nexgent 来审查代码、修复问题、实现功能：
 
 ```
 nexgent> Read AGENTS.md                                    # 理解项目
-nexgent> Review src/auth/admin.py for security issues      # 发现 SQL injection
+nexgent> Run the tests                                     # 查看当前状态
+nexgent> Review src/auth/admin.py for security issues      # 代码审查
 nexgent> /parallel Review admin.py | Review rate_limit.py | Review roles.py  # 并行审查
-nexgent> Fix the SQL injection bug                         # read → edit → 测试
-nexgent> Implement the refresh feature in service.py       # 实现 TODO stub
+nexgent> Fix the most critical bug you found               # 修复问题
+nexgent> Implement the refresh feature in service.py       # 实现功能
 nexgent> /goal All tests pass and no NotImplementedError remain  # 自主循环
 nexgent> /workflow run examples/workflow-full-review.py     # 多阶段工作流
 nexgent> /demo                                             # 一键跑完所有功能
 ```
 
 Demo 包含：
-- **9 个源码模块**（~1500 行），7 个植入 bug，2 个 TODO stub
-- **54 个测试**（46 passed, 5 skipped, 3 未实现功能的 skip）
+- **9 个源码模块**（~1500 行），完整的认证服务
+- **54 个测试**，覆盖核心功能
 - **AGENTS.md** 项目知识库（自动加载）
 - **/demo skill** 一键展示所有功能
 - **workflow 脚本** 展示多阶段编排
