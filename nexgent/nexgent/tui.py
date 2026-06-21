@@ -119,8 +119,8 @@ class MiMoTUI(App):
     }
     """
 
-    # Mode cycling order for Shift+Tab (string-based to avoid import issues)
-    _MODE_CYCLE = ["default", "plan", "auto"]
+    # Mode cycling order for Shift+Tab
+    _MODE_CYCLE = ["default", "plan", "auto", "dry-run"]
 
     BINDINGS = [
         Binding("ctrl+c", "abort", "Abort", show=False, priority=True),
@@ -350,17 +350,20 @@ class MiMoTUI(App):
         except Exception:
             pass
         # Mode display with color coding
-        mode = self.harness.perms.mode.value
-        mode_colors = {
-            "default": "green",
-            "plan": "yellow",
-            "auto": "cyan",
-            "bypass": "red",
-            "accept_edits": "blue",
-            "dont_ask": "magenta",
-        }
-        mode_color = mode_colors.get(mode, "white")
-        mode_str = f"[{mode_color}]{mode}[/{mode_color}]"
+        if self.harness.perms.dry_run:
+            mode_str = "[magenta]dry-run[/magenta]"
+        else:
+            mode = self.harness.perms.mode.value
+            mode_colors = {
+                "default": "green",
+                "plan": "yellow",
+                "auto": "cyan",
+                "bypass": "red",
+                "accept_edits": "blue",
+                "dont_ask": "magenta",
+            }
+            mode_color = mode_colors.get(mode, "white")
+            mode_str = f"[{mode_color}]{mode}[/{mode_color}]"
 
         status = self.query_one("#status-bar", Static)
         status.update(
@@ -1069,16 +1072,25 @@ class MiMoTUI(App):
     # ── Mode Cycling (Shift+Tab) ────────────────────────────────
 
     def action_cycle_mode(self) -> None:
-        """Cycle through permission modes: default → plan → auto → default."""
+        """Cycle through permission modes: default → plan → auto → dry-run → default."""
         from .permissions import PermissionMode
-        current = self.harness.perms.mode.value
+        # Determine current position in cycle
+        if self.harness.perms.dry_run:
+            current = "dry-run"
+        else:
+            current = self.harness.perms.mode.value
         try:
             idx = self._MODE_CYCLE.index(current)
             next_idx = (idx + 1) % len(self._MODE_CYCLE)
         except ValueError:
             next_idx = 0
         new_mode_name = self._MODE_CYCLE[next_idx]
-        self.harness.perms.mode = PermissionMode(new_mode_name)
+        # dry-run is a flag, not a PermissionMode
+        if new_mode_name == "dry-run":
+            self.harness.perms.dry_run = True
+        else:
+            self.harness.perms.dry_run = False
+            self.harness.perms.mode = PermissionMode(new_mode_name)
         self._update_status_bar()
 
     # ── Copy Last Output (Ctrl+Shift+C) ────────────────────────

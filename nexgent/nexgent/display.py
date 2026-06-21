@@ -631,7 +631,7 @@ def print_help():
         ("/load <path>", "Load session from file"),
         ("/tools", "List available tools"),
         ("/effort <level>", "Set effort: low/medium/high"),
-        ("Shift+Tab", "Cycle mode: default/plan/auto"),
+        ("Shift+Tab", "Cycle mode: default/plan/auto/dry-run"),
         ("/abort", "Stop current task"),
         ("/btw <msg>", "Inject guidance message into context"),
         ("/memory", "List stored memories"),
