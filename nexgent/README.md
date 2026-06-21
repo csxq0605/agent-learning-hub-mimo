@@ -4,6 +4,33 @@
 
 版本：`0.5.0` | Python：`>=3.10` | License：MIT
 
+## Demo — 看 Nexgent 能做什么
+
+```bash
+cd nexgent/demo-project
+nexgent
+```
+
+一个 FastAPI 认证服务，有植入的 bug 和未实现的功能。用 Nexgent 来：
+
+```
+nexgent> Read AGENTS.md                                    # 理解项目
+nexgent> Review src/auth/admin.py for security issues      # 发现 SQL injection
+nexgent> /parallel Review admin.py | Review rate_limit.py | Review roles.py  # 并行审查
+nexgent> Fix the SQL injection bug                         # read → edit → 测试
+nexgent> Implement the refresh feature in service.py       # 实现 TODO stub
+nexgent> /goal All tests pass and no NotImplementedError remain  # 自主循环
+nexgent> /workflow run examples/workflow-full-review.py     # 多阶段工作流
+nexgent> /demo                                             # 一键跑完所有功能
+```
+
+Demo 包含：
+- **9 个源码模块**（~1500 行），7 个植入 bug，2 个 TODO stub
+- **54 个测试**（46 passed, 5 skipped, 3 未实现功能的 skip）
+- **AGENTS.md** 项目知识库（自动加载）
+- **/demo skill** 一键展示所有功能
+- **workflow 脚本** 展示多阶段编排
+
 ## 核心特性
 
 - **Agent Loop**: 依赖注入、熔断器（CircuitBreaker）、Token 预算、并行工具调度、流式输出、指数退避重试、优雅中断

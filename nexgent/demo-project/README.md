@@ -1,8 +1,8 @@
-# Demo Project
+# Demo — Nexgent Feature Showcase
 
-A FastAPI auth service with bugs to find and features to implement. Use Nexgent to work on it.
+一个 FastAPI 认证服务，有植入的 bug 和未实现的功能。用 Nexgent 来完成这些工作。
 
-## Quick Start
+## 快速开始
 
 ```bash
 cd nexgent && pip install -e .
@@ -10,35 +10,87 @@ cd demo-project
 nexgent
 ```
 
-## One Command Demo
+## 一键演示
 
 ```
 nexgent> /demo
 ```
 
-Runs through all Nexgent features: project analysis, parallel code review, bug fixing, feature implementation, memory, rules, workflow engine, and verification.
+自动展示：项目理解 → 代码审查 → 修复 bug → 实现功能 → 存储记忆 → 创建规则 → 运行工作流 → 验证结果。
 
-## Or Try Manually
+## 手动体验
 
+### 1. 理解项目
 ```
 nexgent> Read AGENTS.md
-nexgent> Run the tests
+nexgent> What does this project do?
+```
+
+### 2. 发现 bug
+```
 nexgent> Review src/auth/admin.py for security issues
 nexgent> /parallel Review admin.py | Review rate_limit.py | Review roles.py
-nexgent> Fix the most critical bug
+```
+
+### 3. 修复 bug
+```
+nexgent> Fix the SQL injection in admin.py
+nexgent> /rewind  # 修复错了？回滚
+```
+
+### 4. 实现功能
+```
 nexgent> Implement the refresh feature in service.py
-nexgent> Remember: we use bcrypt for passwords, never plaintext
+nexgent> /implement password-reset
+```
+
+### 5. 自主工作
+```
 nexgent> /goal All tests pass and no NotImplementedError stubs remain
 ```
 
-## What's in the Project
+### 6. 工作流
+```
+nexgent> /workflow run examples/workflow-full-review.py
+```
 
-| Module | What it does |
-|--------|-------------|
-| `auth/` | Register, login, token management |
-| `admin.py` | User management endpoints |
-| `rate_limit.py` | Sliding-window rate limiter |
-| `audit.py` | Security event logging |
-| `roles.py` | Role-based access control |
-| `password_reset.py` | Password reset (TODO stub) |
-| `email_verify.py` | Email verification (TODO stub) |
+### 7. 记忆和规则
+```
+nexgent> Remember: we use bcrypt for passwords, never plaintext
+nexgent> /memory
+```
+
+### 8. 计划模式
+```
+nexgent> /mode plan
+nexgent> Refactor the admin routes to extract a service layer
+nexgent> /mode default
+```
+
+## 项目结构
+
+| 模块 | 功能 | 状态 |
+|------|------|------|
+| `auth/` | 注册、登录、JWT 令牌管理 | ✅ 已完成 |
+| `admin.py` | 用户管理（列表、停用、改角色） | 🐛 有植入 bug |
+| `rate_limit.py` | 滑动窗口限流器 | 🐛 有植入 bug |
+| `audit.py` | 安全事件日志 | 🐛 有植入 bug |
+| `roles.py` | 基于角色的访问控制 | 🐛 有植入 bug |
+| `password_reset.py` | 密码重置流程 | ❌ TODO stub |
+| `email_verify.py` | 邮箱验证流程 | ❌ TODO stub |
+
+## 运行测试
+
+```bash
+python -m pytest demo-project/tests/ -v
+```
+
+46 passed, 5 skipped（TODO 功能的 skip）。
+
+## .nexgent 配置
+
+| 文件 | 功能 |
+|------|------|
+| `skills/demo.md` | `/demo` 一键演示技能 |
+| `AGENTS.md` | 项目知识库（自动加载） |
+| `examples/workflow-full-review.py` | 工作流引擎演示 |
