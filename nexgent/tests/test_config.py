@@ -3,7 +3,16 @@
 import os
 import pytest
 import importlib
+from pathlib import Path
 import nexgent.config
+
+
+def _hide_models_json(monkeypatch):
+    """Hide models.json from both os.path.exists and Path.exists."""
+    _real_exists = os.path.exists
+    monkeypatch.setattr(os.path, "exists", lambda p: False if "models.json" in str(p) else _real_exists(p))
+    _real_path_exists = Path.exists
+    monkeypatch.setattr(Path, "exists", lambda self: False if "models.json" in str(self) else _real_path_exists(self))
 
 
 @pytest.fixture(autouse=True)
@@ -15,9 +24,7 @@ def _restore_config():
 
 class TestConfigEnvVars:
     def test_config_env_vars(self, monkeypatch):
-        # Hide models.json so env vars are actually tested
-        _real_exists = os.path.exists
-        monkeypatch.setattr(os.path, "exists", lambda p: False if "models.json" in str(p) else _real_exists(p))
+        _hide_models_json(monkeypatch)
         monkeypatch.setenv("NEXGENT_BASE_URL", "http://custom.api.com/v1")
         monkeypatch.setenv("NEXGENT_API_KEY", "my-secret-key")
         monkeypatch.setenv("NEXGENT_MODEL", "my-custom-model")
@@ -33,8 +40,7 @@ class TestConfigEnvVars:
 
 class TestRequireApiKey:
     def test_require_api_key_present(self, monkeypatch):
-        _real_exists = os.path.exists
-        monkeypatch.setattr(os.path, "exists", lambda p: False if "models.json" in str(p) else _real_exists(p))
+        _hide_models_json(monkeypatch)
         monkeypatch.setenv("NEXGENT_API_KEY", "test-key-123")
         importlib.reload(nexgent.config)
         key = nexgent.config.require_api_key()
@@ -60,8 +66,7 @@ class TestConfigDefaults:
         assert "mimo" in nexgent.config.NEXGENT_MODEL.lower()
 
     def test_env_override(self, monkeypatch):
-        _real_exists = os.path.exists
-        monkeypatch.setattr(os.path, "exists", lambda p: False if "models.json" in str(p) else _real_exists(p))
+        _hide_models_json(monkeypatch)
         monkeypatch.setenv("NEXGENT_MODEL", "custom-model-v1")
         importlib.reload(nexgent.config)
         assert nexgent.config.NEXGENT_MODEL == "custom-model-v1"

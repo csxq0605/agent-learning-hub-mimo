@@ -843,6 +843,42 @@ def _handle_command(cmd, harness, session, memory_store, checkpoint_manager=None
         if result.get("test_runner"):
             print(f"  {_dim('Test runner:')} {result['test_runner']}")
         print()
+    elif cmd[0] == "/init-config":
+        # Initialize global config in ~/.nexgent/
+        import shutil
+        from pathlib import Path
+        pkg_root = Path(__file__).resolve().parent.parent
+        dest = Path.home() / ".nexgent"
+        dest.mkdir(exist_ok=True)
+        created = []
+        skipped = []
+        for src_name, dst_name in [
+            (".env.example", ".env"),
+            ("models.json.example", "models.json"),
+        ]:
+            src = pkg_root / src_name
+            dst = dest / dst_name
+            if dst.exists():
+                skipped.append(str(dst))
+            elif src.exists():
+                shutil.copy2(src, dst)
+                created.append(str(dst))
+            else:
+                print_warning(f"Template not found: {src}")
+        if created:
+            print_success(f"Created config files in {dest}:")
+            for p in created:
+                print(f"  {BULLET_ICON} {p}")
+        if skipped:
+            print_info(f"Already exist (skipped):")
+            for p in skipped:
+                print(f"  {BULLET_ICON} {p}")
+        if not created and not skipped:
+            print_warning("No templates found.")
+        print()
+        print(f"  {_dim('Edit')} {dest / 'models.json'} {_dim('to configure your LLM provider.')}")
+        print(f"  {_dim('Edit')} {dest / '.env'} {_dim('to set API keys.')}")
+        print()
     elif cmd[0] == "/rewind":
         if checkpoint_manager:
             restored = checkpoint_manager.restore_last()

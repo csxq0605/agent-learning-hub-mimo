@@ -320,7 +320,7 @@ class StepInfo:
     effort: str = "medium"
 
 
-def print_banner(version: str = "0.4.0"):
+def print_banner(version: str = "0.5.0"):
     """Print the application banner with rich Panel."""
     content = (
         f"[bold]Nexgent[/bold] [dim]v{version}[/dim]\n"
@@ -645,6 +645,7 @@ def print_help():
         ("/compact", "Manually compress context"),
         ("/context", "Show per-message token breakdown"),
         ("/init", "Scan project and generate AGENTS.md"),
+        ("/init-config", "Initialize global config in ~/.nexgent/"),
         ("/rewind", "Restore files from last checkpoint"),
         ("/fork", "Fork session into a new session"),
         ("/subagents", "List active SubAgents"),

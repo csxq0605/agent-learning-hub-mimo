@@ -10,7 +10,7 @@ SLASH_COMMANDS = [
     "/help", "/quit", "/exit", "/q", "/clear", "/tools",
     "/save", "/load", "/dry-run", "/auto", "/plan", "/abort",
     "/memory", "/remember", "/hooks", "/stats", "/tokens",
-    "/compact", "/context", "/init", "/rewind", "/fork",
+    "/compact", "/context", "/init", "/init-config", "/rewind", "/fork",
     "/effort", "/mode",
     # SubAgent commands
     "/subagents", "/subagent", "/parallel", "/pipeline",

@@ -10,7 +10,7 @@ Architecture follows Claude Code patterns:
 - SubAgent: Multi-agent coordination with lifecycle management
 """
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 
 from .agent import NexgentAgent, AgentDeps, CircuitBreaker, TokenBudget
 from .permissions import PermissionGate, Permission, PermissionMode, PermissionRule

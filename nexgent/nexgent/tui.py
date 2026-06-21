@@ -282,7 +282,7 @@ class MiMoTUI(App):
     def _show_banner(self) -> None:
         log = self.query_one("#output", RichLog)
         banner = Panel(
-            "[bold cyan]Nexgent v0.4.0[/]\n"
+            "[bold cyan]Nexgent v0.5.0[/]\n"
             "AI Agent Harness — model agnostic\n"
             "Claude Code architecture patterns",
             border_style="cyan",

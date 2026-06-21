@@ -47,6 +47,7 @@ import json
 import os
 import logging
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Optional
 
 from .config import NEXGENT_BASE_URL, NEXGENT_API_KEY, NEXGENT_MODEL
@@ -95,13 +96,24 @@ class ModelRegistry:
         self._defaults: dict[str, str] = {}  # role -> full_id
         self._loaded = False
 
+    @staticmethod
+    def _candidate_paths(relative: str) -> list[str]:
+        """Return search locations for a config file: CWD → ~/.nexgent/ → package root."""
+        package_root = str(Path(__file__).resolve().parent.parent)
+        home_nexgent = str(Path.home() / ".nexgent")
+        return [
+            os.path.join(os.getcwd(), relative),
+            os.path.join(home_nexgent, relative),
+            os.path.join(package_root, relative),
+        ]
+
     def load(self, config_path: str = None):
         """Load model configurations.
 
         Priority:
         1. Explicit config_path argument
         2. MODELS_CONFIG env var (path to models.json)
-        3. models.json in project root
+        3. models.json searched in: CWD → ~/.nexgent/ → package root
         4. Fallback to NEXGENT_* env vars
         """
         if self._loaded:
@@ -110,12 +122,16 @@ class ModelRegistry:
 
         # Try loading from JSON config
         config_data = None
-        for path in [
-            config_path,
-            os.environ.get("MODELS_CONFIG", ""),
-            "models.json",
-            ".nexgent/models.json",
-        ]:
+        search_paths = []
+        if config_path:
+            search_paths.append(config_path)
+        env_config = os.environ.get("MODELS_CONFIG", "")
+        if env_config:
+            search_paths.append(env_config)
+        search_paths.extend(self._candidate_paths("models.json"))
+        search_paths.extend(self._candidate_paths(".nexgent/models.json"))
+
+        for path in search_paths:
             if path and os.path.exists(path):
                 try:
                     with open(path, "r", encoding="utf-8") as f:

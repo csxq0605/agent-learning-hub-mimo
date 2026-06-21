@@ -11,20 +11,40 @@ import json
 from pathlib import Path
 from dotenv import load_dotenv
 
-_env_path = Path.cwd() / ".env"
-if not _env_path.exists():
-    _env_path = Path(__file__).resolve().parent.parent / ".env"
-load_dotenv(_env_path)
+_PACKAGE_ROOT = Path(__file__).resolve().parent.parent
+_HOME_NEXGENT = Path.home() / ".nexgent"
+
+# Search .env in: CWD → ~/.nexgent/ → package root
+_env_candidates = [
+    Path.cwd() / ".env",
+    _HOME_NEXGENT / ".env",
+    _PACKAGE_ROOT / ".env",
+]
+for _p in _env_candidates:
+    if _p.exists():
+        load_dotenv(_p)
+        break
+else:
+    load_dotenv(_env_candidates[0])  # let dotenv handle the missing file
 
 
 def _get(key: str, default: str = "") -> str:
     return os.environ.get(key, default)
 
 
+def _candidate_paths(relative: str) -> list[Path]:
+    """Return search locations for a config file: CWD → ~/.nexgent/ → package root."""
+    return [
+        Path.cwd() / relative,
+        _HOME_NEXGENT / relative,
+        _PACKAGE_ROOT / relative,
+    ]
+
+
 def _load_from_models_json() -> dict:
     """Try to load base_url/api_key/model from models.json."""
-    for path in ["models.json", ".nexgent/models.json"]:
-        if os.path.exists(path):
+    for path in _candidate_paths("models.json") + _candidate_paths(".nexgent/models.json"):
+        if path.exists():
             try:
                 with open(path, "r", encoding="utf-8") as f:
                     data = json.load(f)
