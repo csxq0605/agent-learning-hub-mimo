@@ -35,7 +35,7 @@ Demo 包含：
 ## 核心特性
 
 - **Agent Loop**: 依赖注入、熔断器（CircuitBreaker）、Token 预算、并行工具调度、流式输出、指数退避重试、优雅中断
-- **38 个工具**（14 个模块）: 文件操作、Shell、代码执行、Web 搜索/抓取、文档创建、数学计算、笔记本编辑、任务管理、LSP 集成、调度器、计划模式、进程监控、交互提示、子代理
+- **38 个工具**（15 个模块）: 文件操作、Shell、代码执行、Web 搜索/抓取、文档创建、数学计算、笔记本编辑、任务管理、LSP 集成、调度器、计划模式、进程监控、交互提示、子代理、工作流
 - **MCP 工具桥接**: MCP 服务器的工具自动注入 ToolRegistry，与内置工具统一调用
 - **权限管线**: 6 种模式（DEFAULT/PLAN/AUTO/ACCEPT_EDITS/DONT_ASK/BYPASS），4 阶段管线（验证→规则匹配→上下文评估→用户提示），规则优先级 deny > ask > allow
 - **安全管线**: 2 层防御（regex 预过滤 + 模型分类器），敏感数据自动脱敏，提示注入检测
@@ -48,10 +48,10 @@ Demo 包含：
 - **多模型配置**: `models.json` 统一管理多个 LLM 提供商，通过 `${VAR}` 引用 `.env` 中的密钥，支持为主对话/子代理/快速任务分别设置默认模型，运行时 `/model` 切换
 - **插件系统**: `plugin.json` 清单、自动发现/加载/注册、工具注入到 ToolRegistry、技能/代理贡献、生命周期管理
 - **Web 搜索**: Tavily API（结构化结果+AI 摘要）+ Bing/DuckDuckGo 双后端降级
-- **MCP**: Model Context Protocol 集成，stdio 协议，工具自动桥接到内置注册表
+- **MCP**: Model Context Protocol 集成，stdio/HTTP/SSE/WebSocket 协议，工具自动桥接到内置注册表
 - **Skills**: SKILL.md 格式、动态上下文注入、参数替换、GitHub URL 安装
 - **TUI**: 全屏 Textual 界面，固定输入区 + 滚动输出，队列架构，斜杠命令自动补全
-- **CLI**: 38 个斜杠命令，管道输入，3 种输出格式（text/json/stream-json），配置热重载
+- **CLI**: 30+ 个斜杠命令，管道输入，3 种输出格式（text/json/stream-json），配置热重载
 - **自定义智能体**: YAML frontmatter 定义，项目级/用户级，6 个预设模板
 - **后台任务**: 异步执行、状态跟踪、取消、自动清理
 - **@文件引用**: `@file`、`@folder/`、`@*.ext` 语法，自动注入上下文，路径遍历保护
@@ -137,22 +137,17 @@ nexgent --output-format stream-json      # 流式 JSON 输出
 | `/compact` | 压缩上下文 |
 | `/context` | 逐消息 token 分解 |
 | `/stats` | 会话统计 |
-| `/tokens` | Token 使用量 |
 | `/rewind` | 回退检查点 |
 | `/fork` | 分叉会话 |
 | `/clear` | 清除会话消息 |
 | `/save <path>` | 保存会话到文件 |
 | `/load <path>` | 从文件加载会话 |
 | `/effort <low\|medium\|high>` | 设置推理力度 |
-| `/mode <default\|plan>` | 切换权限模式 |
-| `/dry-run` | 切换干运行模式 |
-| `/auto` | 切换自动批准 |
-| `/plan` | 切换计划模式 |
-| `/abort` | 中止当前任务 |
 | `/memory` | 列出记忆 |
 | `/remember` | 保存新记忆 |
 | `/hooks` | 列出 Hook |
 | `/init` | 生成 AGENTS.md |
+| `/init-config` | 生成配置模板 |
 | `/subagents` | 列出活跃子代理 |
 | `/subagent <task>` | 运行单个子代理 |
 | `/parallel <t1> \| <t2>` | 并行运行任务 |
@@ -160,11 +155,14 @@ nexgent --output-format stream-json      # 流式 JSON 输出
 | `/agents list\|create\|show\|delete` | 自定义智能体管理 |
 | `/tasks list\|show\|cancel\|cleanup` | 后台任务管理 |
 | `/goal <condition>` | 设置目标条件 |
+| `/goal clear` | 清除目标 |
 | `/skills` | 查看/安装 Skills |
 | `/mcp` | MCP 服务器管理 |
+| `/mcp install\|connect\|disconnect\|refresh` | MCP 操作 |
 | `/workflow run <script>` | 运行工作流脚本 |
 | `/workflow list\|status\|resume\|save` | 工作流管理 |
 | `/model` | 列出可用模型 |
+| `/model list` | 列出模型配置 |
 | `/model set <id>` | 切换主对话模型 |
 | `/model default <role> <id>` | 设置默认模型（main/subagent/fast） |
 | `/plugin list` | 列出已安装插件 |
@@ -174,6 +172,30 @@ nexgent --output-format stream-json      # 流式 JSON 输出
 | `@file` | 引用文件内容 |
 | `!<cmd>` | 执行 shell |
 | `/quit`, `/exit`, `/q` | 退出 |
+
+## TUI 快捷键
+
+| 快捷键 | 说明 |
+|--------|------|
+| `Ctrl+C` | 中断当前任务（优雅停止） |
+| `Ctrl+K` | 强制杀死卡住的线程 |
+| `Escape` | 中断任务 / 清空输入 |
+| `Shift+Tab` | 循环切换模式（default → plan → auto → dry-run） |
+| `Tab` | 斜杠命令 / @文件引用 自动补全 |
+| `↑` / `↓` | 浏览输入历史 |
+| `Ctrl+Y` | 复制最后一条助手输出到剪贴板 |
+
+## 权限模式
+
+| 模式 | 说明 |
+|------|------|
+| `default` | 每次写操作都需要确认 |
+| `plan` | 只读模式，不允许写操作 |
+| `auto` | 自动批准安全操作 |
+| `accept_edits` | 文件读写自动批准，Shell 仍需确认 |
+| `dont_ask` | 仅允许预批准工具，其余自动拒绝 |
+| `bypass` | 全部允许（仅熔断器阻止危险操作） |
+| `dry-run` | 干运行模式，显示但不执行 |
 
 ## 架构
 
@@ -191,37 +213,37 @@ nexgent/
 ├── hooks.py              # 18 种生命周期 Hook
 ├── subagent.py           # SubAgent 生命周期管理
 ├── skills.py             # Skills 系统
-├── mcp.py                # MCP 支持（工具自动桥接到 ToolRegistry）
+├── mcp.py                # MCP 支持（stdio/HTTP/SSE/WebSocket，工具自动桥接到 ToolRegistry）
 ├── tui.py                # 全屏 TUI 界面
 ├── display.py            # 显示层（Rich 输出、对话气泡、语法高亮）
 ├── commands.py           # 命令定义（单一来源）
-├── agents.py             # 自定义智能体（YAML frontmatter）
+├── agents.py             # 自定义智能体（YAML frontmatter，6 个预设模板）
 ├── background_tasks.py   # 后台任务管理
 ├── file_references.py    # @文件引用
 ├── goal.py               # 目标管理
 ├── settings.py           # 4 级层级设置
-├── config.py             # 配置加载（models.json → .env 链式加载）
+├── config.py             # 配置加载（models.json → .env 链式加载，3 级搜索路径）
 ├── token_counter.py      # tiktoken 精确计数
 ├── project_scanner.py    # 项目分析 + AGENTS.md 生成
-├── input_utils.py        # prompt_toolkit 集成
+├── input_utils.py        # prompt_toolkit 集成 + 持久化历史
 ├── logging_utils.py      # 结构化追踪日志
-└── tools/                # 14 个工具模块
-    ├── file_ops.py       # read_file, write_file, edit_file, glob_files, grep_files
+└── tools/                # 15 个工具模块，38 个工具
+    ├── file_ops.py       # read_file, write_file, edit_file, glob_files, grep_files, list_directory
     ├── shell.py          # run_command（后台任务支持、只读自动检测）
     ├── code_exec.py      # execute_python
     ├── web_tools.py      # web_search（Tavily+降级）, web_fetch（SSRF 防护）
-    ├── doc_tools.py      # 文档创建
-    ├── math_tools.py     # 数学计算
-    ├── interactive.py    # 交互提示
-    ├── monitor.py        # 进程监控
-    ├── notebook_tools.py # Jupyter 笔记本编辑
-    ├── task_tools.py     # 任务管理
-    ├── plan_tools.py     # 计划模式
-    ├── lsp_tools.py      # LSP 集成
-    ├── scheduler_tools.py # Cron 调度器
-    ├── subagent_tools.py # 子代理工具
-    ├── workflow_tools.py # 工作流工具（run/list/status/save/resume）
-    └── registry.py       # 工具注册 + 分发
+    ├── doc_tools.py      # create_doc, create_spreadsheet
+    ├── math_tools.py     # evaluate_math（AST 安全求值）
+    ├── interactive.py    # ask_user_question, read_memory_topic
+    ├── monitor.py        # monitor_start, monitor_stop, monitor_list
+    ├── notebook_tools.py # notebook_edit
+    ├── task_tools.py     # task_create, task_list, task_get, task_update, task_delete
+    ├── plan_tools.py     # enter_plan_mode, exit_plan_mode
+    ├── lsp_tools.py      # lsp_definition, lsp_references, lsp_diagnostics
+    ├── scheduler_tools.py # cron_create, cron_delete, cron_list
+    ├── subagent_tools.py # subagent_run
+    ├── workflow_tools.py # workflow_run, workflow_list, workflow_status, workflow_save, workflow_resume
+    └── registry.py       # 工具注册 + 分发 + 磁盘溢出
 ```
 
 ## 测试
@@ -232,12 +254,15 @@ python -m pytest tests/ --ignore=tests/test_e2e.py -v  # 单元测试
 python -m pytest tests/test_e2e.py -v                    # E2E fast
 python -m pytest tests/test_e2e.py -v --run-slow         # E2E fast + slow
 python run_tests.py --all                                 # 全部
+python run_tests.py --no-e2e                              # 跳过 E2E
 ```
 
 **测试分层**：
 - `fast`：无 API 调用，mock 驱动，每个 <1s（默认运行）
 - `slow`：真实 API 调用，网络依赖，可能需要几分钟
 - `e2e`：端到端测试，真实 API + 真实工具
+
+**测试覆盖**：34 个测试文件，982 个测试用例，覆盖所有核心模块。
 
 ## Python API
 
