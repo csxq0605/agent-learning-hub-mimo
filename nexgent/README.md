@@ -50,6 +50,7 @@ Demo 包含：
 - **Web 搜索**: Tavily API（结构化结果+AI 摘要）+ Bing/DuckDuckGo 双后端降级
 - **MCP**: Model Context Protocol 集成，stdio/HTTP/SSE/WebSocket 协议，工具自动桥接到内置注册表
 - **Skills**: SKILL.md 格式、动态上下文注入、参数替换、GitHub URL 安装
+- **插件系统**: `plugin.json` 清单、自动发现/加载/注册、GitHub URL 安装（`/plugin install`）
 - **TUI**: 全屏 Textual 界面，固定输入区 + 滚动输出，队列架构，斜杠命令自动补全
 - **CLI**: 30+ 个斜杠命令，管道输入，3 种输出格式（text/json/stream-json），配置热重载
 - **自定义智能体**: YAML frontmatter 定义，项目级/用户级，6 个预设模板
@@ -112,6 +113,23 @@ models.json         ← 模型配置（提供商、模型名、base_url、defaul
 }
 ```
 
+## 插件
+
+```bash
+# 安装插件
+/plugin install https://github.com/csxq0605/multi-agent/tree/master/nexgent-plugin
+
+# 管理
+/plugin list              # 列出已安装插件
+/plugin unload <name>     # 卸载插件
+```
+
+**可用插件**：
+
+| 插件 | 说明 |
+|------|------|
+| [team-coord](https://github.com/csxq0605/multi-agent) | 多 agent 团队协调——lead 纯协调 + worker 并行执行，作为 subagent/workflow 的补充层 |
+
 ## 常用命令
 
 ```bash
@@ -166,6 +184,7 @@ nexgent --output-format stream-json      # 流式 JSON 输出
 | `/model set <id>` | 切换主对话模型 |
 | `/model default <role> <id>` | 设置默认模型（main/subagent/fast） |
 | `/plugin list` | 列出已安装插件 |
+| `/plugin install <url>` | 从 GitHub 安装插件 |
 | `/plugin load <path>` | 加载插件 |
 | `/plugin unload <name>` | 卸载插件 |
 | `/btw` | 注入运行中指导 |
